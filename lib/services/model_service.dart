@@ -1,0 +1,145 @@
+import 'dart:io';
+import 'package:dio/dio.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
+
+class WhisperModelInfo {
+  final String name;
+  final String filename;
+  final String size;
+  final String url;
+
+  WhisperModelInfo({
+    required this.name,
+    required this.filename,
+    required this.size,
+    required this.url,
+  });
+}
+
+class ModelService {
+  static final List<WhisperModelInfo> availableModels = [
+    WhisperModelInfo(
+      name: 'Tiny (快 / 适合测试)',
+      filename: 'ggml-tiny.bin',
+      size: '75 MB',
+      url: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin',
+    ),
+    WhisperModelInfo(
+      name: 'Base (推荐 / 平衡度高)',
+      filename: 'ggml-base.bin',
+      size: '140 MB',
+      url: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
+    ),
+    WhisperModelInfo(
+      name: 'Small (精确 / 体积适中)',
+      filename: 'ggml-small.bin',
+      size: '460 MB',
+      url: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-small.bin',
+    ),
+    WhisperModelInfo(
+      name: 'Large V3 Turbo Q8 (超快 / 高精确)',
+      filename: 'ggml-large-v3-turbo-q8_0.bin',
+      size: '834 MB',
+      url: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin',
+    ),
+    WhisperModelInfo(
+      name: 'Large V3 Q8 (最高精度 / 量化版)',
+      filename: 'ggml-large-v3-q8_0.bin',
+      size: '1.57 GB',
+      url: 'https://hf-mirror.com/adriabama06/whisper-large-v3-ggml/resolve/main/ggml-large-v3-q8_0.bin',
+    ),
+  ];
+
+  Future<Directory> getModelDir() async {
+    final appDir = await getApplicationSupportDirectory();
+    final modelDir = Directory(p.join(appDir.path, 'models'));
+    if (!await modelDir.exists()) {
+      await modelDir.create(recursive: true);
+    }
+    return modelDir;
+  }
+
+  Future<List<String>> getDownloadedModels() async {
+    try {
+      final dir = await getModelDir();
+      final List<String> files = [];
+      await for (final entity in dir.list()) {
+        if (entity is File && entity.path.endsWith('.bin')) {
+          files.add(p.basename(entity.path));
+        }
+      }
+      return files;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  Future<String> getModelPath(String filename) async {
+    final dir = await getModelDir();
+    return p.join(dir.path, filename);
+  }
+
+  Future<bool> isModelDownloaded(String filename) async {
+    final path = await getModelPath(filename);
+    final file = File(path);
+    return await file.exists() && await file.length() > 1024 * 1024; // > 1MB
+  }
+
+  final Dio _dio = Dio();
+  CancelToken? _cancelToken;
+
+  Future<void> downloadModel({
+    required WhisperModelInfo model,
+    required Function(double progress) onProgress,
+    required Function() onSuccess,
+    required Function(String error) onFailure,
+  }) async {
+    try {
+      final dir = await getModelDir();
+      final savePath = p.join(dir.path, model.filename);
+      final tempSavePath = '$savePath.tmp';
+
+      _cancelToken = CancelToken();
+
+      await _dio.download(
+        model.url,
+        tempSavePath,
+        cancelToken: _cancelToken,
+        onReceiveProgress: (received, total) {
+          if (total != -1) {
+            final progress = received / total;
+            onProgress(progress);
+          }
+        },
+      );
+
+      // 下载完成后，将重命名临时文件
+      final tempFile = File(tempSavePath);
+      if (await tempFile.exists()) {
+        await tempFile.rename(savePath);
+        onSuccess();
+      } else {
+        onFailure('下载文件不存在');
+      }
+    } catch (e) {
+      if (CancelToken.isCancel(e as DioException)) {
+        onFailure('下载已取消');
+      } else {
+        onFailure('下载失败: ${e.toString()}');
+      }
+    }
+  }
+
+  void cancelDownload() {
+    _cancelToken?.cancel();
+  }
+
+  Future<void> deleteModel(String filename) async {
+    final path = await getModelPath(filename);
+    final file = File(path);
+    if (await file.exists()) {
+      await file.delete();
+    }
+  }
+}
