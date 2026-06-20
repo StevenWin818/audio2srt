@@ -60,3 +60,6 @@ local.properties
 .env.local
 .env.*.local
 *.env
+testaudio.mp3
+testaudio.wav
+rust_lib_audio2srt.dll

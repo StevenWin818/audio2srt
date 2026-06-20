@@ -107,8 +107,8 @@ pub fn get_hardware_acceleration_info() -> HardwareAccelerationInfo {
     }
 }
 
-struct ProgressContext {
-    sink: StreamSink<TranscriptionEvent>,
+struct ProgressContext<'a> {
+    callback: &'a mut dyn FnMut(TranscriptionEvent),
     current_segment: usize,
     total_segments: usize,
 }
@@ -121,7 +121,7 @@ unsafe extern "C" fn progress_callback_trampoline(
     user_data: *mut std::ffi::c_void,
 ) {
     if !user_data.is_null() {
-        let context = &*(user_data as *const ProgressContext);
+        let context = &mut *(user_data as *mut ProgressContext);
         let scaled_progress = if context.total_segments > 0 {
             let seg_contribution = 100.0 / context.total_segments as f64;
             let current_base = context.current_segment as f64 * seg_contribution;
@@ -135,7 +135,7 @@ unsafe extern "C" fn progress_callback_trampoline(
             "[Rust] Progress callback: {}% (raw: {}%, segment {}/{})",
             scaled_progress, progress, context.current_segment + 1, context.total_segments
         );
-        let _ = context.sink.add(TranscriptionEvent::Progress(scaled_progress));
+        (context.callback)(TranscriptionEvent::Progress(scaled_progress));
     }
 }
 
@@ -559,8 +559,11 @@ pub fn transcribe(
 ) {
     // 异步执行转写任务，防止界面卡顿
     std::thread::spawn(move || {
-        if let Err(e) = run_transcription(
-            &sink,
+        let mut callback = |event| {
+            let _ = sink.add(event);
+        };
+        if let Err(e) = run_transcription_inner(
+            &mut callback,
             model_path,
             audio_path,
             language,
@@ -583,8 +586,8 @@ pub fn transcribe(
     });
 }
 
-fn run_transcription(
-    sink: &StreamSink<TranscriptionEvent>,
+pub fn run_transcription_inner(
+    callback: &mut dyn FnMut(TranscriptionEvent),
     model_path: String,
     audio_path: String,
     language: Option<String>,
@@ -756,12 +759,12 @@ fn run_transcription(
 
         if speech_segments.is_empty() {
             println!("[Rust] No speech segments detected. Returning empty subtitles.");
-            let _ = sink.add(TranscriptionEvent::Success(combined_segments));
+            callback(TranscriptionEvent::Success(combined_segments));
             return Ok(());
         }
 
         let mut progress_ctx = ProgressContext {
-            sink: sink.clone(),
+            callback,
             current_segment: 0,
             total_segments: speech_segments.len(),
         };
@@ -771,13 +774,14 @@ fn run_transcription(
             params.set_progress_callback(Some(progress_callback_trampoline));
             params.set_progress_callback_user_data(&progress_ctx as *const ProgressContext as *mut std::ffi::c_void);
         }
-
-        let mut last_healthy_text = String::new();
+        // 准备状态追踪变量
+        let mut recent_history: std::collections::VecDeque<String> = std::collections::VecDeque::new();
         let mut consecutive_repeats = 0;
 
         for (idx, &(start_sample, end_sample)) in speech_segments.iter().enumerate() {
             progress_ctx.current_segment = idx;
             let segment_samples = &samples[start_sample..end_sample];
+            let global_offset_ms = (start_sample as i64) / 16;
             
             println!(
                 "[Rust] Transcribing VAD segment {}/{}: start={:.2}s, end={:.2}s ({} samples)",
@@ -801,11 +805,57 @@ fn run_transcription(
             })?;
 
             // 2. 提取当前正常推理产生的文本
-            let mut current_text = String::new();
             let num_segments = state.full_n_segments();
+            let mut current_text = String::new();
+            
+            // 用于检测单 VAD 块内部的交替幻觉
+            let mut exact_match_count = 0;
+            let mut partial_match_count = 0;
+            let mut is_cross_segment_repeating = false;
+            let mut is_segment_self_repeating = false;
+
             for i in 0..num_segments {
                 if let Some(segment) = state.get_segment(i) {
-                    current_text.push_str(&segment.to_str_lossy().unwrap_or_default());
+                    let seg_text = segment.to_str_lossy().unwrap_or_default().into_owned();
+                    current_text.push_str(&seg_text);
+                    
+                    let cleaned_seg = clean_punctuation_and_whitespace(&seg_text);
+                    if cleaned_seg.trim().is_empty() {
+                        continue;
+                    }
+
+                    // 检测单句自我循环
+                    if has_repetition_loop(&cleaned_seg) {
+                        is_segment_self_repeating = true;
+                    }
+
+                    // 在历史中查找匹配
+                    let char_count = cleaned_seg.chars().count();
+                    for past_text in &recent_history {
+                        if *past_text == cleaned_seg {
+                            exact_match_count += 1;
+                        } else if (char_count >= 5 && past_text.contains(&cleaned_seg)) ||
+                            (past_text.chars().count() >= 5 && cleaned_seg.contains(past_text)) {
+                            partial_match_count += 1;
+                        }
+                    }
+
+                    // 加入历史
+                    recent_history.push_back(cleaned_seg.clone());
+                    if recent_history.len() > 25 {
+                        recent_history.pop_front();
+                    }
+                    
+                    if exact_match_count >= 3 {
+                        if char_count >= 4 {
+                            is_cross_segment_repeating = true;
+                        } else if exact_match_count >= 5 {
+                            is_cross_segment_repeating = true;
+                        }
+                    }
+                    if partial_match_count >= 3 {
+                        is_cross_segment_repeating = true;
+                    }
                 }
             }
 
@@ -813,40 +863,19 @@ fn run_transcription(
                 println!("[Rust] ⚠️ 模型未输出任何文本！可能是音频太模糊触发了 no_speech_thold (无声阈值)，导致大模型将其误判为静音并跳过。");
             }
 
-            // 清理文本中的标点符号和空格以便于精确比对
-            let cleaned_current = clean_punctuation_and_whitespace(&current_text);
-            let cleaned_last = clean_punctuation_and_whitespace(&last_healthy_text);
-
-            // 3. 监控重复幻觉（同时检测跨段重复和单段内的自我循环）
-            let is_segment_self_repeating = has_repetition_loop(&cleaned_current);
-            
-            // 增强版跨段重复检测：除了完全相等，如果包含较长的公共子串（>= 5个字符），也视为重复，防止模型附加无意义语气词逃避检测
-            let is_cross_segment_repeating = !cleaned_current.is_empty() && !cleaned_last.is_empty() && (
-                cleaned_current == cleaned_last || 
-                (cleaned_last.chars().count() >= 5 && cleaned_current.contains(&cleaned_last)) ||
-                (cleaned_current.chars().count() >= 5 && cleaned_last.contains(&cleaned_current))
-            );
-
             let mut discard_segment = false;
 
             if is_segment_self_repeating || is_cross_segment_repeating {
-                consecutive_repeats += 1;
                 println!(
-                    "[Rust] ⚠️ 警告: 检测到内容重复 (单段内自我循环: {}, 跨段重复: {} - 连续 {} 次): '{}'",
+                    "[Rust] ⚠️ 警告: 检测到内容重复 (单段自我循环: {}, 精确匹配: {}, 部分匹配: {})",
                     is_segment_self_repeating,
-                    is_cross_segment_repeating,
-                    consecutive_repeats,
-                    current_text.trim()
+                    exact_match_count,
+                    partial_match_count
                 );
-            } else {
-                consecutive_repeats = 0;
-                if !current_text.trim().is_empty() {
-                    last_healthy_text = current_text.clone();
-                }
             }
 
             // 4. 熔断与回退处理
-            if is_segment_self_repeating || consecutive_repeats >= 2 {
+            if is_segment_self_repeating || is_cross_segment_repeating {
                 println!("[Rust] 🛑 触发熔断！检测到持续重复或单段内自我循环，正在重新创建推理状态以彻底清除 C++ 侧受污染的 KV 缓存历史...");
 
                 state = ctx.create_state().map_err(|e| {
@@ -899,8 +928,11 @@ fn run_transcription(
                 } else {
                     println!("[Rust] ✅ 回退重试成功，新输出: '{}'", current_text.trim());
                     consecutive_repeats = 0;
-                    if !current_text.trim().is_empty() {
-                        last_healthy_text = current_text.clone();
+                    if !cleaned_retry.is_empty() {
+                        recent_history.push_back(cleaned_retry.clone());
+                        if recent_history.len() > 10 {
+                            recent_history.pop_front();
+                        }
                     }
                 }
             }
@@ -937,7 +969,7 @@ fn run_transcription(
     } else {
         // VAD 未启用：对完整音频进行单次推理
         let progress_ctx = ProgressContext {
-            sink: sink.clone(),
+            callback,
             current_segment: 0,
             total_segments: 1,
         };
@@ -982,7 +1014,7 @@ fn run_transcription(
     // 6. 发送转写成功事件
     let combined_segments = post_process_segments(combined_segments);
     println!("[Rust] Sending Success event with {} segments", combined_segments.len());
-    let _ = sink.add(TranscriptionEvent::Success(combined_segments));
+    callback(TranscriptionEvent::Success(combined_segments));
     
     Ok(())
 }

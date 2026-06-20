@@ -65,7 +65,7 @@ class TranscriptionProvider with ChangeNotifier {
   List<rust_whisper.VulkanDeviceInfo> get vulkanDevices => _vulkanDevices;
 
   // VAD 配置
-  bool _vadEnabled = false;
+  bool _vadEnabled = true;
   bool get vadEnabled => _vadEnabled;
 
   double _vadThreshold = 0.010; // RMS 音能阈值
