@@ -5,6 +5,7 @@
 
 import 'api/ffmpeg.dart';
 import 'api/simple.dart';
+import 'api/stream_pipeline.dart';
 import 'api/whisper.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -68,7 +69,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -947791594;
+  int get rustContentHash => 1618686293;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -129,6 +130,18 @@ abstract class RustLibApi extends BaseApi {
     required double logprobThold,
     required double noSpeechThold,
     required bool noContext,
+  });
+
+  Stream<TranscriptionEvent> crateApiStreamPipelineTranscribeStream({
+    required String ffmpegPath,
+    required String inputPath,
+    required String modelPath,
+    required String dfModelPath,
+    String? language,
+    required bool translate,
+    int? threads,
+    required bool useGpu,
+    required bool toSimplified,
   });
 
   Future<TranscriptionSegment> crateApiWhisperTranscriptionSegmentDefault();
@@ -532,6 +545,82 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Stream<TranscriptionEvent> crateApiStreamPipelineTranscribeStream({
+    required String ffmpegPath,
+    required String inputPath,
+    required String modelPath,
+    required String dfModelPath,
+    String? language,
+    required bool translate,
+    int? threads,
+    required bool useGpu,
+    required bool toSimplified,
+  }) {
+    final sink = RustStreamSink<TranscriptionEvent>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_StreamSink_transcription_event_Sse(sink, serializer);
+            sse_encode_String(ffmpegPath, serializer);
+            sse_encode_String(inputPath, serializer);
+            sse_encode_String(modelPath, serializer);
+            sse_encode_String(dfModelPath, serializer);
+            sse_encode_opt_String(language, serializer);
+            sse_encode_bool(translate, serializer);
+            sse_encode_opt_box_autoadd_i_32(threads, serializer);
+            sse_encode_bool(useGpu, serializer);
+            sse_encode_bool(toSimplified, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 10,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: null,
+          ),
+          constMeta: kCrateApiStreamPipelineTranscribeStreamConstMeta,
+          argValues: [
+            sink,
+            ffmpegPath,
+            inputPath,
+            modelPath,
+            dfModelPath,
+            language,
+            translate,
+            threads,
+            useGpu,
+            toSimplified,
+          ],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiStreamPipelineTranscribeStreamConstMeta =>
+      const TaskConstMeta(
+        debugName: "transcribe_stream",
+        argNames: [
+          "sink",
+          "ffmpegPath",
+          "inputPath",
+          "modelPath",
+          "dfModelPath",
+          "language",
+          "translate",
+          "threads",
+          "useGpu",
+          "toSimplified",
+        ],
+      );
+
+  @override
   Future<TranscriptionSegment> crateApiWhisperTranscriptionSegmentDefault() {
     return handler.executeNormal(
       NormalTask(
@@ -540,7 +629,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 11,
             port: port_,
           );
         },
@@ -570,7 +659,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 12,
             port: port_,
           );
         },
@@ -628,6 +717,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   int dco_decode_box_autoadd_i_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
+  }
+
+  @protected
+  TranscriptionSegment dco_decode_box_autoadd_transcription_segment(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_transcription_segment(raw);
   }
 
   @protected
@@ -725,6 +822,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         );
       case 2:
         return TranscriptionEvent_Failure(dco_decode_String(raw[1]));
+      case 3:
+        return TranscriptionEvent_Segment(
+          dco_decode_box_autoadd_transcription_segment(raw[1]),
+        );
       default:
         throw Exception("unreachable");
     }
@@ -813,6 +914,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   int sse_decode_box_autoadd_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_i_32(deserializer));
+  }
+
+  @protected
+  TranscriptionSegment sse_decode_box_autoadd_transcription_segment(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_transcription_segment(deserializer));
   }
 
   @protected
@@ -945,6 +1054,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 2:
         var var_field0 = sse_decode_String(deserializer);
         return TranscriptionEvent_Failure(var_field0);
+      case 3:
+        var var_field0 = sse_decode_box_autoadd_transcription_segment(
+          deserializer,
+        );
+        return TranscriptionEvent_Segment(var_field0);
       default:
         throw UnimplementedError('');
     }
@@ -1054,6 +1168,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_box_autoadd_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_transcription_segment(
+    TranscriptionSegment self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_transcription_segment(self, serializer);
   }
 
   @protected
@@ -1171,6 +1294,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case TranscriptionEvent_Failure(field0: final field0):
         sse_encode_i_32(2, serializer);
         sse_encode_String(field0, serializer);
+      case TranscriptionEvent_Segment(field0: final field0):
+        sse_encode_i_32(3, serializer);
+        sse_encode_box_autoadd_transcription_segment(field0, serializer);
     }
   }
 

@@ -55,13 +55,14 @@ extension TranscriptionEventPatterns on TranscriptionEvent {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( TranscriptionEvent_Progress value)?  progress,TResult Function( TranscriptionEvent_Success value)?  success,TResult Function( TranscriptionEvent_Failure value)?  failure,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( TranscriptionEvent_Progress value)?  progress,TResult Function( TranscriptionEvent_Success value)?  success,TResult Function( TranscriptionEvent_Failure value)?  failure,TResult Function( TranscriptionEvent_Segment value)?  segment,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case TranscriptionEvent_Progress() when progress != null:
 return progress(_that);case TranscriptionEvent_Success() when success != null:
 return success(_that);case TranscriptionEvent_Failure() when failure != null:
-return failure(_that);case _:
+return failure(_that);case TranscriptionEvent_Segment() when segment != null:
+return segment(_that);case _:
   return orElse();
 
 }
@@ -79,13 +80,14 @@ return failure(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( TranscriptionEvent_Progress value)  progress,required TResult Function( TranscriptionEvent_Success value)  success,required TResult Function( TranscriptionEvent_Failure value)  failure,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( TranscriptionEvent_Progress value)  progress,required TResult Function( TranscriptionEvent_Success value)  success,required TResult Function( TranscriptionEvent_Failure value)  failure,required TResult Function( TranscriptionEvent_Segment value)  segment,}){
 final _that = this;
 switch (_that) {
 case TranscriptionEvent_Progress():
 return progress(_that);case TranscriptionEvent_Success():
 return success(_that);case TranscriptionEvent_Failure():
-return failure(_that);}
+return failure(_that);case TranscriptionEvent_Segment():
+return segment(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
 ///
@@ -99,13 +101,14 @@ return failure(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( TranscriptionEvent_Progress value)?  progress,TResult? Function( TranscriptionEvent_Success value)?  success,TResult? Function( TranscriptionEvent_Failure value)?  failure,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( TranscriptionEvent_Progress value)?  progress,TResult? Function( TranscriptionEvent_Success value)?  success,TResult? Function( TranscriptionEvent_Failure value)?  failure,TResult? Function( TranscriptionEvent_Segment value)?  segment,}){
 final _that = this;
 switch (_that) {
 case TranscriptionEvent_Progress() when progress != null:
 return progress(_that);case TranscriptionEvent_Success() when success != null:
 return success(_that);case TranscriptionEvent_Failure() when failure != null:
-return failure(_that);case _:
+return failure(_that);case TranscriptionEvent_Segment() when segment != null:
+return segment(_that);case _:
   return null;
 
 }
@@ -122,12 +125,13 @@ return failure(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( int field0)?  progress,TResult Function( List<TranscriptionSegment> field0)?  success,TResult Function( String field0)?  failure,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( int field0)?  progress,TResult Function( List<TranscriptionSegment> field0)?  success,TResult Function( String field0)?  failure,TResult Function( TranscriptionSegment field0)?  segment,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case TranscriptionEvent_Progress() when progress != null:
 return progress(_that.field0);case TranscriptionEvent_Success() when success != null:
 return success(_that.field0);case TranscriptionEvent_Failure() when failure != null:
-return failure(_that.field0);case _:
+return failure(_that.field0);case TranscriptionEvent_Segment() when segment != null:
+return segment(_that.field0);case _:
   return orElse();
 
 }
@@ -145,12 +149,13 @@ return failure(_that.field0);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( int field0)  progress,required TResult Function( List<TranscriptionSegment> field0)  success,required TResult Function( String field0)  failure,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( int field0)  progress,required TResult Function( List<TranscriptionSegment> field0)  success,required TResult Function( String field0)  failure,required TResult Function( TranscriptionSegment field0)  segment,}) {final _that = this;
 switch (_that) {
 case TranscriptionEvent_Progress():
 return progress(_that.field0);case TranscriptionEvent_Success():
 return success(_that.field0);case TranscriptionEvent_Failure():
-return failure(_that.field0);}
+return failure(_that.field0);case TranscriptionEvent_Segment():
+return segment(_that.field0);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -164,12 +169,13 @@ return failure(_that.field0);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( int field0)?  progress,TResult? Function( List<TranscriptionSegment> field0)?  success,TResult? Function( String field0)?  failure,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( int field0)?  progress,TResult? Function( List<TranscriptionSegment> field0)?  success,TResult? Function( String field0)?  failure,TResult? Function( TranscriptionSegment field0)?  segment,}) {final _that = this;
 switch (_that) {
 case TranscriptionEvent_Progress() when progress != null:
 return progress(_that.field0);case TranscriptionEvent_Success() when success != null:
 return success(_that.field0);case TranscriptionEvent_Failure() when failure != null:
-return failure(_that.field0);case _:
+return failure(_that.field0);case TranscriptionEvent_Segment() when segment != null:
+return segment(_that.field0);case _:
   return null;
 
 }
@@ -381,4 +387,68 @@ as String,
 
 }
 
-// dart format on
+/// @nodoc
+
+
+class TranscriptionEvent_Segment extends TranscriptionEvent {
+  const TranscriptionEvent_Segment(this.field0): super._();
+  
+
+@override final  TranscriptionSegment field0;
+
+/// 创建转录事件副本
+/// 将给定字段替换为非空参数值
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$TranscriptionEvent_SegmentCopyWith<TranscriptionEvent_Segment> get copyWith => _$TranscriptionEvent_SegmentCopyWithImpl<TranscriptionEvent_Segment>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is TranscriptionEvent_Segment&&(identical(other.field0, field0) || other.field0 == field0));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,field0);
+
+@override
+String toString() {
+  return 'TranscriptionEvent.segment(field0: $field0)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $TranscriptionEvent_SegmentCopyWith<$Res> implements $TranscriptionEventCopyWith<$Res> {
+  factory $TranscriptionEvent_SegmentCopyWith(TranscriptionEvent_Segment value, $Res Function(TranscriptionEvent_Segment) _then) = _$TranscriptionEvent_SegmentCopyWithImpl;
+@useResult
+$Res call({
+ TranscriptionSegment field0
+});
+
+
+
+
+}
+/// @nodoc
+class _$TranscriptionEvent_SegmentCopyWithImpl<$Res>
+    implements $TranscriptionEvent_SegmentCopyWith<$Res> {
+  _$TranscriptionEvent_SegmentCopyWithImpl(this._self, this._then);
+
+  final TranscriptionEvent_Segment _self;
+  final $Res Function(TranscriptionEvent_Segment) _then;
+
+
+@pragma('vm:prefer-inline') $Res call({Object? field0 = null,}) {
+  return _then(TranscriptionEvent_Segment(
+null == field0 ? _self.field0 : field0 // ignore: cast_nullable_to_non_nullable
+as TranscriptionSegment,
+  ));
+}
+
+
+}
+

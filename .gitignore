@@ -66,3 +66,5 @@ rust_lib_audio2srt.dll
 
 test/
 test_opencc.dart
+assets/models/DeepFilterNet3_onnx.tar.gz
+rust/src/bin/test_df.rs

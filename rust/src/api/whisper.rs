@@ -14,7 +14,7 @@ struct CachedContext {
 
 static G_CONTEXT: Mutex<Option<CachedContext>> = Mutex::new(None);
 
-fn get_or_create_context(
+pub(crate) fn get_or_create_context(
     model_path: &str,
     use_gpu: bool,
     ctx_params: WhisperContextParameters,
@@ -62,6 +62,7 @@ pub enum TranscriptionEvent {
     Progress(i32),
     Success(Vec<TranscriptionSegment>),
     Failure(String),
+    Segment(TranscriptionSegment),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -326,7 +327,7 @@ fn clean_punctuation_and_whitespace(text: &str) -> String {
 }
 
 /// 检测字符串是否包含高频/长句子的连续重复循环（幻觉）
-fn has_repetition_loop(text: &str) -> bool {
+pub(crate) fn has_repetition_loop(text: &str) -> bool {
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
     if n < 4 {
@@ -384,7 +385,7 @@ fn has_repetition_loop(text: &str) -> bool {
 }
 
 /// 对文本中连续重复的部分进行去重，保留最多 1 次（长段）或 2 次（单字/双字）
-fn deduplicate_repeats(text: &str) -> String {
+pub(crate) fn deduplicate_repeats(text: &str) -> String {
     let mut chars: Vec<char> = text.chars().collect();
     let mut changed = true;
 

@@ -101,6 +101,8 @@ sealed class TranscriptionEvent with _$TranscriptionEvent {
       TranscriptionEvent_Success;
   const factory TranscriptionEvent.failure(String field0) =
       TranscriptionEvent_Failure;
+  const factory TranscriptionEvent.segment(TranscriptionSegment field0) =
+      TranscriptionEvent_Segment;
 }
 
 class TranscriptionSegment {

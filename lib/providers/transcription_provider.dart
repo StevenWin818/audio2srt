@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import '../src/rust/api/ffmpeg.dart' as rust_ffmpeg;
 import '../src/rust/api/whisper.dart' as rust_whisper;
+import '../src/rust/api/stream_pipeline.dart' as rust_stream;
 import '../services/ffmpeg_service.dart';
 import '../services/model_service.dart';
 
@@ -318,7 +319,7 @@ class TranscriptionProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  /// 核心流程：一键开始提取并转写
+  /// 核心流程：一键开始提取并转写 (全新三级流式降噪与转写管道)
   Future<void> startTranscription() async {
     if (_inputMediaFile == null) {
       _setError('请先导入音频或视频文件');
@@ -347,66 +348,28 @@ class TranscriptionProvider with ChangeNotifier {
     try {
       _progress = 0;
       _subtitles = [];
-      
-      // 1. 提取音频 (16kHz WAV)
-      _status = TranscriptionStatus.extractingAudio;
-      _statusMessage = '正在提取和重采样音频流...';
+      _status = TranscriptionStatus.transcribing;
+      _statusMessage = '正在初始化 DeepFilterNet 降噪引擎...';
       notifyListeners();
 
-      final tempDir = await getTemporaryDirectory();
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final wavOutputPath = p.join(
-        tempDir.path,
-        '${p.basenameWithoutExtension(_inputMediaFile!.path)}_temp_${timestamp}_16k.wav',
-      );
+      // 准备 DeepFilterNet 降噪模型
+      final dfModelPath = await _modelService.prepareDFModel();
 
-      String? extractedWavPath;
-      final extractStream = rust_ffmpeg.extractAudioFromMedia(
-        ffmpegPath: _ffmpegService.ffmpegPath,
-        inputPath: _inputMediaFile!.path,
-        outputPath: wavOutputPath,
-      );
-
-      await for (final event in extractStream) {
-        if (event.progress != null) {
-          _progress = event.progress!;
-          notifyListeners();
-        } else if (event.success != null) {
-          extractedWavPath = event.success;
-        } else if (event.error != null) {
-          throw Exception(event.error);
-        }
-      }
-
-      if (extractedWavPath == null) {
-        throw Exception('Failed to extract audio');
-      }
-
-      // 2. 开始 Whisper 推理转写
-      _status = TranscriptionStatus.transcribing;
-      _statusMessage = '正在加载 Whisper 模型进行语音转文字...';
-      _progress = 0;
+      _statusMessage = '正在进行实时语音流提取、降噪与转写...';
       notifyListeners();
 
       final modelPath = await _modelService.getModelPath(_selectedModel!);
 
-      final eventStream = rust_whisper.transcribe(
+      final eventStream = rust_stream.transcribeStream(
+        ffmpegPath: _ffmpegService.ffmpegPath,
+        inputPath: _inputMediaFile!.path,
         modelPath: modelPath,
-        audioPath: extractedWavPath,
+        dfModelPath: dfModelPath,
         language: _selectedLanguage == 'auto' ? null : _selectedLanguage,
         translate: _translateToEnglish,
         threads: 4,
         useGpu: _useGpu,
-        vadEnabled: _vadEnabled,
-        vadThreshold: _vadThreshold,
-        vadMinSpeechMs: _vadMinSpeechMs,
-        vadMinSilenceMs: _vadMinSilenceMs,
-        temperature: _temperature,
-        temperatureInc: _temperatureInc,
-        entropyThold: _entropyThold,
-        logprobThold: _logprobThold,
-        noSpeechThold: _noSpeechThold,
-        noContext: _noContext,
+        toSimplified: _selectedLanguage == 'zh' || _selectedLanguage == 'auto',
       );
 
       await _transcriptionSub?.cancel();
@@ -415,7 +378,15 @@ class TranscriptionProvider with ChangeNotifier {
           event.when(
             progress: (val) {
               _progress = val;
-              _statusMessage = '转写推理中...';
+              _statusMessage = '正在流式转写中 (进度: $val%)...';
+              notifyListeners();
+            },
+            segment: (seg) {
+              _subtitles.add(SubtitleItem(
+                startMs: seg.startMs.toInt(),
+                endMs: seg.endMs.toInt(),
+                text: seg.text,
+              ));
               notifyListeners();
             },
             success: (segments) {
@@ -428,15 +399,6 @@ class TranscriptionProvider with ChangeNotifier {
                   .toList();
               _status = TranscriptionStatus.completed;
               _statusMessage = '语音转字幕完成！共生成 ${_subtitles.length} 条字幕';
-              
-              // 尝试删除临时 wav 文件
-              try {
-                final wavFile = File(extractedWavPath!);
-                if (wavFile.existsSync()) {
-                  wavFile.deleteSync();
-                }
-              } catch (_) {}
-              
               notifyListeners();
             },
             failure: (err) {

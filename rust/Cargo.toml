@@ -12,6 +12,12 @@ whisper-rs = { version = "0.16.0" }
 hound = "3.5.1"
 anyhow = "1.0"
 zhconv = "0.4.1"
+rubato = "0.15"
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", package = "deep_filter", features = ["tract"] }
+ndarray = "0.15"
+tract-core = "=0.21.4"
+tract-onnx = "=0.21.4"
+
 
 [features]
 default = ["vulkan"]
@@ -19,3 +25,7 @@ vulkan = ["whisper-rs/vulkan"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+[profile.dev]
+debug-assertions = false
+

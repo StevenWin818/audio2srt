@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -947791594;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1618686293;
 
 // Section: executor
 
@@ -413,6 +413,64 @@ fn wire__crate__api__whisper__transcribe_impl(
         },
     )
 }
+fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "transcribe_stream",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_sink = <StreamSink<
+                crate::api::whisper::TranscriptionEvent,
+                flutter_rust_bridge::for_generated::SseCodec,
+            >>::sse_decode(&mut deserializer);
+            let api_ffmpeg_path = <String>::sse_decode(&mut deserializer);
+            let api_input_path = <String>::sse_decode(&mut deserializer);
+            let api_model_path = <String>::sse_decode(&mut deserializer);
+            let api_df_model_path = <String>::sse_decode(&mut deserializer);
+            let api_language = <Option<String>>::sse_decode(&mut deserializer);
+            let api_translate = <bool>::sse_decode(&mut deserializer);
+            let api_threads = <Option<i32>>::sse_decode(&mut deserializer);
+            let api_use_gpu = <bool>::sse_decode(&mut deserializer);
+            let api_to_simplified = <bool>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok({
+                        crate::api::stream_pipeline::transcribe_stream(
+                            api_sink,
+                            api_ffmpeg_path,
+                            api_input_path,
+                            api_model_path,
+                            api_df_model_path,
+                            api_language,
+                            api_translate,
+                            api_threads,
+                            api_use_gpu,
+                            api_to_simplified,
+                        );
+                    })?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__whisper__transcription_segment_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -668,6 +726,11 @@ impl SseDecode for crate::api::whisper::TranscriptionEvent {
                 let mut var_field0 = <String>::sse_decode(deserializer);
                 return crate::api::whisper::TranscriptionEvent::Failure(var_field0);
             }
+            3 => {
+                let mut var_field0 =
+                    <crate::api::whisper::TranscriptionSegment>::sse_decode(deserializer);
+                return crate::api::whisper::TranscriptionEvent::Segment(var_field0);
+            }
             _ => {
                 unimplemented!("");
             }
@@ -756,13 +819,19 @@ fn pde_ffi_dispatcher_primary_impl(
         7 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
         8 => wire__crate__api__ffmpeg__mux_srt_to_video_impl(port, ptr, rust_vec_len, data_len),
         9 => wire__crate__api__whisper__transcribe_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__whisper__transcription_segment_default_impl(
+        10 => wire__crate__api__stream_pipeline__transcribe_stream_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        11 => wire__crate__api__whisper__vulkan_device_info_default_impl(
+        11 => wire__crate__api__whisper__transcription_segment_default_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        12 => wire__crate__api__whisper__vulkan_device_info_default_impl(
             port,
             ptr,
             rust_vec_len,
@@ -842,6 +911,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::whisper::TranscriptionEvent {
             }
             crate::api::whisper::TranscriptionEvent::Failure(field0) => {
                 [2.into_dart(), field0.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::whisper::TranscriptionEvent::Segment(field0) => {
+                [3.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
             _ => {
                 unimplemented!("");
@@ -1060,6 +1132,10 @@ impl SseEncode for crate::api::whisper::TranscriptionEvent {
             crate::api::whisper::TranscriptionEvent::Failure(field0) => {
                 <i32>::sse_encode(2, serializer);
                 <String>::sse_encode(field0, serializer);
+            }
+            crate::api::whisper::TranscriptionEvent::Segment(field0) => {
+                <i32>::sse_encode(3, serializer);
+                <crate::api::whisper::TranscriptionSegment>::sse_encode(field0, serializer);
             }
             _ => {
                 unimplemented!("");

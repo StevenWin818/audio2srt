@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:flutter/services.dart' show rootBundle;
 
 class WhisperModelInfo {
   final String name;
@@ -148,5 +149,27 @@ class ModelService {
     if (await file.exists()) {
       await file.delete();
     }
+  }
+
+  Future<String> prepareDFModel() async {
+    final appDir = await getApplicationSupportDirectory();
+    final modelDir = Directory(p.join(appDir.path, 'models'));
+    if (!await modelDir.exists()) {
+      await modelDir.create(recursive: true);
+    }
+    
+    final targetPath = p.join(modelDir.path, 'DeepFilterNet3_ll_onnx.tar.gz');
+    final targetFile = File(targetPath);
+    
+    if (await targetFile.exists() && await targetFile.length() > 1024 * 1024) {
+      return targetPath;
+    }
+    
+    // 加载模型
+    final data = await rootBundle.load('assets/models/DeepFilterNet3_ll_onnx.tar.gz');
+    final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    await targetFile.writeAsBytes(bytes);
+    
+    return targetPath;
   }
 }
