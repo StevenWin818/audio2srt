@@ -225,6 +225,52 @@ class DashboardView extends StatelessWidget {
               ),
             ),
           ),
+          if (provider.showLowPowerWarning) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0x1BFF9800),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0x3BFF9800)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    Icons.warning_amber_rounded,
+                    color: Color(0xFFFFB74D),
+                    size: 20,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '低算力预警',
+                          style: TextStyle(
+                            color: Color(0xFFFFB74D),
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '当前未开启 GPU 加速或设备不支持硬件加速，选择较大模型（大于 400MB）会导致推理耗时显著增加。建议在设置中开启 GPU 加速，或选用较小的模型以获得更快的推理体验。',
+                          style: TextStyle(
+                            color: Colors.grey[300],
+                            fontSize: 12,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 20),
 
           // 语言选择

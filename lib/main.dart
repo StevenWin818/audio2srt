@@ -71,7 +71,6 @@ class MainShell extends StatelessWidget {
   const MainShell({super.key});
 
   final List<SidebarItem> _sidebarItems = const [
-    // Note: We can make SidebarItem const by adding const to its constructor, but let's just make it final
   ];
 
   List<SidebarItem> get sidebarItems => [

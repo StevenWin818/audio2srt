@@ -68,7 +68,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1901310082;
+  int get rustContentHash => -263029541;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -85,7 +85,12 @@ abstract class RustLibApi extends BaseApi {
     required String outputPath,
   });
 
+  Future<HardwareAccelerationInfo> crateApiWhisperGetHardwareAccelerationInfo();
+
   String crateApiSimpleGreet({required String name});
+
+  Future<HardwareAccelerationInfo>
+  crateApiWhisperHardwareAccelerationInfoDefault();
 
   Future<void> crateApiSimpleInitApp();
 
@@ -104,9 +109,21 @@ abstract class RustLibApi extends BaseApi {
     required bool translate,
     int? threads,
     required bool useGpu,
+    required bool vadEnabled,
+    required double vadThreshold,
+    required int vadMinSpeechMs,
+    required int vadMinSilenceMs,
+    required double temperature,
+    required double temperatureInc,
+    required double entropyThold,
+    required double logprobThold,
+    required double noSpeechThold,
+    required bool noContext,
   });
 
   Future<TranscriptionSegment> crateApiWhisperTranscriptionSegmentDefault();
+
+  Future<VulkanDeviceInfo> crateApiWhisperVulkanDeviceInfoDefault();
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -155,13 +172,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<HardwareAccelerationInfo>
+  crateApiWhisperGetHardwareAccelerationInfo() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 2,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_hardware_acceleration_info,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiWhisperGetHardwareAccelerationInfoConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWhisperGetHardwareAccelerationInfoConstMeta =>
+      const TaskConstMeta(
+        debugName: "get_hardware_acceleration_info",
+        argNames: [],
+      );
+
+  @override
   String crateApiSimpleGreet({required String name}) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 2)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 3)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -178,6 +226,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "greet", argNames: ["name"]);
 
   @override
+  Future<HardwareAccelerationInfo>
+  crateApiWhisperHardwareAccelerationInfoDefault() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_hardware_acceleration_info,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiWhisperHardwareAccelerationInfoDefaultConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWhisperHardwareAccelerationInfoDefaultConstMeta =>
+      const TaskConstMeta(
+        debugName: "hardware_acceleration_info_default",
+        argNames: [],
+      );
+
+  @override
   Future<void> crateApiSimpleInitApp() {
     return handler.executeNormal(
       NormalTask(
@@ -186,7 +265,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 3,
+            funcId: 5,
             port: port_,
           );
         },
@@ -224,7 +303,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 6,
             port: port_,
           );
         },
@@ -259,6 +338,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required bool translate,
     int? threads,
     required bool useGpu,
+    required bool vadEnabled,
+    required double vadThreshold,
+    required int vadMinSpeechMs,
+    required int vadMinSilenceMs,
+    required double temperature,
+    required double temperatureInc,
+    required double entropyThold,
+    required double logprobThold,
+    required double noSpeechThold,
+    required bool noContext,
   }) {
     final sink = RustStreamSink<TranscriptionEvent>();
     unawaited(
@@ -273,10 +362,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_encode_bool(translate, serializer);
             sse_encode_opt_box_autoadd_i_32(threads, serializer);
             sse_encode_bool(useGpu, serializer);
+            sse_encode_bool(vadEnabled, serializer);
+            sse_encode_f_32(vadThreshold, serializer);
+            sse_encode_i_32(vadMinSpeechMs, serializer);
+            sse_encode_i_32(vadMinSilenceMs, serializer);
+            sse_encode_f_32(temperature, serializer);
+            sse_encode_f_32(temperatureInc, serializer);
+            sse_encode_f_32(entropyThold, serializer);
+            sse_encode_f_32(logprobThold, serializer);
+            sse_encode_f_32(noSpeechThold, serializer);
+            sse_encode_bool(noContext, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 5,
+              funcId: 7,
               port: port_,
             );
           },
@@ -293,6 +392,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             translate,
             threads,
             useGpu,
+            vadEnabled,
+            vadThreshold,
+            vadMinSpeechMs,
+            vadMinSilenceMs,
+            temperature,
+            temperatureInc,
+            entropyThold,
+            logprobThold,
+            noSpeechThold,
+            noContext,
           ],
           apiImpl: this,
         ),
@@ -311,6 +420,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "translate",
       "threads",
       "useGpu",
+      "vadEnabled",
+      "vadThreshold",
+      "vadMinSpeechMs",
+      "vadMinSilenceMs",
+      "temperature",
+      "temperatureInc",
+      "entropyThold",
+      "logprobThold",
+      "noSpeechThold",
+      "noContext",
     ],
   );
 
@@ -323,7 +442,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 8,
             port: port_,
           );
         },
@@ -341,6 +460,36 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiWhisperTranscriptionSegmentDefaultConstMeta =>
       const TaskConstMeta(
         debugName: "transcription_segment_default",
+        argNames: [],
+      );
+
+  @override
+  Future<VulkanDeviceInfo> crateApiWhisperVulkanDeviceInfoDefault() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_vulkan_device_info,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiWhisperVulkanDeviceInfoDefaultConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWhisperVulkanDeviceInfoDefaultConstMeta =>
+      const TaskConstMeta(
+        debugName: "vulkan_device_info_default",
         argNames: [],
       );
 
@@ -376,6 +525,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  double dco_decode_f_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as double;
+  }
+
+  @protected
+  HardwareAccelerationInfo dco_decode_hardware_acceleration_info(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return HardwareAccelerationInfo(
+      isVulkanAvailable: dco_decode_bool(arr[0]),
+      devices: dco_decode_list_vulkan_device_info(arr[1]),
+    );
+  }
+
+  @protected
   int dco_decode_i_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -401,6 +568,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return (raw as List<dynamic>)
         .map(dco_decode_transcription_segment)
         .toList();
+  }
+
+  @protected
+  List<VulkanDeviceInfo> dco_decode_list_vulkan_device_info(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_vulkan_device_info).toList();
   }
 
   @protected
@@ -446,6 +619,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BigInt dco_decode_u_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeU64(raw);
+  }
+
+  @protected
   int dco_decode_u_8(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -455,6 +634,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void dco_decode_unit(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return;
+  }
+
+  @protected
+  VulkanDeviceInfo dco_decode_vulkan_device_info(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return VulkanDeviceInfo(
+      id: dco_decode_i_32(arr[0]),
+      name: dco_decode_String(arr[1]),
+      totalVramBytes: dco_decode_u_64(arr[2]),
+    );
   }
 
   @protected
@@ -491,6 +683,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  double sse_decode_f_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getFloat32();
+  }
+
+  @protected
+  HardwareAccelerationInfo sse_decode_hardware_acceleration_info(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_isVulkanAvailable = sse_decode_bool(deserializer);
+    var var_devices = sse_decode_list_vulkan_device_info(deserializer);
+    return HardwareAccelerationInfo(
+      isVulkanAvailable: var_isVulkanAvailable,
+      devices: var_devices,
+    );
+  }
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
@@ -519,6 +730,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var ans_ = <TranscriptionSegment>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_transcription_segment(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
+  List<VulkanDeviceInfo> sse_decode_list_vulkan_device_info(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <VulkanDeviceInfo>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_vulkan_device_info(deserializer));
     }
     return ans_;
   }
@@ -583,6 +808,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getBigUint64();
+  }
+
+  @protected
   int sse_decode_u_8(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8();
@@ -591,6 +822,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   void sse_decode_unit(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
+  }
+
+  @protected
+  VulkanDeviceInfo sse_decode_vulkan_device_info(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_i_32(deserializer);
+    var var_name = sse_decode_String(deserializer);
+    var var_totalVramBytes = sse_decode_u_64(deserializer);
+    return VulkanDeviceInfo(
+      id: var_id,
+      name: var_name,
+      totalVramBytes: var_totalVramBytes,
+    );
   }
 
   @protected
@@ -638,6 +882,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_f_32(double self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putFloat32(self);
+  }
+
+  @protected
+  void sse_encode_hardware_acceleration_info(
+    HardwareAccelerationInfo self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_bool(self.isVulkanAvailable, serializer);
+    sse_encode_list_vulkan_device_info(self.devices, serializer);
+  }
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
@@ -668,6 +928,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_transcription_segment(item, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_list_vulkan_device_info(
+    List<VulkanDeviceInfo> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_vulkan_device_info(item, serializer);
     }
   }
 
@@ -722,6 +994,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putBigUint64(self);
+  }
+
+  @protected
   void sse_encode_u_8(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint8(self);
@@ -730,5 +1008,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   void sse_encode_unit(void self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
+  }
+
+  @protected
+  void sse_encode_vulkan_device_info(
+    VulkanDeviceInfo self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.id, serializer);
+    sse_encode_String(self.name, serializer);
+    sse_encode_u_64(self.totalVramBytes, serializer);
   }
 }

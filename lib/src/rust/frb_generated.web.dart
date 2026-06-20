@@ -39,6 +39,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int dco_decode_box_autoadd_i_32(dynamic raw);
 
   @protected
+  double dco_decode_f_32(dynamic raw);
+
+  @protected
+  HardwareAccelerationInfo dco_decode_hardware_acceleration_info(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
@@ -49,6 +55,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<TranscriptionSegment> dco_decode_list_transcription_segment(dynamic raw);
+
+  @protected
+  List<VulkanDeviceInfo> dco_decode_list_vulkan_device_info(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -63,10 +72,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   TranscriptionSegment dco_decode_transcription_segment(dynamic raw);
 
   @protected
+  BigInt dco_decode_u_64(dynamic raw);
+
+  @protected
   int dco_decode_u_8(dynamic raw);
 
   @protected
   void dco_decode_unit(dynamic raw);
+
+  @protected
+  VulkanDeviceInfo dco_decode_vulkan_device_info(dynamic raw);
 
   @protected
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
@@ -85,6 +100,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int sse_decode_box_autoadd_i_32(SseDeserializer deserializer);
 
   @protected
+  double sse_decode_f_32(SseDeserializer deserializer);
+
+  @protected
+  HardwareAccelerationInfo sse_decode_hardware_acceleration_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
@@ -95,6 +118,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<TranscriptionSegment> sse_decode_list_transcription_segment(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<VulkanDeviceInfo> sse_decode_list_vulkan_device_info(
     SseDeserializer deserializer,
   );
 
@@ -115,10 +143,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_u_8(SseDeserializer deserializer);
 
   @protected
   void sse_decode_unit(SseDeserializer deserializer);
+
+  @protected
+  VulkanDeviceInfo sse_decode_vulkan_device_info(SseDeserializer deserializer);
 
   @protected
   void sse_encode_AnyhowException(
@@ -142,6 +176,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_i_32(int self, SseSerializer serializer);
 
   @protected
+  void sse_encode_f_32(double self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_hardware_acceleration_info(
+    HardwareAccelerationInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
@@ -156,6 +199,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_transcription_segment(
     List<TranscriptionSegment> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_vulkan_device_info(
+    List<VulkanDeviceInfo> self,
     SseSerializer serializer,
   );
 
@@ -178,10 +227,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer);
+
+  @protected
   void sse_encode_u_8(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_unit(void self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_vulkan_device_info(
+    VulkanDeviceInfo self,
+    SseSerializer serializer,
+  );
 }
 
 // Section: wire_class

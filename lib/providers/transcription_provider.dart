@@ -58,6 +58,44 @@ class TranscriptionProvider with ChangeNotifier {
   bool _useGpu = false;
   bool get useGpu => _useGpu;
 
+  bool _isGpuAvailable = false;
+  bool get isGpuAvailable => _isGpuAvailable;
+
+  List<rust_whisper.VulkanDeviceInfo> _vulkanDevices = [];
+  List<rust_whisper.VulkanDeviceInfo> get vulkanDevices => _vulkanDevices;
+
+  // VAD 配置
+  bool _vadEnabled = false;
+  bool get vadEnabled => _vadEnabled;
+
+  double _vadThreshold = 0.010; // RMS 音能阈值
+  double get vadThreshold => _vadThreshold;
+
+  int _vadMinSpeechMs = 250; // 最小语音长度 (ms)
+  int get vadMinSpeechMs => _vadMinSpeechMs;
+
+  int _vadMinSilenceMs = 800; // 最小静音判定时间 (ms)
+  int get vadMinSilenceMs => _vadMinSilenceMs;
+
+  // Whisper 惩罚与降级参数配置
+  double _temperature = 0.0;
+  double get temperature => _temperature;
+
+  double _temperatureInc = 0.2;
+  double get temperatureInc => _temperatureInc;
+
+  double _entropyThold = 2.4;
+  double get entropyThold => _entropyThold;
+
+  double _logprobThold = -1.0;
+  double get logprobThold => _logprobThold;
+
+  double _noSpeechThold = 0.6;
+  double get noSpeechThold => _noSpeechThold;
+
+  bool _noContext = false;
+  bool get noContext => _noContext;
+
   TranscriptionStatus _status = TranscriptionStatus.idle;
   TranscriptionStatus get status => _status;
 
@@ -88,6 +126,16 @@ class TranscriptionProvider with ChangeNotifier {
   Future<void> init() async {
     // 搜索系统 FFmpeg
     await _ffmpegService.findSystemFFmpeg();
+
+    // 查询 Vulkan 设备列表
+    try {
+      final info = await rust_whisper.getHardwareAccelerationInfo();
+      _isGpuAvailable = info.isVulkanAvailable;
+      _vulkanDevices = info.devices;
+      debugPrint('[TranscriptionProvider] Loaded Vulkan hardware info: isAvailable=$_isGpuAvailable, devices=${_vulkanDevices.map((d) => d.name).toList()}');
+    } catch (e) {
+      debugPrint('[TranscriptionProvider] Failed to load Vulkan hardware info: $e');
+    }
     
     // 加载已下载模型
     _downloadedModels = await _modelService.getDownloadedModels();
@@ -99,6 +147,46 @@ class TranscriptionProvider with ChangeNotifier {
       _selectedModel = ModelService.availableModels.first.filename;
     }
     notifyListeners();
+  }
+
+  /// 获取当前活跃的计算设备描述
+  String get activeDeviceName {
+    if (!_useGpu) {
+      return 'CPU';
+    }
+    if (_vulkanDevices.isEmpty) {
+      return 'CPU (安全回退 - 未检测到加速显卡)';
+    }
+
+    // 独立显卡 (dGPU) -> 集成显卡 (iGPU) 优先寻址
+    rust_whisper.VulkanDeviceInfo? selectedDevice;
+    for (final dev in _vulkanDevices) {
+      final nameLower = dev.name.toLowerCase();
+      final isIgpu = nameLower.contains('integrated') ||
+          nameLower.contains('uhd') ||
+          nameLower.contains('iris') ||
+          nameLower.contains('vega') ||
+          (nameLower.contains('intel') && !nameLower.contains('arc')) ||
+          nameLower.contains('radeon(tm)');
+      if (!isIgpu) {
+        selectedDevice = dev;
+        break;
+      }
+    }
+    selectedDevice ??= _vulkanDevices.first;
+    return 'GPU: ${selectedDevice.name}';
+  }
+
+  /// 智能低算力预警：未开启加速或开启但没有硬件加速显卡，且模型大小大于 400MB
+  bool get showLowPowerWarning {
+    if (_selectedModel == null) return false;
+    final modelInfo = ModelService.availableModels.firstWhere(
+      (m) => m.filename == _selectedModel,
+      orElse: () => ModelService.availableModels.first,
+    );
+
+    final isGpuActive = _useGpu && _vulkanDevices.isNotEmpty;
+    return !isGpuActive && modelInfo.sizeMB > 400.0;
   }
 
   void setCurrentTab(int index) {
@@ -180,6 +268,56 @@ class TranscriptionProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  void setVadEnabled(bool value) {
+    _vadEnabled = value;
+    notifyListeners();
+  }
+
+  void setVadThreshold(double value) {
+    _vadThreshold = value;
+    notifyListeners();
+  }
+
+  void setVadMinSpeechMs(int value) {
+    _vadMinSpeechMs = value;
+    notifyListeners();
+  }
+
+  void setVadMinSilenceMs(int value) {
+    _vadMinSilenceMs = value;
+    notifyListeners();
+  }
+
+  void setTemperature(double value) {
+    _temperature = value;
+    notifyListeners();
+  }
+
+  void setTemperatureInc(double value) {
+    _temperatureInc = value;
+    notifyListeners();
+  }
+
+  void setEntropyThold(double value) {
+    _entropyThold = value;
+    notifyListeners();
+  }
+
+  void setLogprobThold(double value) {
+    _logprobThold = value;
+    notifyListeners();
+  }
+
+  void setNoSpeechThold(double value) {
+    _noSpeechThold = value;
+    notifyListeners();
+  }
+
+  void setNoContext(bool value) {
+    _noContext = value;
+    notifyListeners();
+  }
+
   /// 核心流程：一键开始提取并转写
   Future<void> startTranscription() async {
     if (_inputMediaFile == null) {
@@ -243,6 +381,16 @@ class TranscriptionProvider with ChangeNotifier {
         translate: _translateToEnglish,
         threads: 4,
         useGpu: _useGpu,
+        vadEnabled: _vadEnabled,
+        vadThreshold: _vadThreshold,
+        vadMinSpeechMs: _vadMinSpeechMs,
+        vadMinSilenceMs: _vadMinSilenceMs,
+        temperature: _temperature,
+        temperatureInc: _temperatureInc,
+        entropyThold: _entropyThold,
+        logprobThold: _logprobThold,
+        noSpeechThold: _noSpeechThold,
+        noContext: _noContext,
       );
 
       await _transcriptionSub?.cancel();

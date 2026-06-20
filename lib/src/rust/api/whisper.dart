@@ -8,9 +8,11 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'whisper.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `progress_callback_trampoline`, `run_transcription`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`
+// 电脑硬件信息
+Future<HardwareAccelerationInfo> getHardwareAccelerationInfo() =>
+    RustLib.instance.api.crateApiWhisperGetHardwareAccelerationInfo();
 
+// 语音识别
 Stream<TranscriptionEvent> transcribe({
   required String modelPath,
   required String audioPath,
@@ -18,6 +20,16 @@ Stream<TranscriptionEvent> transcribe({
   required bool translate,
   int? threads,
   required bool useGpu,
+  required bool vadEnabled,
+  required double vadThreshold,
+  required int vadMinSpeechMs,
+  required int vadMinSilenceMs,
+  required double temperature,
+  required double temperatureInc,
+  required double entropyThold,
+  required double logprobThold,
+  required double noSpeechThold,
+  required bool noContext,
 }) => RustLib.instance.api.crateApiWhisperTranscribe(
   modelPath: modelPath,
   audioPath: audioPath,
@@ -25,7 +37,41 @@ Stream<TranscriptionEvent> transcribe({
   translate: translate,
   threads: threads,
   useGpu: useGpu,
+  vadEnabled: vadEnabled,
+  vadThreshold: vadThreshold,
+  vadMinSpeechMs: vadMinSpeechMs,
+  vadMinSilenceMs: vadMinSilenceMs,
+  temperature: temperature,
+  temperatureInc: temperatureInc,
+  entropyThold: entropyThold,
+  logprobThold: logprobThold,
+  noSpeechThold: noSpeechThold,
+  noContext: noContext,
 );
+
+class HardwareAccelerationInfo {
+  final bool isVulkanAvailable;
+  final List<VulkanDeviceInfo> devices;
+
+  const HardwareAccelerationInfo({
+    required this.isVulkanAvailable,
+    required this.devices,
+  });
+
+  static Future<HardwareAccelerationInfo> default_() =>
+      RustLib.instance.api.crateApiWhisperHardwareAccelerationInfoDefault();
+
+  @override
+  int get hashCode => isVulkanAvailable.hashCode ^ devices.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HardwareAccelerationInfo &&
+          runtimeType == other.runtimeType &&
+          isVulkanAvailable == other.isVulkanAvailable &&
+          devices == other.devices;
+}
 
 @freezed
 sealed class TranscriptionEvent with _$TranscriptionEvent {
@@ -64,4 +110,32 @@ class TranscriptionSegment {
           startMs == other.startMs &&
           endMs == other.endMs &&
           text == other.text;
+}
+
+// Vulkan 信息
+class VulkanDeviceInfo {
+  final int id;
+  final String name;
+  final BigInt totalVramBytes;
+
+  const VulkanDeviceInfo({
+    required this.id,
+    required this.name,
+    required this.totalVramBytes,
+  });
+
+  static Future<VulkanDeviceInfo> default_() =>
+      RustLib.instance.api.crateApiWhisperVulkanDeviceInfoDefault();
+
+  @override
+  int get hashCode => id.hashCode ^ name.hashCode ^ totalVramBytes.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is VulkanDeviceInfo &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          name == other.name &&
+          totalVramBytes == other.totalVramBytes;
 }

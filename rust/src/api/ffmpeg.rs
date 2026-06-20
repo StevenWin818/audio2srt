@@ -69,7 +69,7 @@ pub fn mux_srt_to_video(
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
     if hard_burn {
-        // 硬压制字幕：使用 subtitles 滤镜
+        //  硬压制字幕：使用 subtitles 滤镜
         let escaped_srt = format_path_for_filter(&srt_path);
         let filter_arg = format!("subtitles='{}'", escaped_srt);
         

@@ -7,12 +7,14 @@ class WhisperModelInfo {
   final String name;
   final String filename;
   final String size;
+  final double sizeMB;
   final String url;
 
   WhisperModelInfo({
     required this.name,
     required this.filename,
     required this.size,
+    required this.sizeMB,
     required this.url,
   });
 }
@@ -23,30 +25,35 @@ class ModelService {
       name: 'Tiny (快 / 适合测试)',
       filename: 'ggml-tiny.bin',
       size: '75 MB',
+      sizeMB: 75.0,
       url: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin',
     ),
     WhisperModelInfo(
       name: 'Base (推荐 / 平衡度高)',
       filename: 'ggml-base.bin',
       size: '140 MB',
+      sizeMB: 140.0,
       url: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
     ),
     WhisperModelInfo(
       name: 'Small (精确 / 体积适中)',
       filename: 'ggml-small.bin',
       size: '460 MB',
+      sizeMB: 460.0,
       url: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-small.bin',
     ),
     WhisperModelInfo(
       name: 'Large V3 Turbo Q8 (超快 / 高精确)',
       filename: 'ggml-large-v3-turbo-q8_0.bin',
       size: '834 MB',
+      sizeMB: 834.0,
       url: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin',
     ),
     WhisperModelInfo(
       name: 'Large V3 Q8 (最高精度 / 量化版)',
       filename: 'ggml-large-v3-q8_0.bin',
       size: '1.57 GB',
+      sizeMB: 1608.0,
       url: 'https://hf-mirror.com/adriabama06/whisper-large-v3-ggml/resolve/main/ggml-large-v3-q8_0.bin',
     ),
   ];

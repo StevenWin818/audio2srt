@@ -8,9 +8,13 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 flutter_rust_bridge = "=2.11.1"
-whisper-rs = "0.16.0"
+whisper-rs = { version = "0.16.0" }
 hound = "3.5.1"
 anyhow = "1.0"
+
+[features]
+default = ["vulkan"]
+vulkan = ["whisper-rs/vulkan"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
