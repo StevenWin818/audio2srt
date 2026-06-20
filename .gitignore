@@ -63,3 +63,6 @@ local.properties
 testaudio.mp3
 testaudio.wav
 rust_lib_audio2srt.dll
+
+test/
+test_opencc.dart

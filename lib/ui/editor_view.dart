@@ -100,6 +100,43 @@ class _EditorViewState extends State<EditorView> {
         ),
         const Spacer(),
         if (provider.subtitles.isNotEmpty) ...[
+          if (provider.selectedLanguage == 'zh' || provider.selectedLanguage == 'auto') ...[
+            PopupMenuButton<bool>(
+              tooltip: '简繁转换',
+              position: PopupMenuPosition.under,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: const Color(0xFF8B5CF6)),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Row(
+                  children: const [
+                    Icon(Icons.g_translate, color: Color(0xFF8B5CF6), size: 18),
+                    SizedBox(width: 8),
+                    Text('简繁转换', style: TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.w500)),
+                  ],
+                ),
+              ),
+              onSelected: (toSimplified) {
+                provider.convertSubtitlesToChinese(toSimplified);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(toSimplified ? '已转换为简体中文' : '已转换为繁体中文')),
+                );
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: true,
+                  child: Text('转换为简体中文 (Simplified)'),
+                ),
+                const PopupMenuItem(
+                  value: false,
+                  child: Text('转换为繁体中文 (Traditional)'),
+                ),
+              ],
+            ),
+            const SizedBox(width: 12),
+          ],
           ElevatedButton.icon(
             onPressed: () => _showExportDialog(context, provider),
             icon: const Icon(Icons.download),

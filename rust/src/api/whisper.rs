@@ -283,6 +283,22 @@ fn split_long_segments(
     result
 }
 
+#[no_mangle]
+pub extern "C" fn zhconv_text(ptr: *const std::ffi::c_char, to_simplified: bool) -> *mut std::ffi::c_char {
+    let c_str = unsafe { std::ffi::CStr::from_ptr(ptr) };
+    let text = c_str.to_str().unwrap_or("").to_string();
+    let target = if to_simplified { zhconv::Variant::ZhCN } else { zhconv::Variant::ZhTW };
+    let result = zhconv::zhconv(&text, target);
+    std::ffi::CString::new(result).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn free_zhconv_string(ptr: *mut std::ffi::c_char) {
+    if !ptr.is_null() {
+        unsafe { let _ = std::ffi::CString::from_raw(ptr); }
+    }
+}
+
 /// 清洗文本中的标点符号与空格以实现精确的比对
 fn clean_punctuation_and_whitespace(text: &str) -> String {
     text.replace(|c: char| {
@@ -863,7 +879,7 @@ pub fn run_transcription_inner(
                 println!("[Rust] ⚠️ 模型未输出任何文本！可能是音频太模糊触发了 no_speech_thold (无声阈值)，导致大模型将其误判为静音并跳过。");
             }
 
-            let mut discard_segment = false;
+            let discard_segment = false;
 
             if is_segment_self_repeating || is_cross_segment_repeating {
                 println!(
@@ -891,7 +907,7 @@ pub fn run_transcription_inner(
                 fallback_params.set_initial_prompt("");
 
                 // 微升温度增加采样随机性
-                let fallback_temp = if temperature < 0.2 { 0.3 } else { temperature + 0.2 };
+                let fallback_temp = if temperature < 0.2_f32 { 0.3_f32 } else { temperature + 0.2_f32 };
                 fallback_params.set_temperature(fallback_temp);
 
                 println!("[Rust] 正在执行回退推理: temp={:.2} (无 prompt)", fallback_temp);
@@ -958,8 +974,8 @@ pub fn run_transcription_inner(
                         let end = segment.end_timestamp();
 
                         combined_segments.push(TranscriptionSegment {
-                            start_ms: (start + offset_cs) * 10,
-                            end_ms: (end + offset_cs) * 10,
+                            start_ms: segment.start_timestamp() * 10 + global_offset_ms,
+                            end_ms: segment.end_timestamp() * 10 + global_offset_ms,
                             text,
                         });
                     }

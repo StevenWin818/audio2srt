@@ -11,6 +11,7 @@ flutter_rust_bridge = "=2.11.1"
 whisper-rs = { version = "0.16.0" }
 hound = "3.5.1"
 anyhow = "1.0"
+zhconv = "0.4.1"
 
 [features]
 default = ["vulkan"]

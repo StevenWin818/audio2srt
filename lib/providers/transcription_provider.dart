@@ -7,6 +7,14 @@ import '../src/rust/api/ffmpeg.dart' as rust_ffmpeg;
 import '../src/rust/api/whisper.dart' as rust_whisper;
 import '../services/ffmpeg_service.dart';
 import '../services/model_service.dart';
+import 'dart:ffi' as ffi;
+import 'package:ffi/ffi.dart';
+
+// 声明 FFI 签名
+typedef ZhConvTextC = ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8> ptr, ffi.Bool toSimplified);
+typedef ZhConvTextDart = ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8> ptr, bool toSimplified);
+typedef FreeZhConvStringC = ffi.Void Function(ffi.Pointer<Utf8> ptr);
+typedef FreeZhConvStringDart = void Function(ffi.Pointer<Utf8> ptr);
 
 enum TranscriptionStatus {
   idle,
@@ -74,7 +82,7 @@ class TranscriptionProvider with ChangeNotifier {
   int _vadMinSpeechMs = 250; // 最小语音长度 (ms)
   int get vadMinSpeechMs => _vadMinSpeechMs;
 
-  int _vadMinSilenceMs = 800; // 最小静音判定时间 (ms)
+  int _vadMinSilenceMs = 1500; // 最小静音判定时间 (ms)
   int get vadMinSilenceMs => _vadMinSilenceMs;
 
   // Whisper 惩罚与降级参数配置
@@ -452,6 +460,24 @@ class TranscriptionProvider with ChangeNotifier {
       _subtitles[index].endMs = endMs;
       notifyListeners();
     }
+  }
+  void convertSubtitlesToChinese(bool toSimplified) {
+    try {
+      final dylib = Platform.isWindows ? ffi.DynamicLibrary.open('rust_lib_audio2srt.dll') : ffi.DynamicLibrary.process();
+      final zhConvText = dylib.lookupFunction<ZhConvTextC, ZhConvTextDart>('zhconv_text');
+      final freeZhConvString = dylib.lookupFunction<FreeZhConvStringC, FreeZhConvStringDart>('free_zhconv_string');
+
+      for (var i = 0; i < _subtitles.length; i++) {
+        final ptr = _subtitles[i].text.toNativeUtf8();
+        final resultPtr = zhConvText(ptr, toSimplified);
+        _subtitles[i].text = resultPtr.toDartString();
+        freeZhConvString(resultPtr);
+        calloc.free(ptr);
+      }
+    } catch (e) {
+      debugPrint('FFI conversion error: $e');
+    }
+    notifyListeners();
   }
 
   /// 导出字幕文件到指定路径
