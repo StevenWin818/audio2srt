@@ -26,6 +26,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AnyhowException dco_decode_AnyhowException(dynamic raw);
 
   @protected
+  RustStreamSink<FfmpegEvent> dco_decode_StreamSink_ffmpeg_event_Sse(
+    dynamic raw,
+  );
+
+  @protected
   RustStreamSink<TranscriptionEvent>
   dco_decode_StreamSink_transcription_event_Sse(dynamic raw);
 
@@ -42,6 +47,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double dco_decode_f_32(dynamic raw);
 
   @protected
+  FfmpegEvent dco_decode_ffmpeg_event(dynamic raw);
+
+  @protected
   HardwareAccelerationInfo dco_decode_hardware_acceleration_info(dynamic raw);
 
   @protected
@@ -49,6 +57,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PlatformInt64 dco_decode_i_64(dynamic raw);
+
+  @protected
+  List<String> dco_decode_list_String(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
@@ -87,6 +98,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
 
   @protected
+  RustStreamSink<FfmpegEvent> sse_decode_StreamSink_ffmpeg_event_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   RustStreamSink<TranscriptionEvent>
   sse_decode_StreamSink_transcription_event_Sse(SseDeserializer deserializer);
 
@@ -103,6 +119,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double sse_decode_f_32(SseDeserializer deserializer);
 
   @protected
+  FfmpegEvent sse_decode_ffmpeg_event(SseDeserializer deserializer);
+
+  @protected
   HardwareAccelerationInfo sse_decode_hardware_acceleration_info(
     SseDeserializer deserializer,
   );
@@ -112,6 +131,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
+
+  @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer);
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -161,6 +183,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_StreamSink_ffmpeg_event_Sse(
+    RustStreamSink<FfmpegEvent> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_StreamSink_transcription_event_Sse(
     RustStreamSink<TranscriptionEvent> self,
     SseSerializer serializer,
@@ -179,6 +207,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_f_32(double self, SseSerializer serializer);
 
   @protected
+  void sse_encode_ffmpeg_event(FfmpegEvent self, SseSerializer serializer);
+
+  @protected
   void sse_encode_hardware_acceleration_info(
     HardwareAccelerationInfo self,
     SseSerializer serializer,
@@ -189,6 +220,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_prim_u_8_strict(

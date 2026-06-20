@@ -6,10 +6,11 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `format_path_for_filter`
+// These functions are ignored because they are not marked as `pub`: `format_path_for_filter`, `parse_time_to_secs`, `run_ffmpeg_with_progress`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`
 
 /// 提取音视频文件中的音频并重采样为 16kHz 单声道 PCM WAV 格式
-Future<String> extractAudioFromMedia({
+Stream<FfmpegEvent> extractAudioFromMedia({
   required String ffmpegPath,
   required String inputPath,
   required String outputPath,
@@ -20,7 +21,7 @@ Future<String> extractAudioFromMedia({
 );
 
 /// 将 SRT 字幕文件集成到视频中（软封装或硬压制）
-Future<String> muxSrtToVideo({
+Stream<FfmpegEvent> muxSrtToVideo({
   required String ffmpegPath,
   required String videoPath,
   required String srtPath,
@@ -33,3 +34,23 @@ Future<String> muxSrtToVideo({
   outputPath: outputPath,
   hardBurn: hardBurn,
 );
+
+class FfmpegEvent {
+  final int? progress;
+  final String? success;
+  final String? error;
+
+  const FfmpegEvent({this.progress, this.success, this.error});
+
+  @override
+  int get hashCode => progress.hashCode ^ success.hashCode ^ error.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FfmpegEvent &&
+          runtimeType == other.runtimeType &&
+          progress == other.progress &&
+          success == other.success &&
+          error == other.error;
+}

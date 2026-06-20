@@ -68,7 +68,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -263029541;
+  int get rustContentHash => -947791594;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -79,7 +79,17 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
-  Future<String> crateApiFfmpegExtractAudioFromMedia({
+  Future<String> crateApiWhisperConvertChinese({
+    required String text,
+    required bool toSimplified,
+  });
+
+  Future<List<String>> crateApiWhisperConvertChineseList({
+    required List<String> texts,
+    required bool toSimplified,
+  });
+
+  Stream<FfmpegEvent> crateApiFfmpegExtractAudioFromMedia({
     required String ffmpegPath,
     required String inputPath,
     required String outputPath,
@@ -94,7 +104,7 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiSimpleInitApp();
 
-  Future<String> crateApiFfmpegMuxSrtToVideo({
+  Stream<FfmpegEvent> crateApiFfmpegMuxSrtToVideo({
     required String ffmpegPath,
     required String videoPath,
     required String srtPath,
@@ -135,18 +145,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
-  Future<String> crateApiFfmpegExtractAudioFromMedia({
-    required String ffmpegPath,
-    required String inputPath,
-    required String outputPath,
+  Future<String> crateApiWhisperConvertChinese({
+    required String text,
+    required bool toSimplified,
   }) {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(ffmpegPath, serializer);
-          sse_encode_String(inputPath, serializer);
-          sse_encode_String(outputPath, serializer);
+          sse_encode_String(text, serializer);
+          sse_encode_bool(toSimplified, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -156,19 +164,96 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
-          decodeErrorData: sse_decode_String,
+          decodeErrorData: null,
         ),
-        constMeta: kCrateApiFfmpegExtractAudioFromMediaConstMeta,
-        argValues: [ffmpegPath, inputPath, outputPath],
+        constMeta: kCrateApiWhisperConvertChineseConstMeta,
+        argValues: [text, toSimplified],
         apiImpl: this,
       ),
     );
   }
 
+  TaskConstMeta get kCrateApiWhisperConvertChineseConstMeta =>
+      const TaskConstMeta(
+        debugName: "convert_chinese",
+        argNames: ["text", "toSimplified"],
+      );
+
+  @override
+  Future<List<String>> crateApiWhisperConvertChineseList({
+    required List<String> texts,
+    required bool toSimplified,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_String(texts, serializer);
+          sse_encode_bool(toSimplified, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 2,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiWhisperConvertChineseListConstMeta,
+        argValues: [texts, toSimplified],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWhisperConvertChineseListConstMeta =>
+      const TaskConstMeta(
+        debugName: "convert_chinese_list",
+        argNames: ["texts", "toSimplified"],
+      );
+
+  @override
+  Stream<FfmpegEvent> crateApiFfmpegExtractAudioFromMedia({
+    required String ffmpegPath,
+    required String inputPath,
+    required String outputPath,
+  }) {
+    final sink = RustStreamSink<FfmpegEvent>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_StreamSink_ffmpeg_event_Sse(sink, serializer);
+            sse_encode_String(ffmpegPath, serializer);
+            sse_encode_String(inputPath, serializer);
+            sse_encode_String(outputPath, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 3,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: sse_decode_String,
+          ),
+          constMeta: kCrateApiFfmpegExtractAudioFromMediaConstMeta,
+          argValues: [sink, ffmpegPath, inputPath, outputPath],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
   TaskConstMeta get kCrateApiFfmpegExtractAudioFromMediaConstMeta =>
       const TaskConstMeta(
         debugName: "extract_audio_from_media",
-        argNames: ["ffmpegPath", "inputPath", "outputPath"],
+        argNames: ["sink", "ffmpegPath", "inputPath", "outputPath"],
       );
 
   @override
@@ -181,7 +266,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 2,
+            funcId: 4,
             port: port_,
           );
         },
@@ -209,7 +294,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 3)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -235,7 +320,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 6,
             port: port_,
           );
         },
@@ -265,7 +350,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 7,
             port: port_,
           );
         },
@@ -284,44 +369,57 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
-  Future<String> crateApiFfmpegMuxSrtToVideo({
+  Stream<FfmpegEvent> crateApiFfmpegMuxSrtToVideo({
     required String ffmpegPath,
     required String videoPath,
     required String srtPath,
     required String outputPath,
     required bool hardBurn,
   }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(ffmpegPath, serializer);
-          sse_encode_String(videoPath, serializer);
-          sse_encode_String(srtPath, serializer);
-          sse_encode_String(outputPath, serializer);
-          sse_encode_bool(hardBurn, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 6,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_String,
-          decodeErrorData: sse_decode_String,
+    final sink = RustStreamSink<FfmpegEvent>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_StreamSink_ffmpeg_event_Sse(sink, serializer);
+            sse_encode_String(ffmpegPath, serializer);
+            sse_encode_String(videoPath, serializer);
+            sse_encode_String(srtPath, serializer);
+            sse_encode_String(outputPath, serializer);
+            sse_encode_bool(hardBurn, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 8,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: sse_decode_String,
+          ),
+          constMeta: kCrateApiFfmpegMuxSrtToVideoConstMeta,
+          argValues: [
+            sink,
+            ffmpegPath,
+            videoPath,
+            srtPath,
+            outputPath,
+            hardBurn,
+          ],
+          apiImpl: this,
         ),
-        constMeta: kCrateApiFfmpegMuxSrtToVideoConstMeta,
-        argValues: [ffmpegPath, videoPath, srtPath, outputPath, hardBurn],
-        apiImpl: this,
       ),
     );
+    return sink.stream;
   }
 
   TaskConstMeta get kCrateApiFfmpegMuxSrtToVideoConstMeta =>
       const TaskConstMeta(
         debugName: "mux_srt_to_video",
         argNames: [
+          "sink",
           "ffmpegPath",
           "videoPath",
           "srtPath",
@@ -375,7 +473,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 7,
+              funcId: 9,
               port: port_,
             );
           },
@@ -442,7 +540,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 10,
             port: port_,
           );
         },
@@ -472,7 +570,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 11,
             port: port_,
           );
         },
@@ -497,6 +595,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AnyhowException dco_decode_AnyhowException(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return AnyhowException(raw as String);
+  }
+
+  @protected
+  RustStreamSink<FfmpegEvent> dco_decode_StreamSink_ffmpeg_event_Sse(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
   }
 
   @protected
@@ -531,6 +637,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  FfmpegEvent dco_decode_ffmpeg_event(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return FfmpegEvent(
+      progress: dco_decode_opt_box_autoadd_i_32(arr[0]),
+      success: dco_decode_opt_String(arr[1]),
+      error: dco_decode_opt_String(arr[2]),
+    );
+  }
+
+  @protected
   HardwareAccelerationInfo dco_decode_hardware_acceleration_info(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -552,6 +671,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PlatformInt64 dco_decode_i_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dcoDecodeI64(raw);
+  }
+
+  @protected
+  List<String> dco_decode_list_String(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_String).toList();
   }
 
   @protected
@@ -657,6 +782,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RustStreamSink<FfmpegEvent> sse_decode_StreamSink_ffmpeg_event_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
   RustStreamSink<TranscriptionEvent>
   sse_decode_StreamSink_transcription_event_Sse(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -689,6 +822,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  FfmpegEvent sse_decode_ffmpeg_event(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_progress = sse_decode_opt_box_autoadd_i_32(deserializer);
+    var var_success = sse_decode_opt_String(deserializer);
+    var var_error = sse_decode_opt_String(deserializer);
+    return FfmpegEvent(
+      progress: var_progress,
+      success: var_success,
+      error: var_error,
+    );
+  }
+
+  @protected
   HardwareAccelerationInfo sse_decode_hardware_acceleration_info(
     SseDeserializer deserializer,
   ) {
@@ -711,6 +857,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getPlatformInt64();
+  }
+
+  @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <String>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_String(deserializer));
+    }
+    return ans_;
   }
 
   @protected
@@ -847,6 +1005,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_StreamSink_ffmpeg_event_Sse(
+    RustStreamSink<FfmpegEvent> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_ffmpeg_event,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
   void sse_encode_StreamSink_transcription_event_Sse(
     RustStreamSink<TranscriptionEvent> self,
     SseSerializer serializer,
@@ -888,6 +1063,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_ffmpeg_event(FfmpegEvent self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_opt_box_autoadd_i_32(self.progress, serializer);
+    sse_encode_opt_String(self.success, serializer);
+    sse_encode_opt_String(self.error, serializer);
+  }
+
+  @protected
   void sse_encode_hardware_acceleration_info(
     HardwareAccelerationInfo self,
     SseSerializer serializer,
@@ -907,6 +1090,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putPlatformInt64(self);
+  }
+
+  @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_String(item, serializer);
+    }
   }
 
   @protected

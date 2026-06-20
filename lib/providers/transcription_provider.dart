@@ -7,14 +7,6 @@ import '../src/rust/api/ffmpeg.dart' as rust_ffmpeg;
 import '../src/rust/api/whisper.dart' as rust_whisper;
 import '../services/ffmpeg_service.dart';
 import '../services/model_service.dart';
-import 'dart:ffi' as ffi;
-import 'package:ffi/ffi.dart';
-
-// 声明 FFI 签名
-typedef ZhConvTextC = ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8> ptr, ffi.Bool toSimplified);
-typedef ZhConvTextDart = ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8> ptr, bool toSimplified);
-typedef FreeZhConvStringC = ffi.Void Function(ffi.Pointer<Utf8> ptr);
-typedef FreeZhConvStringDart = void Function(ffi.Pointer<Utf8> ptr);
 
 enum TranscriptionStatus {
   idle,
@@ -63,7 +55,7 @@ class TranscriptionProvider with ChangeNotifier {
   bool _translateToEnglish = false;
   bool get translateToEnglish => _translateToEnglish;
 
-  bool _useGpu = false;
+  bool _useGpu = true;
   bool get useGpu => _useGpu;
 
   bool _isGpuAvailable = false;
@@ -368,11 +360,27 @@ class TranscriptionProvider with ChangeNotifier {
         '${p.basenameWithoutExtension(_inputMediaFile!.path)}_temp_${timestamp}_16k.wav',
       );
 
-      final extractedWavPath = await rust_ffmpeg.extractAudioFromMedia(
+      String? extractedWavPath;
+      final extractStream = rust_ffmpeg.extractAudioFromMedia(
         ffmpegPath: _ffmpegService.ffmpegPath,
         inputPath: _inputMediaFile!.path,
         outputPath: wavOutputPath,
       );
+
+      await for (final event in extractStream) {
+        if (event.progress != null) {
+          _progress = event.progress!;
+          notifyListeners();
+        } else if (event.success != null) {
+          extractedWavPath = event.success;
+        } else if (event.error != null) {
+          throw Exception(event.error);
+        }
+      }
+
+      if (extractedWavPath == null) {
+        throw Exception('Failed to extract audio');
+      }
 
       // 2. 开始 Whisper 推理转写
       _status = TranscriptionStatus.transcribing;
@@ -423,7 +431,7 @@ class TranscriptionProvider with ChangeNotifier {
               
               // 尝试删除临时 wav 文件
               try {
-                final wavFile = File(extractedWavPath);
+                final wavFile = File(extractedWavPath!);
                 if (wavFile.existsSync()) {
                   wavFile.deleteSync();
                 }
@@ -461,21 +469,15 @@ class TranscriptionProvider with ChangeNotifier {
       notifyListeners();
     }
   }
-  void convertSubtitlesToChinese(bool toSimplified) {
+  Future<void> convertSubtitlesToChinese(bool toSimplified) async {
     try {
-      final dylib = Platform.isWindows ? ffi.DynamicLibrary.open('rust_lib_audio2srt.dll') : ffi.DynamicLibrary.process();
-      final zhConvText = dylib.lookupFunction<ZhConvTextC, ZhConvTextDart>('zhconv_text');
-      final freeZhConvString = dylib.lookupFunction<FreeZhConvStringC, FreeZhConvStringDart>('free_zhconv_string');
-
+      final texts = _subtitles.map((e) => e.text).toList();
+      final converted = await rust_whisper.convertChineseList(texts: texts, toSimplified: toSimplified);
       for (var i = 0; i < _subtitles.length; i++) {
-        final ptr = _subtitles[i].text.toNativeUtf8();
-        final resultPtr = zhConvText(ptr, toSimplified);
-        _subtitles[i].text = resultPtr.toDartString();
-        freeZhConvString(resultPtr);
-        calloc.free(ptr);
+        _subtitles[i].text = converted[i];
       }
     } catch (e) {
-      debugPrint('FFI conversion error: $e');
+      debugPrint('Conversion error: $e');
     }
     notifyListeners();
   }
@@ -497,7 +499,8 @@ class TranscriptionProvider with ChangeNotifier {
       throw '未导入视频源文件';
     }
 
-    final result = await rust_ffmpeg.muxSrtToVideo(
+    String? resultPath;
+    final muxStream = rust_ffmpeg.muxSrtToVideo(
       ffmpegPath: _ffmpegService.ffmpegPath,
       videoPath: _inputMediaFile!.path,
       srtPath: srtPath,
@@ -505,7 +508,21 @@ class TranscriptionProvider with ChangeNotifier {
       hardBurn: hardBurn,
     );
 
-    return result;
+    await for (final event in muxStream) {
+      if (event.progress != null) {
+        _progress = event.progress!;
+        notifyListeners();
+      } else if (event.success != null) {
+        resultPath = event.success;
+      } else if (event.error != null) {
+        throw Exception(event.error);
+      }
+    }
+
+    if (resultPath == null) {
+      throw Exception('Failed to mux subtitles');
+    }
+    return resultPath!;
   }
 
   void _setError(String msg) {

@@ -153,6 +153,21 @@ fn energy_based_vad(
         return vec![(0, samples.len())];
     }
 
+    // 计算全局能量用于自适应阈值
+    let mut global_sum_sq = 0.0;
+    // 每隔一定步长采样，加速计算
+    let step = 10.max(samples.len() / 100000);
+    let mut count = 0;
+    for i in (0..samples.len()).step_by(step) {
+        global_sum_sq += samples[i] * samples[i];
+        count += 1;
+    }
+    let global_rms = if count > 0 { (global_sum_sq / count as f32).sqrt() } else { 0.0 };
+    // 动态阈值：取用户设定阈值和 (全局能量的 0.6 倍 + 0.005) 的较小值
+    // 这能有效防止对于整体音量偏小的音频使用固定 0.05 导致大面积误判
+    let adaptive_threshold = threshold.min(global_rms * 0.6 + 0.005);
+    println!("[Rust] VAD global RMS: {:.4}, original threshold: {:.4}, adaptive threshold: {:.4}", global_rms, threshold, adaptive_threshold);
+
     let min_speech_windows = (min_speech_ms / window_ms) as usize;
     let min_silence_windows = (min_silence_ms / window_ms) as usize;
 
@@ -168,7 +183,7 @@ fn energy_based_vad(
             sum_sq += s * s;
         }
         let rms = (sum_sq / window_size as f32).sqrt();
-        window_activities[i] = rms >= threshold;
+        window_activities[i] = rms >= adaptive_threshold;
     }
 
     let mut segments = Vec::new();
@@ -283,20 +298,14 @@ fn split_long_segments(
     result
 }
 
-#[no_mangle]
-pub extern "C" fn zhconv_text(ptr: *const std::ffi::c_char, to_simplified: bool) -> *mut std::ffi::c_char {
-    let c_str = unsafe { std::ffi::CStr::from_ptr(ptr) };
-    let text = c_str.to_str().unwrap_or("").to_string();
+pub fn convert_chinese(text: String, to_simplified: bool) -> String {
     let target = if to_simplified { zhconv::Variant::ZhCN } else { zhconv::Variant::ZhTW };
-    let result = zhconv::zhconv(&text, target);
-    std::ffi::CString::new(result).unwrap().into_raw()
+    zhconv::zhconv(&text, target)
 }
 
-#[no_mangle]
-pub extern "C" fn free_zhconv_string(ptr: *mut std::ffi::c_char) {
-    if !ptr.is_null() {
-        unsafe { let _ = std::ffi::CString::from_raw(ptr); }
-    }
+pub fn convert_chinese_list(texts: Vec<String>, to_simplified: bool) -> Vec<String> {
+    let target = if to_simplified { zhconv::Variant::ZhCN } else { zhconv::Variant::ZhTW };
+    texts.into_iter().map(|text| zhconv::zhconv(&text, target)).collect()
 }
 
 /// 清洗文本中的标点符号与空格以实现精确的比对
@@ -522,6 +531,9 @@ fn post_process_segments(segments: Vec<TranscriptionSegment>) -> Vec<Transcripti
     let mut last_cleaned_text = String::new();
 
     for mut seg in segments {
+        // 0. 统一转换为简体中文，消除 Whisper 输出中简繁混用的现象
+        seg.text = zhconv::zhconv(&seg.text, zhconv::Variant::ZhCN);
+
         // 1. 单句内短语与字符级去重
         let text_dedup_phrases = deduplicate_phrases(&seg.text);
         let cleaned_text = deduplicate_repeats(&text_dedup_phrases);
@@ -602,7 +614,7 @@ pub fn transcribe(
     });
 }
 
-pub fn run_transcription_inner(
+pub(crate) fn run_transcription_inner(
     callback: &mut dyn FnMut(TranscriptionEvent),
     model_path: String,
     audio_path: String,

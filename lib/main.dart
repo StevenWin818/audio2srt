@@ -74,7 +74,7 @@ class MainShell extends StatelessWidget {
   ];
 
   List<SidebarItem> get sidebarItems => [
-    SidebarItem(icon: Icons.dashboard_outlined, label: '主控制板'),
+    SidebarItem(icon: Icons.dashboard_outlined, label: '首页'),
     SidebarItem(icon: Icons.edit_note_outlined, label: '字幕编辑器'),
     SidebarItem(icon: Icons.layers_outlined, label: '模型管理'),
     SidebarItem(icon: Icons.settings_outlined, label: '系统设置'),
