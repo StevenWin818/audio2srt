@@ -15,6 +15,7 @@ use crate::frb_generated::StreamSink;
 use crate::api::whisper::{
     TranscriptionSegment, TranscriptionEvent, get_or_create_context,
     has_repetition_loop, deduplicate_repeats, convert_chinese,
+    clean_punctuation_and_whitespace,
 };
 
 #[derive(Clone, Debug)]
@@ -292,6 +293,7 @@ fn run_stream_pipeline_inner(
         register_thread_as_pro_audio();
 
         let mut rolling_prompt = String::new();
+        let mut last_emitted_text = String::new();
         let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
         
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
@@ -346,16 +348,38 @@ fn run_stream_pipeline_inner(
                         }
 
                         if !final_text.is_empty() {
-                            if has_repetition_loop(&final_text) {
-                                println!("[Rust] 检测到子句幻觉循环: '{}'。清理滑动提示词。", final_text);
+                            let cleaned_current = clean_punctuation_and_whitespace(&final_text);
+                            let cleaned_last = clean_punctuation_and_whitespace(&last_emitted_text);
+
+                            let is_cross_segment_dup = !cleaned_current.is_empty() && cleaned_current == cleaned_last;
+                            let duration_cents = segment.end_timestamp() - segment.start_timestamp();
+                            let is_integer_seconds = duration_cents > 0 && duration_cents % 100 == 0;
+
+                            if is_cross_segment_dup {
+                                println!("[Rust] 检测到跨段/子句重复: '{}'。清理滑动提示词。", final_text);
+                                rolling_prompt.clear();
+                                if cleaned_current.chars().count() >= 4 || is_integer_seconds {
+                                    println!("[Rust] 判定为长句/整秒幻觉，丢弃该片段。");
+                                    continue;
+                                }
+                            }
+
+                            let has_rep = has_repetition_loop(&cleaned_current);
+                            if has_rep {
+                                println!("[Rust] 检测到子句内幻觉循环: '{}'。清理滑动提示词并去重。", final_text);
                                 rolling_prompt.clear();
                                 final_text = deduplicate_repeats(&final_text);
-                            } else {
-                                rolling_prompt.push_str(&final_text);
-                                let char_vec: Vec<char> = rolling_prompt.chars().collect();
-                                if char_vec.len() > 100 {
-                                    rolling_prompt = char_vec[char_vec.len() - 100 ..].iter().collect();
+                                if final_text.is_empty() {
+                                    continue;
                                 }
+                            }
+
+                            last_emitted_text = final_text.clone();
+
+                            rolling_prompt.push_str(&final_text);
+                            let char_vec: Vec<char> = rolling_prompt.chars().collect();
+                            if char_vec.len() > 100 {
+                                rolling_prompt = char_vec[char_vec.len() - 100 ..].iter().collect();
                             }
 
                             let new_seg = TranscriptionSegment {

@@ -311,7 +311,7 @@ pub fn convert_chinese_list(texts: Vec<String>, to_simplified: bool) -> Vec<Stri
 }
 
 /// 清洗文本中的标点符号与空格以实现精确的比对
-fn clean_punctuation_and_whitespace(text: &str) -> String {
+pub(crate) fn clean_punctuation_and_whitespace(text: &str) -> String {
     text.replace(|c: char| {
         c.is_ascii_punctuation()
             || c.is_whitespace()
