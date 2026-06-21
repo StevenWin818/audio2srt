@@ -119,6 +119,11 @@ fn run_stream_pipeline_inner(
 
     let chunk_size_48k = 24000;
 
+    // 提前在主流程中解压并准备好模型目录，避免在专属计算线程中执行重度 I/O 操作
+    println!("[Rust] Preparing DeepFilterNet3 models from tar.gz...");
+    let extracted_dir = extract_tar_gz_if_needed(Path::new(&df_model_path))?;
+    println!("[Rust] DeepFilterStream prepared at: {:?}", extracted_dir);
+
     // 4. 初始化 Whisper 上下文
     println!("[Rust] Loading Whisper model context...");
     let mut ctx_params = WhisperContextParameters::default();
@@ -291,34 +296,43 @@ fn run_stream_pipeline_inner(
                 .map_err(|e| anyhow!("Whisper inference error: {:?}", e))?;
 
             let n_segments = whisper_state.full_n_segments();
-            let mut segment_text = String::new();
             for i in 0..n_segments {
                 if let Some(segment) = whisper_state.get_segment(i) {
-                    segment_text.push_str(&segment.to_str_lossy().unwrap_or_default());
-                }
-            }
-
-            let cleaned_text = segment_text.trim().to_string();
-            if !cleaned_text.is_empty() {
-                let mut final_text = deduplicate_repeats(&cleaned_text);
-                if to_simplified { final_text = convert_chinese(final_text, true); }
-
-                if !final_text.is_empty() {
-                    if has_repetition_loop(&final_text) {
-                        println!("[Rust] Hallucination loop detected in: '{}'. Clearing rolling prompt.", final_text);
-                        rolling_prompt.clear();
-                        final_text = deduplicate_repeats(&final_text);
-                    } else {
-                        rolling_prompt.push_str(&final_text);
-                        let char_vec: Vec<char> = rolling_prompt.chars().collect();
-                        if char_vec.len() > 100 {
-                            rolling_prompt = char_vec[char_vec.len() - 100 ..].iter().collect();
-                        }
+                    let text = segment.to_str_lossy().unwrap_or_default().trim().to_string();
+                    if text.is_empty() {
+                        continue;
                     }
 
-                    let new_seg = TranscriptionSegment { start_ms, end_ms, text: final_text };
-                    all_segments.push(new_seg.clone());
-                    let _ = sink_for_whisper.add(TranscriptionEvent::Segment(new_seg));
+                    // 依据 Whisper 内部判定时间戳与当前 VAD 分段起始偏移，计算出准确的绝对时间
+                    let sub_start_ms = start_ms + segment.start_timestamp() * 10;
+                    let sub_end_ms = start_ms + segment.end_timestamp() * 10;
+
+                    let mut final_text = deduplicate_repeats(&text);
+                    if to_simplified {
+                        final_text = convert_chinese(final_text, true);
+                    }
+
+                    if !final_text.is_empty() {
+                        if has_repetition_loop(&final_text) {
+                            println!("[Rust] 检测到子句幻觉循环: '{}'。清理滑动提示词。", final_text);
+                            rolling_prompt.clear();
+                            final_text = deduplicate_repeats(&final_text);
+                        } else {
+                            rolling_prompt.push_str(&final_text);
+                            let char_vec: Vec<char> = rolling_prompt.chars().collect();
+                            if char_vec.len() > 100 {
+                                rolling_prompt = char_vec[char_vec.len() - 100 ..].iter().collect();
+                            }
+                        }
+
+                        let new_seg = TranscriptionSegment {
+                            start_ms: sub_start_ms,
+                            end_ms: sub_end_ms,
+                            text: final_text,
+                        };
+                        all_segments.push(new_seg.clone());
+                        let _ = sink_for_whisper.add(TranscriptionEvent::Segment(new_seg));
+                    }
                 }
             }
 
@@ -331,46 +345,65 @@ fn run_stream_pipeline_inner(
     });
 
     // ==== 核心线程 1: DFN3 专属降噪线程 ====
-    let df_model_path_clone = df_model_path.clone();
+    let extracted_dir_clone = extracted_dir.clone();
     let dfn_thread = thread::spawn(move || -> Result<()> {
-        let extracted_dir = extract_tar_gz_if_needed(Path::new(&df_model_path_clone))?;
-        println!("[Rust] Initializing DeepFilterStream from: {:?}", extracted_dir);
+        println!("[Rust] Initializing DeepFilterStream in thread from: {:?}", extracted_dir_clone);
         
-        let mut stream = DeepFilterStream::new(&extracted_dir)
+        // 对于极小矩阵流式推理，关闭多线程，消除线程锁与调度开销
+        let mut stream = DeepFilterStream::with_threads(&extracted_dir_clone, 1)
             .map_err(|e| anyhow!("Failed to create DeepFilterStream: {:?}", e))?;
         stream.warmup()
             .map_err(|e| anyhow!("Failed to warmup DeepFilterStream: {:?}", e))?;
-        println!("[Rust] DFN3 ONNX Runtime (ort) initialized.");
+        println!("[Rust] DFN3 ONNX Runtime (ort) initialized with 1 thread.");
 
-        let mut raw_48k_buf: Vec<f32> = Vec::with_capacity(chunk_size_48k * 2);
+        let mut raw_48k_buf: Vec<f32> = Vec::with_capacity(chunk_size_48k * 8);
+        let mut read_pos = 0;
 
         while let Ok(raw_chunk_48k) = rx.recv() {
             raw_48k_buf.extend_from_slice(&raw_chunk_48k);
 
-            while raw_48k_buf.len() >= chunk_size_48k {
-                let process_block: Vec<f32> = raw_48k_buf.drain(..chunk_size_48k).collect();
-                let clean_48k_batch = stream.process(&process_block)
+            while raw_48k_buf.len() - read_pos >= chunk_size_48k {
+                // 性能优化：直接使用切片引用传入流式推理，零 collect()，零 heap 分配
+                let process_block = &raw_48k_buf[read_pos..read_pos + chunk_size_48k];
+                let clean_48k_batch = stream.process(process_block)
                     .map_err(|e| anyhow!("DFN3 processing error: {:?}", e))?;
                 
                 if tx_clean_48k.send(clean_48k_batch).is_err() {
                     break;
                 }
+                read_pos += chunk_size_48k;
+            }
+
+            // 定期清理已消耗的数据，避免内存无限累加，同时极低频次的前移整理开销可忽略
+            if read_pos >= chunk_size_48k * 4 {
+                raw_48k_buf.drain(..read_pos);
+                read_pos = 0;
             }
         }
 
-        // 处理 EOF 残余
-        if !raw_48k_buf.is_empty() {
-            let remainder = raw_48k_buf.len() % 480;
+        // 处理 EOF 残余数据
+        let remaining = &raw_48k_buf[read_pos..];
+        if !remaining.is_empty() {
+            let mut remainder_buf = remaining.to_vec();
+            let remainder = remainder_buf.len() % 480;
             if remainder > 0 {
                 let padding = 480 - remainder;
-                raw_48k_buf.extend(std::iter::repeat(0.0f32).take(padding));
+                remainder_buf.extend(std::iter::repeat(0.0f32).take(padding));
             }
-            let clean_48k_batch = stream.process(&raw_48k_buf)
+            let clean_48k_batch = stream.process(&remainder_buf)
                 .map_err(|e| anyhow!("DFN3 EOF processing error: {:?}", e))?;
             if !clean_48k_batch.is_empty() {
                 let _ = tx_clean_48k.send(clean_48k_batch);
             }
         }
+
+        // 冲刷流缓存
+        let flushed = stream.flush()
+            .map_err(|e| anyhow!("DFN3 flush error: {:?}", e))?;
+        if !flushed.is_empty() {
+            let _ = tx_clean_48k.send(flushed);
+        }
+
         drop(tx_clean_48k);
         Ok(())
     });

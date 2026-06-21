@@ -1652,7 +1652,6 @@ dependencies = [
  "flate2",
  "flutter_rust_bridge",
  "hound",
- "ndarray 0.15.6",
  "ort",
  "rubato 0.15.0",
  "tar",
