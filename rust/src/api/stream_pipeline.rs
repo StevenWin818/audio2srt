@@ -78,6 +78,10 @@ pub fn transcribe_stream(
     use_gpu: bool,
     to_simplified: bool,
     enable_denoise: bool,
+    vad_enabled: bool,
+    vad_threshold: f64,
+    vad_min_speech_ms: i32,
+    vad_min_silence_ms: i32,
 ) {
     let sink_clone = sink.clone();
     thread::spawn(move || {
@@ -93,6 +97,10 @@ pub fn transcribe_stream(
             use_gpu,
             to_simplified,
             enable_denoise,
+            vad_enabled,
+            vad_threshold,
+            vad_min_speech_ms,
+            vad_min_silence_ms,
         ) {
             let _ = sink_clone.add(TranscriptionEvent::Failure(e.to_string()));
         }
@@ -111,6 +119,10 @@ fn run_stream_pipeline_inner(
     use_gpu: bool,
     to_simplified: bool,
     enable_denoise: bool,
+    vad_enabled: bool,
+    vad_threshold: f64,
+    vad_min_speech_ms: i32,
+    vad_min_silence_ms: i32,
 ) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
@@ -222,15 +234,15 @@ fn run_stream_pipeline_inner(
         last_lines.into_iter().collect::<Vec<String>>().join("\n")
     });
 
-    // 6. 建立带背压的通信通道 (最多缓冲 10 个数据块，即 5 秒音频)
+    // 6. 建立带背压的通信通道 (最多缓冲 10 个数据块，即 10 秒音频)
     let (tx, rx) = sync_channel::<Vec<f32>>(10);
 
     let pump_thread = thread::spawn(move || -> Result<()> {
         let mut temp_buf = [0u8; 4096];
         loop {
-            let mut chunk_bytes = Vec::with_capacity(96000);
-            while chunk_bytes.len() < 96000 {
-                let to_read = std::cmp::min(temp_buf.len(), 96000 - chunk_bytes.len());
+            let mut chunk_bytes = Vec::with_capacity(192000);
+            while chunk_bytes.len() < 192000 {
+                let to_read = std::cmp::min(temp_buf.len(), 192000 - chunk_bytes.len());
                 match stdout.read(&mut temp_buf[..to_read]) {
                     Ok(0) => break, // EOF
                     Ok(n) => {
@@ -301,60 +313,64 @@ fn run_stream_pipeline_inner(
         while let Ok(task) = whisper_rx.recv() {
             let WhisperTask { samples: samples_16k, start_ms, end_ms } = task;
             
-            let mut current_params = params.clone();
-            current_params.set_no_context(true);
-            
-            if !rolling_prompt.is_empty() {
-                current_params.set_initial_prompt(&rolling_prompt);
-            }
+            // 【核心修改4：跳过纯静音推理】
+            if !samples_16k.is_empty() {
+                let mut current_params = params.clone();
+                current_params.set_no_context(true);
+                
+                if !rolling_prompt.is_empty() {
+                    current_params.set_initial_prompt(&rolling_prompt);
+                }
 
-            println!("[Rust] Running Whisper inference on segment: [{:.2}s - {:.2}s], samples: {}", 
-                start_ms as f64 / 1000.0, end_ms as f64 / 1000.0, samples_16k.len());
+                println!("[Rust] Running Whisper inference on segment: [{:.2}s - {:.2}s], samples: {}", 
+                    start_ms as f64 / 1000.0, end_ms as f64 / 1000.0, samples_16k.len());
 
-            whisper_state.full(current_params, &samples_16k)
-                .map_err(|e| anyhow!("Whisper inference error: {:?}", e))?;
+                whisper_state.full(current_params, &samples_16k)
+                    .map_err(|e| anyhow!("Whisper inference error: {:?}", e))?;
 
-            let n_segments = whisper_state.full_n_segments();
-            for i in 0..n_segments {
-                if let Some(segment) = whisper_state.get_segment(i) {
-                    let text = segment.to_str_lossy().unwrap_or_default().trim().to_string();
-                    if text.is_empty() {
-                        continue;
-                    }
-
-                    // 依据 Whisper 内部判定时间戳与当前 VAD 分段起始偏移，计算出准确的绝对时间
-                    let sub_start_ms = start_ms + segment.start_timestamp() * 10;
-                    let sub_end_ms = start_ms + segment.end_timestamp() * 10;
-
-                    let mut final_text = deduplicate_repeats(&text);
-                    if to_simplified {
-                        final_text = convert_chinese(final_text, true);
-                    }
-
-                    if !final_text.is_empty() {
-                        if has_repetition_loop(&final_text) {
-                            println!("[Rust] 检测到子句幻觉循环: '{}'。清理滑动提示词。", final_text);
-                            rolling_prompt.clear();
-                            final_text = deduplicate_repeats(&final_text);
-                        } else {
-                            rolling_prompt.push_str(&final_text);
-                            let char_vec: Vec<char> = rolling_prompt.chars().collect();
-                            if char_vec.len() > 100 {
-                                rolling_prompt = char_vec[char_vec.len() - 100 ..].iter().collect();
-                            }
+                let n_segments = whisper_state.full_n_segments();
+                for i in 0..n_segments {
+                    if let Some(segment) = whisper_state.get_segment(i) {
+                        let text = segment.to_str_lossy().unwrap_or_default().trim().to_string();
+                        if text.is_empty() {
+                            continue;
                         }
 
-                        let new_seg = TranscriptionSegment {
-                            start_ms: sub_start_ms,
-                            end_ms: sub_end_ms,
-                            text: final_text,
-                        };
-                        all_segments.push(new_seg.clone());
-                        let _ = sink_for_whisper.add(TranscriptionEvent::Segment(new_seg));
+                        // 依据 Whisper 内部判定时间戳与当前 VAD 分段起始偏移，计算出准确的绝对时间
+                        let sub_start_ms = start_ms + segment.start_timestamp() * 10;
+                        let sub_end_ms = start_ms + segment.end_timestamp() * 10;
+
+                        let mut final_text = deduplicate_repeats(&text);
+                        if to_simplified {
+                            final_text = convert_chinese(final_text, true);
+                        }
+
+                        if !final_text.is_empty() {
+                            if has_repetition_loop(&final_text) {
+                                println!("[Rust] 检测到子句幻觉循环: '{}'。清理滑动提示词。", final_text);
+                                rolling_prompt.clear();
+                                final_text = deduplicate_repeats(&final_text);
+                            } else {
+                                rolling_prompt.push_str(&final_text);
+                                let char_vec: Vec<char> = rolling_prompt.chars().collect();
+                                if char_vec.len() > 100 {
+                                    rolling_prompt = char_vec[char_vec.len() - 100 ..].iter().collect();
+                                }
+                            }
+
+                            let new_seg = TranscriptionSegment {
+                                start_ms: sub_start_ms,
+                                end_ms: sub_end_ms,
+                                text: final_text,
+                            };
+                            all_segments.push(new_seg.clone());
+                            let _ = sink_for_whisper.add(TranscriptionEvent::Segment(new_seg));
+                        }
                     }
                 }
-            }
+            } // else { /* 这里是纯静音，直接跳过推理，0 消耗 */ }
 
+            // 无论是否跳过推理，都必须推进进度条，让 UI 保持流畅响应！
             let progress = ((end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
             let _ = sink_for_whisper.add(TranscriptionEvent::Progress(progress.clamp(0, 100)));
             let _ = sink_for_whisper.add(TranscriptionEvent::ProgressDetail {
@@ -644,7 +660,7 @@ fn run_stream_pipeline_inner(
                 let rms = (sum_sq / frame_16k.len() as f32).sqrt();
                 frame_states.push(AudioFrameState {
                     rms,
-                    is_silent: rms < 0.01,
+                    is_silent: rms < vad_threshold as f32,
                     samples_count: frame_16k.len(),
                 });
             }
@@ -655,61 +671,107 @@ fn run_stream_pipeline_inner(
                 let current_frames = frame_states.len();
                 let current_secs = current_frames as f32 * 0.02;
 
-                if current_frames < 500 {
-                    break;
-                }
-
                 let mut cut_frame_idx = None;
 
-                if current_secs <= 20.0 {
-                    if let Some((start, end)) = find_silence_sequence(&frame_states, 500, 40) {
-                        cut_frame_idx = Some(start + (end - start) / 2);
-                    }
-                } else if current_secs <= 28.0 {
-                    if let Some((start, end)) = find_silence_sequence(&frame_states, 500, 15) {
-                        cut_frame_idx = Some(start + (end - start) / 2);
+                if !vad_enabled {
+                    // 如果 VAD 被禁用，只在累积满 20 秒 (1000帧) 时进行固定切分，不做任何静音检测
+                    if current_frames >= 1000 {
+                        cut_frame_idx = Some(current_frames);
                     }
                 } else {
-                    if let Some((start, end)) = find_silence_sequence(&frame_states, 500, 15) {
-                        cut_frame_idx = Some(start + (end - start) / 2);
-                    } else if current_frames >= 1400 {
-                        let search_range_start = current_frames - 250;
-                        let mut min_rms = f32::MAX;
-                        let mut min_idx = search_range_start;
-                        for idx in search_range_start..current_frames {
-                            if frame_states[idx].rms < min_rms {
-                                min_rms = frame_states[idx].rms;
-                                min_idx = idx;
-                            }
+                    // 从 10秒 (500) 降至 2秒 (100)，及早切分，杜绝无脑积攒
+                    if current_frames < 100 {
+                        break;
+                    }
+
+                    // 统计这批缓存中的非静音帧（有效声音帧）
+                    let active_frames = frame_states.iter().filter(|f| !f.is_silent).count();
+
+                    // 最小语音长度换算为帧数 (每帧 20ms)，作为静音蒸发的阈值
+                    let min_speech_frames = (vad_min_speech_ms as f32 / 20.0).round() as usize;
+                    // 最小静音长度换算为帧数，作为常规切分判断阈值
+                    let min_silence_frames = (vad_min_silence_ms as f32 / 20.0).round() as usize;
+
+                    if active_frames < min_speech_frames && current_secs >= 2.0 {
+                        // 【静音蒸发】如果超过 2 秒且几乎没有有效声音，直接把这块纯静音全部切掉，预留 25 帧 (500ms) 的静音做为下一段的开头留白
+                        cut_frame_idx = Some(current_frames - 25);
+                    } else if current_secs >= 5.0 && current_secs <= 20.0 {
+                        // 常规截断
+                        if let Some((start, end)) = find_silence_sequence(&frame_states, 100, min_silence_frames) {
+                            cut_frame_idx = Some(start + (end - start) / 2);
                         }
-                        cut_frame_idx = Some(min_idx);
-                        println!("[Rust] Redline force cut at frame {} (rms: {:.4})", min_idx, min_rms);
+                    } else if current_secs > 20.0 && current_secs <= 28.0 {
+                        // 宽松截断：动态放宽静音阈值，防止音频段过长
+                        let loose_silence_frames = min_silence_frames.min(15);
+                        if let Some((start, end)) = find_silence_sequence(&frame_states, 100, loose_silence_frames) {
+                            cut_frame_idx = Some(start + (end - start) / 2);
+                        }
+                    } else if current_secs > 28.0 {
+                        // 强制红线截断
+                        let tight_silence_frames = min_silence_frames.min(10);
+                        if let Some((start, end)) = find_silence_sequence(&frame_states, 100, tight_silence_frames) {
+                            cut_frame_idx = Some(start + (end - start) / 2);
+                        } else {
+                            let search_range_start = current_frames - 250;
+                            let mut min_rms = f32::MAX;
+                            let mut min_idx = search_range_start;
+                            for idx in search_range_start..current_frames {
+                                if frame_states[idx].rms < min_rms {
+                                    min_rms = frame_states[idx].rms;
+                                    min_idx = idx;
+                                }
+                            }
+                            cut_frame_idx = Some(min_idx);
+                            println!("[Rust] Redline force cut at frame {} (rms: {:.4})", min_idx, min_rms);
+                        }
                     }
                 }
 
                 if let Some(cut_idx) = cut_frame_idx {
                     let cut_sample_idx: usize = frame_states[..cut_idx].iter().map(|f| f.samples_count).sum();
                     let segment_samples: Vec<f32> = audio_buffer.drain(..cut_sample_idx).collect();
-                    frame_states.drain(..cut_idx);
+                    let segment_frames: Vec<AudioFrameState> = frame_states.drain(..cut_idx).collect();
 
                     let seg_duration_ms = (segment_samples.len() as f64 / 16000.0 * 1000.0) as i64;
                     let start_ms = current_offset_ms;
                     let end_ms = current_offset_ms + seg_duration_ms;
                     current_offset_ms = end_ms;
 
-                    if whisper_tx.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
-                        break;
+                    // 再次精准统计切下来的这一块
+                    let seg_active = segment_frames.iter().filter(|f| !f.is_silent).count();
+                    let min_speech_frames = (vad_min_speech_ms as f32 / 20.0).round() as usize;
+                    
+                    if vad_enabled && seg_active < min_speech_frames {
+                        // 【抛弃静音】有效声音太少，判定为纯静音/微小环境音。不传音频，只传时间戳推进进度。
+                        if whisper_tx.send(WhisperTask { samples: vec![], start_ms, end_ms }).is_err() {
+                            break;
+                        }
+                    } else {
+                        // 有效语音，正常送入推理
+                        if whisper_tx.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
+                            break;
+                        }
                     }
+
                     check_and_cut = true;
                 }
             }
         }
 
+        // 处理 EOF 残存
         if !audio_buffer.is_empty() {
             let seg_duration_ms = (audio_buffer.len() as f64 / 16000.0 * 1000.0) as i64;
             let start_ms = current_offset_ms;
             let end_ms = current_offset_ms + seg_duration_ms;
-            let _ = whisper_tx.send(WhisperTask { samples: audio_buffer, start_ms, end_ms });
+            
+            let seg_active = frame_states.iter().filter(|f| !f.is_silent).count();
+            let min_speech_frames = (vad_min_speech_ms as f32 / 20.0).round() as usize;
+
+            if !vad_enabled || seg_active >= min_speech_frames {
+                let _ = whisper_tx.send(WhisperTask { samples: audio_buffer, start_ms, end_ms });
+            } else {
+                let _ = whisper_tx.send(WhisperTask { samples: vec![], start_ms, end_ms });
+            }
         }
 
         drop(whisper_tx);
@@ -872,10 +934,11 @@ fn disable_power_throttling() {
 
 fn get_physical_pcore_mask() -> usize {
     let core_ids = core_affinity::get_core_ids().unwrap_or_default();
-    let mut mask = 0;
+    let mut mask = 0_usize;
     for core in core_ids {
         if core.id % 2 == 0 {
-            mask |= 1 << core.id;
+            // 使用 checked_shl 防止在 64+ 核 CPU 上位移溢出崩溃
+            mask |= 1_usize.checked_shl(core.id as u32).unwrap_or(0);
         }
     }
     if mask == 0 {

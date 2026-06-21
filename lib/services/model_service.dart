@@ -10,6 +10,7 @@ class WhisperModelInfo {
   final String size;
   final double sizeMB;
   final String url;
+  final String fallbackUrl;
 
   WhisperModelInfo({
     required this.name,
@@ -17,6 +18,7 @@ class WhisperModelInfo {
     required this.size,
     required this.sizeMB,
     required this.url,
+    required this.fallbackUrl,
   });
 }
 
@@ -27,35 +29,40 @@ class ModelService {
       filename: 'ggml-tiny.bin',
       size: '75 MB',
       sizeMB: 75.0,
-      url: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin',
+      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin',
+      fallbackUrl: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin',
     ),
     WhisperModelInfo(
       name: 'Base (推荐 / 平衡度高)',
       filename: 'ggml-base.bin',
       size: '140 MB',
       sizeMB: 140.0,
-      url: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
+      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
+      fallbackUrl: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
     ),
     WhisperModelInfo(
       name: 'Small (适中 / 精度适中)',
       filename: 'ggml-small.bin',
       size: '460 MB',
       sizeMB: 460.0,
-      url: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-small.bin',
+      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin',
+      fallbackUrl: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-small.bin',
     ),
     WhisperModelInfo(
       name: 'Large V3 Turbo Q8 (稍慢 / 较精确)',
       filename: 'ggml-large-v3-turbo-q8_0.bin',
       size: '834 MB',
       sizeMB: 834.0,
-      url: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin',
+      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin',
+      fallbackUrl: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin',
     ),
     WhisperModelInfo(
       name: 'Large V3 Q8 (最慢 / 最精确)',
       filename: 'ggml-large-v3-q8_0.bin',
       size: '1.57 GB',
       sizeMB: 1608.0,
-      url: 'https://hf-mirror.com/adriabama06/whisper-large-v3-ggml/resolve/main/ggml-large-v3-q8_0.bin',
+      url: 'https://huggingface.co/adriabama06/whisper-large-v3-ggml/resolve/main/ggml-large-v3-q8_0.bin',
+      fallbackUrl: 'https://hf-mirror.com/adriabama06/whisper-large-v3-ggml/resolve/main/ggml-large-v3-q8_0.bin',
     ),
   ];
 
@@ -110,17 +117,35 @@ class ModelService {
 
       _cancelToken = CancelToken();
 
-      await _dio.download(
-        model.url,
-        tempSavePath,
-        cancelToken: _cancelToken,
-        onReceiveProgress: (received, total) {
-          if (total != -1) {
-            final progress = received / total;
-            onProgress(progress);
-          }
-        },
-      );
+      try {
+        await _dio.download(
+          model.url,
+          tempSavePath,
+          cancelToken: _cancelToken,
+          onReceiveProgress: (received, total) {
+            if (total != -1) {
+              final progress = received / total;
+              onProgress(progress);
+            }
+          },
+        );
+      } catch (e) {
+        if (CancelToken.isCancel(e as DioException)) {
+          rethrow;
+        }
+        // 主站下载失败，回退到镜像站 CDN
+        await _dio.download(
+          model.fallbackUrl,
+          tempSavePath,
+          cancelToken: _cancelToken,
+          onReceiveProgress: (received, total) {
+            if (total != -1) {
+              final progress = received / total;
+              onProgress(progress);
+            }
+          },
+        );
+      }
 
       // 下载完成后，将重命名临时文件
       final tempFile = File(tempSavePath);

@@ -143,6 +143,10 @@ abstract class RustLibApi extends BaseApi {
     required bool useGpu,
     required bool toSimplified,
     required bool enableDenoise,
+    required bool vadEnabled,
+    required double vadThreshold,
+    required int vadMinSpeechMs,
+    required int vadMinSilenceMs,
   });
 
   Future<TranscriptionSegment> crateApiWhisperTranscriptionSegmentDefault();
@@ -557,6 +561,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required bool useGpu,
     required bool toSimplified,
     required bool enableDenoise,
+    required bool vadEnabled,
+    required double vadThreshold,
+    required int vadMinSpeechMs,
+    required int vadMinSilenceMs,
   }) {
     final sink = RustStreamSink<TranscriptionEvent>();
     unawaited(
@@ -575,6 +583,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_encode_bool(useGpu, serializer);
             sse_encode_bool(toSimplified, serializer);
             sse_encode_bool(enableDenoise, serializer);
+            sse_encode_bool(vadEnabled, serializer);
+            sse_encode_f_64(vadThreshold, serializer);
+            sse_encode_i_32(vadMinSpeechMs, serializer);
+            sse_encode_i_32(vadMinSilenceMs, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
@@ -599,6 +611,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             useGpu,
             toSimplified,
             enableDenoise,
+            vadEnabled,
+            vadThreshold,
+            vadMinSpeechMs,
+            vadMinSilenceMs,
           ],
           apiImpl: this,
         ),
@@ -622,6 +638,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "useGpu",
           "toSimplified",
           "enableDenoise",
+          "vadEnabled",
+          "vadThreshold",
+          "vadMinSpeechMs",
+          "vadMinSilenceMs",
         ],
       );
 
@@ -734,6 +754,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   double dco_decode_f_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as double;
+  }
+
+  @protected
+  double dco_decode_f_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as double;
   }
@@ -938,6 +964,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   double sse_decode_f_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getFloat32();
+  }
+
+  @protected
+  double sse_decode_f_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getFloat64();
   }
 
   @protected
@@ -1200,6 +1232,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_f_32(double self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putFloat32(self);
+  }
+
+  @protected
+  void sse_encode_f_64(double self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putFloat64(self);
   }
 
   @protected

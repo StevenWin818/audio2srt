@@ -25,12 +25,20 @@ function(apply_cargokit target manifest_dir lib_name any_symbol_name)
         set(CARGOKIT_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}")
         set(OUTPUT_LIB "${CMAKE_CURRENT_BINARY_DIR}/${CARGOKIT_LIB_FULL_NAME}")
     endif()
-    set(CARGOKIT_TEMP_DIR "C:/t") # 防止超过 260 字符长度限制
+    if(CMAKE_HOST_WIN32)
+        set(CARGOKIT_TEMP_DIR "C:/t") # 防止超过 260 字符长度限制
+    else()
+        set(CARGOKIT_TEMP_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargokit_temp")
+    endif()
 
     if (FLUTTER_TARGET_PLATFORM)
         set(CARGOKIT_TARGET_PLATFORM "${FLUTTER_TARGET_PLATFORM}")
     else()
-        set(CARGOKIT_TARGET_PLATFORM "windows-x64")
+        if(CMAKE_HOST_WIN32)
+            set(CARGOKIT_TARGET_PLATFORM "windows-x64")
+        else()
+            set(CARGOKIT_TARGET_PLATFORM "")
+        endif()
     endif()
 
     set(CARGOKIT_ENV
@@ -42,10 +50,13 @@ function(apply_cargokit target manifest_dir lib_name any_symbol_name)
         "CARGOKIT_TARGET_PLATFORM=${CARGOKIT_TARGET_PLATFORM}"
         "CARGOKIT_TOOL_TEMP_DIR=${CARGOKIT_TEMP_DIR}/tool"
         "CARGOKIT_ROOT_PROJECT_DIR=${CMAKE_SOURCE_DIR}"
-        "CARGO_TARGET_DIR=C:/t" # 防止超过 260 字符长度限制
         "CMAKE_GENERATOR_PLATFORM=" # 阻止 Ninja 下平台 x64 规格报错
         "CMAKE_GENERATOR_TOOLSET="
     )
+
+    if(CMAKE_HOST_WIN32)
+        list(APPEND CARGOKIT_ENV "CARGO_TARGET_DIR=C:/t")
+    endif()
 
     if (WIN32)
         set(SCRIPT_EXTENSION ".cmd")

@@ -1,4 +1,4 @@
 [build]
 jobs = 8
-target-dir = "C:/t"
+# target-dir = "C:/t" # 移至 cargokit.cmake 中按 Windows 条件动态设置，支持 Mac/Linux
 rustflags = ["-C", "target-cpu=native"]

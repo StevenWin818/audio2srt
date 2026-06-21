@@ -449,6 +449,10 @@ fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
             let api_use_gpu = <bool>::sse_decode(&mut deserializer);
             let api_to_simplified = <bool>::sse_decode(&mut deserializer);
             let api_enable_denoise = <bool>::sse_decode(&mut deserializer);
+            let api_vad_enabled = <bool>::sse_decode(&mut deserializer);
+            let api_vad_threshold = <f64>::sse_decode(&mut deserializer);
+            let api_vad_min_speech_ms = <i32>::sse_decode(&mut deserializer);
+            let api_vad_min_silence_ms = <i32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
@@ -465,6 +469,10 @@ fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
                             api_use_gpu,
                             api_to_simplified,
                             api_enable_denoise,
+                            api_vad_enabled,
+                            api_vad_threshold,
+                            api_vad_min_speech_ms,
+                            api_vad_min_silence_ms,
                         );
                     })?;
                     Ok(output_ok)
@@ -592,6 +600,13 @@ impl SseDecode for f32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         deserializer.cursor.read_f32::<NativeEndian>().unwrap()
+    }
+}
+
+impl SseDecode for f64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_f64::<NativeEndian>().unwrap()
     }
 }
 
@@ -1042,6 +1057,13 @@ impl SseEncode for f32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_f32::<NativeEndian>(self).unwrap();
+    }
+}
+
+impl SseEncode for f64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_f64::<NativeEndian>(self).unwrap();
     }
 }
 

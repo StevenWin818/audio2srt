@@ -80,10 +80,10 @@ class TranscriptionProvider with ChangeNotifier {
   double _vadThreshold = 0.010; // RMS 音能阈值
   double get vadThreshold => _vadThreshold;
 
-  int _vadMinSpeechMs = 250; // 最小语音长度 (ms)
+  int _vadMinSpeechMs = 300; // 最小语音长度 (ms)
   int get vadMinSpeechMs => _vadMinSpeechMs;
 
-  int _vadMinSilenceMs = 1500; // 最小静音判定时间 (ms)
+  int _vadMinSilenceMs = 800; // 最小静音判定时间 (ms)
   int get vadMinSilenceMs => _vadMinSilenceMs;
 
   // Whisper 惩罚与降级参数配置
@@ -418,6 +418,10 @@ class TranscriptionProvider with ChangeNotifier {
         useGpu: _useGpu,
         toSimplified: _selectedLanguage == 'zh' || _selectedLanguage == 'auto',
         enableDenoise: _enableDenoise,
+        vadEnabled: _vadEnabled,
+        vadThreshold: _vadThreshold,
+        vadMinSpeechMs: _vadMinSpeechMs,
+        vadMinSilenceMs: _vadMinSilenceMs,
       );
 
       await _transcriptionSub?.cancel();

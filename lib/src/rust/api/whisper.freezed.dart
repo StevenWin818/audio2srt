@@ -314,8 +314,8 @@ class _$TranscriptionEvent_ProgressDetailCopyWithImpl<$Res>
 /// with the given fields replaced by the non-null parameter values.
 @pragma('vm:prefer-inline') $Res call({Object? processedMs = null,Object? totalMs = null,}) {
   return _then(TranscriptionEvent_ProgressDetail(
-processedMs: null == processedMs ? _self.processedMs : processedMs // ignore: 将可空类型转换为非可空类型
-as PlatformInt64,totalMs: null == totalMs ? _self.totalMs : totalMs // ignore: 将可空类型转换为非可空类型
+processedMs: null == processedMs ? _self.processedMs : processedMs // ignore: cast_nullable_to_non_nullable
+as PlatformInt64,totalMs: null == totalMs ? _self.totalMs : totalMs // ignore: cast_nullable_to_non_nullable
 as PlatformInt64,
   ));
 }
