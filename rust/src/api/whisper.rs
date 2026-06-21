@@ -510,26 +510,24 @@ pub(crate) fn run_transcription_inner(
         }
 
         for (idx, &(start_sample, end_sample)) in speech_segments.iter().enumerate() {
-            progress_ctx.current_segment = idx;
-            let _ = progress_ctx.current_segment;
+            // progress_ctx.current_segment = idx;
             
-            let mut segment_samples = samples[start_sample..end_sample].to_vec();
-            const MIN_SAMPLES_FOR_DTW: usize = 8000; // 16kHz 下 0.5 秒 = 8000 个采样点
+            // 增加 200ms 的平滑余量，且直接提取正确的切片
+            let safe_start = start_sample.saturating_sub(3200); 
+            let safe_end = (end_sample + 3200).min(samples.len()); 
+            let mut segment_samples = samples[safe_start..safe_end].to_vec();
+
+            // 如果噪音切片小于 0.2 秒，可能是杂音，直接跳过防幻觉
+            if segment_samples.len() < 3200 {
+                continue;
+            }
+            
+            const MIN_SAMPLES_FOR_DTW: usize = 8000; // 0.5s
             if segment_samples.len() < MIN_SAMPLES_FOR_DTW {
                 segment_samples.resize(MIN_SAMPLES_FOR_DTW, 0.0);
             }
             
-            let global_offset_ms = (start_sample as i64) / 16;
-            
-            println!(
-                "[Rust] Transcribing VAD segment {}/{}: start={:.2}s, end={:.2}s ({} samples)",
-                idx + 1,
-                speech_segments.len(),
-                start_sample as f64 / 16000.0,
-                end_sample as f64 / 16000.0,
-                segment_samples.len()
-            );
-
+            let global_offset_ms = (safe_start as i64) / 16;
             let current_params = params.clone();
 
             state.full(current_params, &segment_samples).map_err(|e| {
@@ -541,20 +539,23 @@ pub(crate) fn run_transcription_inner(
             let final_num_segments = state.full_n_segments();
             for i in 0..final_num_segments {
                 if let Some(segment) = state.get_segment(i) {
-                    let text = segment
-                        .to_str_lossy()
-                        .unwrap_or_else(|_| std::borrow::Cow::Borrowed(""))
-                        .into_owned();
+                    let text = segment.to_str_lossy().unwrap_or_default().into_owned();
 
-                    // 过滤掉纯空白的段
-                    if text.trim().is_empty() {
+                    // 滤除音乐符号
+                    let cleaned_text = text.replace("🎵", "")
+                                           .replace("[音乐]", "")
+                                           .replace("(音乐)", "")
+                                           .replace("[Music]", "")
+                                           .trim().to_string();
+
+                    if cleaned_text.is_empty() {
                         continue;
                     }
 
                     combined_segments.push(TranscriptionSegment {
                         start_ms: segment.start_timestamp() * 10 + global_offset_ms,
                         end_ms: segment.end_timestamp() * 10 + global_offset_ms,
-                        text,
+                        text: cleaned_text,
                     });
                 }
             }

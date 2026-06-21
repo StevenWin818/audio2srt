@@ -366,17 +366,18 @@ fn run_stream_pipeline_inner(
             
             if !samples_16k.is_empty() {
                 // 强行对超短音频使用静音填充以保护 DTW 机制
-                const MIN_SAMPLES_FOR_DTW: usize = 8000; // 16kHz 下 0.5 秒 = 8000 个采样点
+                const MIN_SAMPLES_FOR_DTW: usize = 8000; // 0.5s
                 if samples_16k.len() < MIN_SAMPLES_FOR_DTW {
-                    println!("[Rust] ⚠️ 拦截到超短音频 ({} samples), 已自动静音填充至 0.5s 以保护 DTW。", samples_16k.len());
                     samples_16k.resize(MIN_SAMPLES_FOR_DTW, 0.0);
                 }
 
                 let mut current_params = params.clone();
-                current_params.set_no_context(false);
 
-                println!("[Rust] Running Whisper inference on segment: [{:.2}s - {:.2}s], samples: {}", 
-                    start_ms as f64 / 1000.0, end_ms as f64 / 1000.0, samples_16k.len());
+                current_params.set_no_context(false); 
+                // 允许引擎自动切分短句，解决 30 秒不间断字幕的问题
+                current_params.set_single_segment(false); 
+                // 原生抑制无声空白
+                current_params.set_suppress_blank(true);
 
                 whisper_state.full(current_params, &samples_16k)
                     .map_err(|e| anyhow!("Whisper inference error: {:?}", e))?;
@@ -384,29 +385,34 @@ fn run_stream_pipeline_inner(
                 let n_segments = whisper_state.full_n_segments();
                 for i in 0..n_segments {
                     if let Some(segment) = whisper_state.get_segment(i) {
-                        let text = segment.to_str_lossy().unwrap_or_default().trim().to_string();
-                        if text.is_empty() {
+                        let text = segment.to_str_lossy().unwrap_or_default().into_owned();
+                        
+                        // 滤除音乐和叹气符号
+                        let mut final_text = text.replace("♪", "")
+                                                 .replace("[音乐]", "")
+                                                 .replace("(音乐)", "")
+                                                 .replace("[Music]", "")
+                                                 .replace("(Music)", "");
+                        final_text = final_text.trim().to_string();
+
+                        if final_text.is_empty() {
                             continue;
                         }
 
-                        // 依据 Whisper 内部判定时间戳与当前 VAD 分段起始偏移，计算出准确的绝对时间
                         let sub_start_ms = start_ms + segment.start_timestamp() * 10;
                         let sub_end_ms = start_ms + segment.end_timestamp() * 10;
 
-                        let mut final_text = text;
                         if to_simplified {
                             final_text = convert_chinese(final_text, true);
                         }
 
-                        if !final_text.is_empty() {
-                            let new_seg = TranscriptionSegment {
-                                start_ms: sub_start_ms,
-                                end_ms: sub_end_ms,
-                                text: final_text,
-                            };
-                            all_segments.push(new_seg.clone());
-                            let _ = sink_for_whisper.add(TranscriptionEvent::Segment(new_seg));
-                        }
+                        let new_seg = TranscriptionSegment {
+                            start_ms: sub_start_ms,
+                            end_ms: sub_end_ms,
+                            text: final_text,
+                        };
+                        all_segments.push(new_seg.clone());
+                        let _ = sink_for_whisper.add(TranscriptionEvent::Segment(new_seg));
                     }
                 }
             }
@@ -695,74 +701,79 @@ fn run_stream_pipeline_inner(
             while check_and_cut {
                 check_and_cut = false;
 
-                // 30 秒红线强制截断，防止 Whisper 溢出或幻觉
-                if audio_buffer.len() >= 480000 {
-                    println!("[Rust] VAD: audio_buffer 达到 30s 红线，强制截断。");
-                    let segment_samples: Vec<f32> = audio_buffer.drain(..480000).collect();
-                    let seg_duration_ms = 30000;
-                    let start_ms = current_offset_ms;
-                    let end_ms = current_offset_ms + seg_duration_ms;
-                    current_offset_ms = end_ms;
-
-                    if whisper_tx.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
-                        break;
-                    }
-                    check_and_cut = true;
-                    continue;
-                }
-
                 if let Some(ref mut vad_ctx) = vad {
                     match vad_ctx.segments_from_samples(vad_params.clone(), &audio_buffer) {
                         Ok(segs) => {
-                            // 寻找完整的语音段：如果该段的 end_sample 后面有至少 500ms（即 8000 采样点）的静音，
-                            // 则切出并发送给推理线程
-                            let mut cut_point = None;
-                            for s in segs {
-                                let end_sample = s.end as usize * 160;
-                                if audio_buffer.len() >= end_sample + 8000 {
-                                    // 切出点设为 end_sample 加上 4000 个采样点 (250ms 尾部静音)，以保证段落自然过渡
-                                    cut_point = Some(end_sample + 4000);
+                            let segs_vec: Vec<_> = segs.into_iter().collect();
+                            let mut cut_performed = false;
+                            for s in &segs_vec {
+                                let start_idx = (s.start as usize * 160).min(audio_buffer.len());
+                                let end_idx = (s.end as usize * 160).min(audio_buffer.len());
+
+                                // 寻找一个"已经结束"的语音段 (后面有 >= 4000 采样点 即 250ms 的静音)
+                                if audio_buffer.len() >= end_idx + 4000 {
+                                    // 预留前后 200ms (3200 samples) 作为平滑过渡
+                                    let safe_start = start_idx.saturating_sub(3200); 
+                                    let safe_end = (end_idx + 3200).min(audio_buffer.len()); 
+                                    
+                                    let segment_samples = audio_buffer[safe_start..safe_end].to_vec();
+                                    let start_ms = current_offset_ms + (safe_start as i64 * 1000 / 16000);
+                                    let end_ms = current_offset_ms + (safe_end as i64 * 1000 / 16000);
+
+                                    if segment_samples.len() > 3200 {
+                                        if whisper_tx.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
+                                            break;
+                                        }
+                                    }
+                                    
+                                    audio_buffer.drain(..safe_end);
+                                    current_offset_ms += (safe_end as i64 * 1000) / 16000;
+                                    cut_performed = true;
                                     break;
                                 }
                             }
 
-                            if let Some(cut_idx) = cut_point {
-                                let cut_idx = cut_idx.min(audio_buffer.len());
-                                let segment_samples: Vec<f32> = audio_buffer.drain(..cut_idx).collect();
-                                let seg_duration_ms = (segment_samples.len() as f64 / 16000.0 * 1000.0) as i64;
-                                let start_ms = current_offset_ms;
-                                let end_ms = current_offset_ms + seg_duration_ms;
-                                current_offset_ms = end_ms;
-
-                                if whisper_tx.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
-                                    break;
-                                }
+                            if cut_performed {
                                 check_and_cut = true;
+                                continue;
+                            }
+
+                            // 如果 Buffer 满了 30s，触发红线保护
+                            if audio_buffer.len() >= 480000 {
+                                // 调用 Vec 的 .last()，确保合法
+                                if let Some(s) = segs_vec.last() {
+                                    let start_idx = (s.start as usize * 160).min(audio_buffer.len());
+                                    let safe_start = start_idx.saturating_sub(3200);
+                                    let segment_samples = audio_buffer[safe_start..].to_vec();
+                                    let start_ms = current_offset_ms + (safe_start as i64 * 1000 / 16000);
+                                    let end_ms = current_offset_ms + (audio_buffer.len() as i64 * 1000 / 16000);
+                                    
+                                    let _ = whisper_tx.send(WhisperTask { samples: segment_samples, start_ms, end_ms });
+                                } else {
+                                    println!("[Rust] VAD 过滤: 成功丢弃 30 秒的非语音/纯音乐数据");
+                                }
+                                
+                                current_offset_ms += (audio_buffer.len() as i64 * 1000) / 16000;
+                                audio_buffer.clear();
                             }
                         }
-                        Err(e) => {
-                            println!("[Rust] Silero VAD segments_from_samples 出错: {:?}", e);
-                        }
+                        Err(_) => {}
                     }
-                }
-            }
-
-            // 如果 VAD 未启用，则按 10 秒固定长度截断
-            if !vad_enabled {
-                while audio_buffer.len() >= 160000 {
-                    let segment_samples: Vec<f32> = audio_buffer.drain(..160000).collect();
-                    let seg_duration_ms = 10000;
-                    let start_ms = current_offset_ms;
-                    let end_ms = current_offset_ms + seg_duration_ms;
-                    current_offset_ms = end_ms;
-
-                    if whisper_tx.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
-                        break;
+                } else {
+                    // VAD 关闭时的回退逻辑 (按 10s 死切)
+                    if audio_buffer.len() >= 160000 {
+                        let segment_samples: Vec<f32> = audio_buffer.drain(..160000).collect();
+                        let start_ms = current_offset_ms;
+                        let end_ms = current_offset_ms + 10000;
+                        current_offset_ms = end_ms;
+                        if whisper_tx.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
+                            break;
+                        }
+                        check_and_cut = true;
                     }
                 }
             }
         }
-
         // 处理 EOF 残余音频
         if !audio_buffer.is_empty() {
             let seg_duration_ms = (audio_buffer.len() as f64 / 16000.0 * 1000.0) as i64;
