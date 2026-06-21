@@ -306,6 +306,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "core_affinity"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a034b3a7b624016c6e13f5df875747cc25f884156aad2abd12b6c46797971342"
+dependencies = [
+ "libc",
+ "num_cpus",
+ "winapi",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -412,7 +423,6 @@ dependencies = [
 [[package]]
 name = "deepfilter-rt"
 version = "0.1.0"
-source = "git+https://github.com/shimondoodkin/deepfilter-rt#f1a1b27be767a5e62ccc8625017f1737c33a3bf9"
 dependencies = [
  "deep_filter",
  "log",
@@ -1647,6 +1657,8 @@ name = "rust_lib_audio2srt"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "core_affinity",
+ "crossbeam-channel",
  "deep_filter",
  "deepfilter-rt",
  "flate2",
@@ -1658,6 +1670,7 @@ dependencies = [
  "tract-core",
  "tract-onnx",
  "whisper-rs",
+ "windows-sys",
  "zhconv",
 ]
 

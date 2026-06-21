@@ -448,6 +448,7 @@ fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
             let api_threads = <Option<i32>>::sse_decode(&mut deserializer);
             let api_use_gpu = <bool>::sse_decode(&mut deserializer);
             let api_to_simplified = <bool>::sse_decode(&mut deserializer);
+            let api_enable_denoise = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
@@ -463,6 +464,7 @@ fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
                             api_threads,
                             api_use_gpu,
                             api_to_simplified,
+                            api_enable_denoise,
                         );
                     })?;
                     Ok(output_ok)
@@ -718,15 +720,23 @@ impl SseDecode for crate::api::whisper::TranscriptionEvent {
                 return crate::api::whisper::TranscriptionEvent::Progress(var_field0);
             }
             1 => {
+                let mut var_processedMs = <i64>::sse_decode(deserializer);
+                let mut var_totalMs = <i64>::sse_decode(deserializer);
+                return crate::api::whisper::TranscriptionEvent::ProgressDetail {
+                    processed_ms: var_processedMs,
+                    total_ms: var_totalMs,
+                };
+            }
+            2 => {
                 let mut var_field0 =
                     <Vec<crate::api::whisper::TranscriptionSegment>>::sse_decode(deserializer);
                 return crate::api::whisper::TranscriptionEvent::Success(var_field0);
             }
-            2 => {
+            3 => {
                 let mut var_field0 = <String>::sse_decode(deserializer);
                 return crate::api::whisper::TranscriptionEvent::Failure(var_field0);
             }
-            3 => {
+            4 => {
                 let mut var_field0 =
                     <crate::api::whisper::TranscriptionSegment>::sse_decode(deserializer);
                 return crate::api::whisper::TranscriptionEvent::Segment(var_field0);
@@ -906,14 +916,23 @@ impl flutter_rust_bridge::IntoDart for crate::api::whisper::TranscriptionEvent {
             crate::api::whisper::TranscriptionEvent::Progress(field0) => {
                 [0.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
+            crate::api::whisper::TranscriptionEvent::ProgressDetail {
+                processed_ms,
+                total_ms,
+            } => [
+                1.into_dart(),
+                processed_ms.into_into_dart().into_dart(),
+                total_ms.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
             crate::api::whisper::TranscriptionEvent::Success(field0) => {
-                [1.into_dart(), field0.into_into_dart().into_dart()].into_dart()
-            }
-            crate::api::whisper::TranscriptionEvent::Failure(field0) => {
                 [2.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::whisper::TranscriptionEvent::Segment(field0) => {
+            crate::api::whisper::TranscriptionEvent::Failure(field0) => {
                 [3.into_dart(), field0.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::whisper::TranscriptionEvent::Segment(field0) => {
+                [4.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
             _ => {
                 unimplemented!("");
@@ -1125,16 +1144,24 @@ impl SseEncode for crate::api::whisper::TranscriptionEvent {
                 <i32>::sse_encode(0, serializer);
                 <i32>::sse_encode(field0, serializer);
             }
-            crate::api::whisper::TranscriptionEvent::Success(field0) => {
+            crate::api::whisper::TranscriptionEvent::ProgressDetail {
+                processed_ms,
+                total_ms,
+            } => {
                 <i32>::sse_encode(1, serializer);
+                <i64>::sse_encode(processed_ms, serializer);
+                <i64>::sse_encode(total_ms, serializer);
+            }
+            crate::api::whisper::TranscriptionEvent::Success(field0) => {
+                <i32>::sse_encode(2, serializer);
                 <Vec<crate::api::whisper::TranscriptionSegment>>::sse_encode(field0, serializer);
             }
             crate::api::whisper::TranscriptionEvent::Failure(field0) => {
-                <i32>::sse_encode(2, serializer);
+                <i32>::sse_encode(3, serializer);
                 <String>::sse_encode(field0, serializer);
             }
             crate::api::whisper::TranscriptionEvent::Segment(field0) => {
-                <i32>::sse_encode(3, serializer);
+                <i32>::sse_encode(4, serializer);
                 <crate::api::whisper::TranscriptionSegment>::sse_encode(field0, serializer);
             }
             _ => {

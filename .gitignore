@@ -70,3 +70,4 @@ assets/models/DeepFilterNet3_onnx.tar.gz
 rust/src/bin/test_df.rs
 assets/models/DeepFilterNet3_ll_onnx.tar.gz
 assets/models/DeepFilterNet3_ll_onnx.tar.gz
+rust/third_party/

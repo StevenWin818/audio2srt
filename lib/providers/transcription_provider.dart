@@ -56,6 +56,14 @@ class TranscriptionProvider with ChangeNotifier {
   bool _translateToEnglish = false;
   bool get translateToEnglish => _translateToEnglish;
 
+  bool _enableDenoise = true;
+  bool get enableDenoise => _enableDenoise;
+
+  void setEnableDenoise(bool value) {
+    _enableDenoise = value;
+    notifyListeners();
+  }
+
   bool _useGpu = true;
   bool get useGpu => _useGpu;
 
@@ -105,6 +113,36 @@ class TranscriptionProvider with ChangeNotifier {
 
   int _progress = 0;
   int get progress => _progress;
+
+  int _processedMs = 0;
+  int _totalMs = 0;
+  double _etaSeconds = 0.0;
+  DateTime? _transcribeStartTime;
+
+  String _formatDuration(double seconds) {
+    if (seconds.isNaN || seconds.isInfinite || seconds < 0) {
+      return '00:00';
+    }
+    int s = seconds.round();
+    int h = s ~/ 3600;
+    int m = (s % 3600) ~/ 60;
+    int sec = s % 60;
+    if (h > 0) {
+      return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}';
+    } else {
+      return '${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}';
+    }
+  }
+
+  int get totalMs => _totalMs;
+  String get processedStr => _formatDuration(_processedMs.toDouble() / 1000.0);
+  String get remainingStr => _formatDuration((_totalMs - _processedMs).toDouble() / 1000.0);
+  String get etaStr => _formatDuration(_etaSeconds);
+
+  String get progressText {
+    if (_totalMs == 0) return '$_progress%';
+    return '$processedStr / $remainingStr   --$etaStr';
+  }
 
   List<SubtitleItem> _subtitles = [];
   List<SubtitleItem> get subtitles => _subtitles;
@@ -347,15 +385,24 @@ class TranscriptionProvider with ChangeNotifier {
 
     try {
       _progress = 0;
+      _processedMs = 0;
+      _totalMs = 0;
+      _etaSeconds = 0.0;
+      _transcribeStartTime = DateTime.now();
       _subtitles = [];
       _status = TranscriptionStatus.transcribing;
-      _statusMessage = '正在初始化 DeepFilterNet 降噪引擎...';
-      notifyListeners();
+      
+      String dfModelPath = "";
+      if (_enableDenoise) {
+        _statusMessage = '正在初始化 DeepFilterNet 降噪引擎...';
+        notifyListeners();
+        // 准备 DeepFilterNet 降噪模型
+        dfModelPath = await _modelService.prepareDFModel();
+      }
 
-      // 准备 DeepFilterNet 降噪模型
-      final dfModelPath = await _modelService.prepareDFModel();
-
-      _statusMessage = '正在进行实时语音流提取、降噪与转写...';
+      _statusMessage = _enableDenoise
+          ? '正在进行实时语音流提取、降噪与转写...'
+          : '正在进行实时语音流提取与转写...';
       notifyListeners();
 
       final modelPath = await _modelService.getModelPath(_selectedModel!);
@@ -370,6 +417,7 @@ class TranscriptionProvider with ChangeNotifier {
         threads: 4,
         useGpu: _useGpu,
         toSimplified: _selectedLanguage == 'zh' || _selectedLanguage == 'auto',
+        enableDenoise: _enableDenoise,
       );
 
       await _transcriptionSub?.cancel();
@@ -378,7 +426,24 @@ class TranscriptionProvider with ChangeNotifier {
           event.when(
             progress: (val) {
               _progress = val;
-              _statusMessage = '正在流式转写中 (进度: $val%)...';
+              _statusMessage = '正在流式转写中 ($progressText)...';
+              notifyListeners();
+            },
+            progressDetail: (processedMs, totalMs) {
+              _processedMs = processedMs.toInt();
+              _totalMs = totalMs.toInt();
+              if (_transcribeStartTime != null) {
+                final elapsedRealTimeSecs = DateTime.now().difference(_transcribeStartTime!).inMilliseconds / 1000.0;
+                final processedMediaSecs = _processedMs / 1000.0;
+                final remainingMediaSecs = (_totalMs - _processedMs) / 1000.0;
+                if (processedMediaSecs > 0) {
+                  final speed = processedMediaSecs / elapsedRealTimeSecs;
+                  _etaSeconds = remainingMediaSecs / speed;
+                } else {
+                  _etaSeconds = 0.0;
+                }
+              }
+              _statusMessage = '正在流式转写中 ($progressText)...';
               notifyListeners();
             },
             segment: (seg) {

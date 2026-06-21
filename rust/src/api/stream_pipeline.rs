@@ -3,6 +3,8 @@ use std::io::{Read, BufRead, BufReader};
 use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::path::Path;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use anyhow::{Result, Context, anyhow};
 use flate2::read::GzDecoder;
 use tar::Archive;
@@ -75,6 +77,7 @@ pub fn transcribe_stream(
     threads: Option<i32>,
     use_gpu: bool,
     to_simplified: bool,
+    enable_denoise: bool,
 ) {
     let sink_clone = sink.clone();
     thread::spawn(move || {
@@ -89,6 +92,7 @@ pub fn transcribe_stream(
             threads,
             use_gpu,
             to_simplified,
+            enable_denoise,
         ) {
             let _ = sink_clone.add(TranscriptionEvent::Failure(e.to_string()));
         }
@@ -106,7 +110,14 @@ fn run_stream_pipeline_inner(
     threads: Option<i32>,
     use_gpu: bool,
     to_simplified: bool,
+    enable_denoise: bool,
 ) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        lock_high_priority();
+        disable_power_throttling();
+    }
+
     // 1. 获取视频总时长
     let total_duration = match get_media_duration_secs(&ffmpeg_path, &input_path) {
         Ok(d) => d,
@@ -117,12 +128,17 @@ fn run_stream_pipeline_inner(
     };
     println!("[Rust] Media total duration: {} seconds", total_duration);
 
-    let chunk_size_48k = 24000;
+    let chunk_size_48k = 48000;
 
     // 提前在主流程中解压并准备好模型目录，避免在专属计算线程中执行重度 I/O 操作
-    println!("[Rust] Preparing DeepFilterNet3 models from tar.gz...");
-    let extracted_dir = extract_tar_gz_if_needed(Path::new(&df_model_path))?;
-    println!("[Rust] DeepFilterStream prepared at: {:?}", extracted_dir);
+    let extracted_dir = if enable_denoise {
+        println!("[Rust] Preparing DeepFilterNet3 models from tar.gz...");
+        let extracted = extract_tar_gz_if_needed(Path::new(&df_model_path))?;
+        println!("[Rust] DeepFilterStream prepared at: {:?}", extracted);
+        extracted
+    } else {
+        std::path::PathBuf::new()
+    };
 
     // 4. 初始化 Whisper 上下文
     println!("[Rust] Loading Whisper model context...");
@@ -260,6 +276,9 @@ fn run_stream_pipeline_inner(
 
     // ==== 线程 C: Whisper 纯 GPU 推理线程 ====
     let whisper_thread = thread::spawn(move || -> Result<()> {
+        #[cfg(target_os = "windows")]
+        register_thread_as_pro_audio();
+
         let mut rolling_prompt = String::new();
         let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
         
@@ -338,6 +357,10 @@ fn run_stream_pipeline_inner(
 
             let progress = ((end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
             let _ = sink_for_whisper.add(TranscriptionEvent::Progress(progress.clamp(0, 100)));
+            let _ = sink_for_whisper.add(TranscriptionEvent::ProgressDetail {
+                processed_ms: end_ms,
+                total_ms: (total_duration * 1000.0) as i64,
+            });
         }
         
         let _ = sink_for_whisper.add(TranscriptionEvent::Success(all_segments));
@@ -347,62 +370,231 @@ fn run_stream_pipeline_inner(
     // ==== 核心线程 1: DFN3 专属降噪线程 ====
     let extracted_dir_clone = extracted_dir.clone();
     let dfn_thread = thread::spawn(move || -> Result<()> {
-        println!("[Rust] Initializing DeepFilterStream in thread from: {:?}", extracted_dir_clone);
-        
-        // 对于极小矩阵流式推理，关闭多线程，消除线程锁与调度开销
-        let mut stream = DeepFilterStream::with_threads(&extracted_dir_clone, 1)
-            .map_err(|e| anyhow!("Failed to create DeepFilterStream: {:?}", e))?;
-        stream.warmup()
-            .map_err(|e| anyhow!("Failed to warmup DeepFilterStream: {:?}", e))?;
-        println!("[Rust] DFN3 ONNX Runtime (ort) initialized with 1 thread.");
+        if !enable_denoise {
+            println!("[Rust] DeepFilterNet3 降噪已禁用，音频流直通处理。");
+            let tx_clean_48k_clone = tx_clean_48k.clone();
+            let mut buffer = Vec::with_capacity(chunk_size_48k);
+            while let Ok(raw_chunk_48k) = rx.recv() {
+                buffer.extend_from_slice(&raw_chunk_48k);
+                while buffer.len() >= chunk_size_48k {
+                    let chunk: Vec<f32> = buffer.drain(..chunk_size_48k).collect();
+                    if tx_clean_48k_clone.send(chunk).is_err() {
+                        return Ok(());
+                    }
+                }
+            }
+            if !buffer.is_empty() {
+                buffer.resize(chunk_size_48k, 0.0);
+                let _ = tx_clean_48k_clone.send(buffer);
+            }
+            drop(tx_clean_48k_clone);
+            return Ok(());
+        }
 
-        let mut raw_48k_buf: Vec<f32> = Vec::with_capacity(chunk_size_48k * 8);
-        let mut read_pos = 0;
+        struct DfnTask {
+            seq_id: usize,
+            warmup_samples: Vec<f32>,
+            real_samples: Vec<f32>,
+        }
+        
+        struct DfnResult {
+            seq_id: usize,
+            cleaned_samples: Vec<f32>,
+        }
+
+        // 用 crossbeam_channel 来实现多生产者多消费者的高效通道
+        let (task_tx, task_rx) = crossbeam_channel::bounded::<DfnTask>(16);
+        let (result_tx, result_rx) = crossbeam_channel::unbounded::<DfnResult>();
+
+        let num_workers = 6;
+        let mut worker_handles = Vec::with_capacity(num_workers);
+
+        // 使用 Arc 来让所有工作线程免拷贝共享模型目录
+        let model_dir_arc = Arc::new(extracted_dir_clone);
+
+        let p_core_mask = get_physical_pcore_mask();
+
+        // 启动并发工作池线程
+        for worker_id in 0..num_workers {
+            let rx = task_rx.clone();
+            let tx = result_tx.clone();
+            let model_dir = Arc::clone(&model_dir_arc);
+            let mask = p_core_mask;
+
+            let handle = thread::spawn(move || -> Result<()> {
+                #[cfg(target_os = "windows")]
+                {
+                    set_thread_affinity_mask(mask);
+                    register_thread_as_pro_audio();
+                }
+
+                // println!("[Rust] DFN3 Worker {} 启动并加载模型...", worker_id);
+                // 独占一个模型推理流，配置 1 线程以达到极佳流式推理速度
+                let mut stream = DeepFilterStream::with_threads(&model_dir, 1)
+                    .map_err(|e| anyhow!("Worker {} failed to create DeepFilterStream: {:?}", worker_id, e))?;
+                stream.warmup()
+                    .map_err(|e| anyhow!("Worker {} failed to warmup: {:?}", worker_id, e))?;
+                // println!("[Rust] DFN3 Worker {} 初始化就绪.", worker_id);
+
+                while let Ok(task) = rx.recv() {
+                    let DfnTask { seq_id, warmup_samples, real_samples } = task;
+                    let mut cleaned_samples = Vec::with_capacity(real_samples.len());
+
+                    // let start_time = std::time::Instant::now();
+
+                    // 1. 重置 GRU 隐藏状态
+                    stream.reset();
+
+                    // 2. 状态预热 (Warm-up) - 丢弃此区间的输出
+                    if !warmup_samples.is_empty() {
+                        let _ = stream.process(&warmup_samples)
+                            .map_err(|e| anyhow!("Worker {} warmup error: {:?}", worker_id, e))?;
+                    }
+
+                    // 3. 真实数据降噪
+                    let cleaned = stream.process(&real_samples)
+                        .map_err(|e| anyhow!("Worker {} processing error: {:?}", worker_id, e))?;
+                    cleaned_samples.extend_from_slice(&cleaned);
+
+                    // 4. 冲刷缓存
+                    let flushed = stream.flush()
+                        .map_err(|e| anyhow!("Worker {} flush error: {:?}", worker_id, e))?;
+                    cleaned_samples.extend_from_slice(&flushed);
+
+                    // let elapsed = start_time.elapsed();
+                    // let audio_secs = real_samples.len() as f64 / 48000.0;
+                    
+                    // println!(
+                    //     "[Rust] Worker {} 完成分片 #{} 降噪。用时: {:.2?} (音频时长: {:.2}s, 实时率 RTF: {:.4})",
+                    //     worker_id, seq_id, elapsed, audio_secs, elapsed.as_secs_f64() / audio_secs
+                    // );
+
+                    if tx.send(DfnResult { seq_id, cleaned_samples }).is_err() {
+                        break;
+                    }
+                }
+                Ok(())
+            });
+            worker_handles.push(handle);
+        }
+
+        // 把 result_tx 丢掉，这样在所有 worker 退出后，result_rx.recv() 能自动返回 EOF
+        drop(result_tx);
+
+        // 启动汇总重排线程 (Reorder Buffer)
+        let tx_clean_48k_clone = tx_clean_48k.clone();
+        let collector_thread = thread::spawn(move || {
+            let mut reorder_map = BTreeMap::new();
+            let mut next_expected_id = 0;
+
+            while let Ok(result) = result_rx.recv() {
+                reorder_map.insert(result.seq_id, result.cleaned_samples);
+
+                // 有序释放连续分片数据
+                while let Some(entry) = reorder_map.first_entry() {
+                    if *entry.key() == next_expected_id {
+                        let samples = entry.remove();
+                        let mut failed = false;
+                        for chunk in samples.chunks(chunk_size_48k) {
+                            let mut chunk_vec = chunk.to_vec();
+                            if chunk_vec.len() < chunk_size_48k {
+                                chunk_vec.resize(chunk_size_48k, 0.0);
+                            }
+                            if tx_clean_48k_clone.send(chunk_vec).is_err() {
+                                failed = true;
+                                break;
+                            }
+                        }
+                        if failed {
+                            break;
+                        }
+                        next_expected_id += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        });
+
+        // ======= 主调度器逻辑 (Scheduler) =======
+        // 积攒音频：分块设定为 10 秒（480,000 个采样点）
+        let block_size = 480000;
+        let warmup_size = 48000; // 预热长度为 1 秒
+
+        let mut current_block = Vec::with_capacity(block_size);
+        let mut history_1s = Vec::with_capacity(warmup_size);
+        let mut seq_id = 0;
+
+        // let total_start = std::time::Instant::now();
+        // let mut total_audio_seconds = 0.0f64;
 
         while let Ok(raw_chunk_48k) = rx.recv() {
-            raw_48k_buf.extend_from_slice(&raw_chunk_48k);
+            current_block.extend_from_slice(&raw_chunk_48k);
 
-            while raw_48k_buf.len() - read_pos >= chunk_size_48k {
-                // 性能优化：直接使用切片引用传入流式推理，零 collect()，零 heap 分配
-                let process_block = &raw_48k_buf[read_pos..read_pos + chunk_size_48k];
-                let clean_48k_batch = stream.process(process_block)
-                    .map_err(|e| anyhow!("DFN3 processing error: {:?}", e))?;
+            while current_block.len() >= block_size {
+                let real_samples: Vec<f32> = current_block.drain(..block_size).collect();
+                // total_audio_seconds += block_size as f64 / 48000.0;
+
+                let warmup_samples = if seq_id == 0 {
+                    Vec::new()
+                } else {
+                    history_1s.clone()
+                };
+
+                // 提取本次分片结尾的 1 秒数据，作为下一次分片的预热源
+                history_1s = real_samples[real_samples.len() - warmup_size..].to_vec();
+
+                let task = DfnTask {
+                    seq_id,
+                    warmup_samples,
+                    real_samples,
+                };
                 
-                if tx_clean_48k.send(clean_48k_batch).is_err() {
+                if task_tx.send(task).is_err() {
                     break;
                 }
-                read_pos += chunk_size_48k;
-            }
-
-            // 定期清理已消耗的数据，避免内存无限累加，同时极低频次的前移整理开销可忽略
-            if read_pos >= chunk_size_48k * 4 {
-                raw_48k_buf.drain(..read_pos);
-                read_pos = 0;
+                seq_id += 1;
             }
         }
 
-        // 处理 EOF 残余数据
-        let remaining = &raw_48k_buf[read_pos..];
-        if !remaining.is_empty() {
-            let mut remainder_buf = remaining.to_vec();
-            let remainder = remainder_buf.len() % 480;
-            if remainder > 0 {
-                let padding = 480 - remainder;
-                remainder_buf.extend(std::iter::repeat(0.0f32).take(padding));
-            }
-            let clean_48k_batch = stream.process(&remainder_buf)
-                .map_err(|e| anyhow!("DFN3 EOF processing error: {:?}", e))?;
-            if !clean_48k_batch.is_empty() {
-                let _ = tx_clean_48k.send(clean_48k_batch);
+        // 处理 EOF 残留音频数据
+        if !current_block.is_empty() {
+            let warmup_samples = if seq_id == 0 {
+                Vec::new()
+            } else {
+                history_1s.clone()
+            };
+
+            // total_audio_seconds += current_block.len() as f64 / 48000.0;
+
+            let task = DfnTask {
+                seq_id,
+                warmup_samples,
+                real_samples: current_block,
+            };
+            let _ = task_tx.send(task);
+        }
+
+        // 分发完所有任务后，主动关闭任务通道以让工作线程读取退出
+        drop(task_tx);
+
+        // 等待所有工作线程完成
+        for handle in worker_handles {
+            if let Err(e) = handle.join() {
+                println!("[Rust] DFN3 Worker thread panicked: {:?}", e);
             }
         }
 
-        // 冲刷流缓存
-        let flushed = stream.flush()
-            .map_err(|e| anyhow!("DFN3 flush error: {:?}", e))?;
-        if !flushed.is_empty() {
-            let _ = tx_clean_48k.send(flushed);
-        }
+        // 等待 Collector 重排收集完毕
+        let _ = collector_thread.join();
+
+        // let total_elapsed = total_start.elapsed();
+        // println!(
+        //     "[Rust] DFN3 多线程并行降噪完毕。系统总耗时: {:.2?}, 音频总时长: {:.2}s, 整体等效实时率 RTF: {:.4}", 
+        //     total_elapsed, 
+        //     total_audio_seconds, 
+        //     if total_audio_seconds > 0.0 { total_elapsed.as_secs_f64() / total_audio_seconds } else { 0.0 }
+        // );
 
         drop(tx_clean_48k);
         Ok(())
@@ -410,6 +602,9 @@ fn run_stream_pipeline_inner(
 
     // ==== 核心线程 2: 重采样与 VAD 寻峰线程 ====
     let vad_thread = thread::spawn(move || -> Result<()> {
+        #[cfg(target_os = "windows")]
+        register_thread_as_pro_audio();
+
         let resampler_params = SincInterpolationParameters {
             sinc_len: 64,
             f_cutoff: 0.95,
@@ -613,5 +808,87 @@ fn extract_tar_gz_if_needed(tar_gz_path: &Path) -> Result<std::path::PathBuf> {
         Ok(nested_dir)
     } else {
         Ok(dest_dir)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn lock_high_priority() {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, HIGH_PRIORITY_CLASS};
+    unsafe {
+        // 强制锁定进程为“高优先级”
+        // 哪怕软件最小化到系统托盘，Windows 也绝不敢把这些线程扔进 E-Core
+        SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+    }
+    // println!("[Rust] Process priority locked to HIGH_PRIORITY_CLASS.");
+}
+
+#[cfg(target_os = "windows")]
+fn register_thread_as_pro_audio() {
+    use windows_sys::Win32::System::Threading::AvSetMmThreadCharacteristicsW;
+    use windows_sys::core::PCWSTR;
+
+    unsafe {
+        // 告诉 Windows 应当用最高调度质量
+        let task_name: Vec<u16> = "Pro Audio\0".encode_utf16().collect();
+        let mut task_index = 0;
+        
+        let handle = AvSetMmThreadCharacteristicsW(
+            task_name.as_ptr() as PCWSTR, 
+            &mut task_index
+        );
+
+        if handle.is_null() {
+            // println!("[Rust] MMCSS 注册失败，退回普通调度");
+        } else {
+            // println!("[Rust] 线程成功接入 MMCSS 绿色通道！");
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn disable_power_throttling() {
+    use std::mem::size_of;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, SetProcessInformation, ProcessPowerThrottling,
+        PROCESS_POWER_THROTTLING_STATE, PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+    };
+
+    unsafe {
+        let mut state = PROCESS_POWER_THROTTLING_STATE {
+            Version: 1, // PROCESS_POWER_THROTTLING_CURRENT_VERSION
+            ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+            StateMask: 0, // 0 代表关闭节流 (如果是执行速度控制的话)
+        };
+
+        SetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            &mut state as *mut _ as *mut _,
+            size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        );
+        // println!("[Rust] Windows 11 电源节流 (EcoQoS) 已被禁用，后台满血运行。");
+    }
+}
+
+fn get_physical_pcore_mask() -> usize {
+    let core_ids = core_affinity::get_core_ids().unwrap_or_default();
+    let mut mask = 0;
+    for core in core_ids {
+        if core.id % 2 == 0 {
+            mask |= 1 << core.id;
+        }
+    }
+    if mask == 0 {
+        !0
+    } else {
+        mask
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_thread_affinity_mask(mask: usize) {
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadAffinityMask};
+    unsafe {
+        SetThreadAffinityMask(GetCurrentThread(), mask);
     }
 }

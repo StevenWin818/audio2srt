@@ -60,6 +60,7 @@ pub struct TranscriptionSegment {
 #[derive(Clone, Debug)]
 pub enum TranscriptionEvent {
     Progress(i32),
+    ProgressDetail { processed_ms: i64, total_ms: i64 },
     Success(Vec<TranscriptionSegment>),
     Failure(String),
     Segment(TranscriptionSegment),

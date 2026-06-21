@@ -97,6 +97,10 @@ sealed class TranscriptionEvent with _$TranscriptionEvent {
 
   const factory TranscriptionEvent.progress(int field0) =
       TranscriptionEvent_Progress;
+  const factory TranscriptionEvent.progressDetail({
+    required PlatformInt64 processedMs,
+    required PlatformInt64 totalMs,
+  }) = TranscriptionEvent_ProgressDetail;
   const factory TranscriptionEvent.success(List<TranscriptionSegment> field0) =
       TranscriptionEvent_Success;
   const factory TranscriptionEvent.failure(String field0) =

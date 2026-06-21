@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'whisper.dart';
 
-// These functions are ignored because they are not marked as `pub`: `find_silence_sequence`, `get_media_duration_secs`, `parse_duration_str`, `run_stream_pipeline_inner`
+// These functions are ignored because they are not marked as `pub`: `extract_tar_gz_if_needed`, `find_silence_sequence`, `get_media_duration_secs`, `lock_high_priority`, `parse_duration_str`, `run_stream_pipeline_inner`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AudioFrameState`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
 
@@ -21,6 +21,7 @@ Stream<TranscriptionEvent> transcribeStream({
   int? threads,
   required bool useGpu,
   required bool toSimplified,
+  required bool enableDenoise,
 }) => RustLib.instance.api.crateApiStreamPipelineTranscribeStream(
   ffmpegPath: ffmpegPath,
   inputPath: inputPath,
@@ -31,4 +32,5 @@ Stream<TranscriptionEvent> transcribeStream({
   threads: threads,
   useGpu: useGpu,
   toSimplified: toSimplified,
+  enableDenoise: enableDenoise,
 );

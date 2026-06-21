@@ -273,6 +273,30 @@ class DashboardView extends StatelessWidget {
           ],
           const SizedBox(height: 20),
 
+          // 神经网络降噪
+          Row(
+            children: [
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('语音降噪预处理', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                    SizedBox(height: 4),
+                    Text('使用 DeepFilterNet3 神经网络对音频进行高保真人声降噪（可能需要更长时间）', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                  ],
+                ),
+              ),
+              Switch(
+                value: provider.enableDenoise,
+                activeColor: const Color(0xFF8B5CF6),
+                onChanged: (val) {
+                  provider.setEnableDenoise(val);
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+
           // 语言选择
           const Text('音频主语言', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
@@ -390,17 +414,48 @@ class DashboardView extends StatelessWidget {
           ],
 
           const SizedBox(height: 20),
-          Text(
-            provider.statusMessage,
-            style: TextStyle(
-              fontSize: 13,
-              color: provider.status == TranscriptionStatus.failed
-                  ? Colors.redAccent
-                  : provider.status == TranscriptionStatus.completed
-                      ? Colors.green
-                      : Colors.white,
+          if (provider.status == TranscriptionStatus.transcribing && provider.totalMs > 0) ...[
+            const Text(
+              '正在流式转写中...',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.white,
+              ),
             ),
-          ),
+            const SizedBox(height: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '${provider.processedStr} / ${provider.remainingStr}',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Colors.white,
+                  ),
+                ),
+                Text(
+                  '--${provider.etaStr}',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ] else ...[
+            Text(
+              provider.statusMessage,
+              style: TextStyle(
+                fontSize: 13,
+                color: provider.status == TranscriptionStatus.failed
+                    ? Colors.redAccent
+                    : provider.status == TranscriptionStatus.completed
+                        ? Colors.green
+                        : Colors.white,
+              ),
+            ),
+          ],
           const SizedBox(height: 24),
 
           // 开始按钮

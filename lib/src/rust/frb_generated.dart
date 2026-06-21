@@ -142,6 +142,7 @@ abstract class RustLibApi extends BaseApi {
     int? threads,
     required bool useGpu,
     required bool toSimplified,
+    required bool enableDenoise,
   });
 
   Future<TranscriptionSegment> crateApiWhisperTranscriptionSegmentDefault();
@@ -555,6 +556,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     int? threads,
     required bool useGpu,
     required bool toSimplified,
+    required bool enableDenoise,
   }) {
     final sink = RustStreamSink<TranscriptionEvent>();
     unawaited(
@@ -572,6 +574,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_encode_opt_box_autoadd_i_32(threads, serializer);
             sse_encode_bool(useGpu, serializer);
             sse_encode_bool(toSimplified, serializer);
+            sse_encode_bool(enableDenoise, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
@@ -595,6 +598,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             threads,
             useGpu,
             toSimplified,
+            enableDenoise,
           ],
           apiImpl: this,
         ),
@@ -617,6 +621,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "threads",
           "useGpu",
           "toSimplified",
+          "enableDenoise",
         ],
       );
 
@@ -817,12 +822,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 0:
         return TranscriptionEvent_Progress(dco_decode_i_32(raw[1]));
       case 1:
+        return TranscriptionEvent_ProgressDetail(
+          processedMs: dco_decode_i_64(raw[1]),
+          totalMs: dco_decode_i_64(raw[2]),
+        );
+      case 2:
         return TranscriptionEvent_Success(
           dco_decode_list_transcription_segment(raw[1]),
         );
-      case 2:
-        return TranscriptionEvent_Failure(dco_decode_String(raw[1]));
       case 3:
+        return TranscriptionEvent_Failure(dco_decode_String(raw[1]));
+      case 4:
         return TranscriptionEvent_Segment(
           dco_decode_box_autoadd_transcription_segment(raw[1]),
         );
@@ -1049,12 +1059,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         var var_field0 = sse_decode_i_32(deserializer);
         return TranscriptionEvent_Progress(var_field0);
       case 1:
+        var var_processedMs = sse_decode_i_64(deserializer);
+        var var_totalMs = sse_decode_i_64(deserializer);
+        return TranscriptionEvent_ProgressDetail(
+          processedMs: var_processedMs,
+          totalMs: var_totalMs,
+        );
+      case 2:
         var var_field0 = sse_decode_list_transcription_segment(deserializer);
         return TranscriptionEvent_Success(var_field0);
-      case 2:
+      case 3:
         var var_field0 = sse_decode_String(deserializer);
         return TranscriptionEvent_Failure(var_field0);
-      case 3:
+      case 4:
         var var_field0 = sse_decode_box_autoadd_transcription_segment(
           deserializer,
         );
@@ -1288,14 +1305,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case TranscriptionEvent_Progress(field0: final field0):
         sse_encode_i_32(0, serializer);
         sse_encode_i_32(field0, serializer);
-      case TranscriptionEvent_Success(field0: final field0):
+      case TranscriptionEvent_ProgressDetail(
+        processedMs: final processedMs,
+        totalMs: final totalMs,
+      ):
         sse_encode_i_32(1, serializer);
+        sse_encode_i_64(processedMs, serializer);
+        sse_encode_i_64(totalMs, serializer);
+      case TranscriptionEvent_Success(field0: final field0):
+        sse_encode_i_32(2, serializer);
         sse_encode_list_transcription_segment(field0, serializer);
       case TranscriptionEvent_Failure(field0: final field0):
-        sse_encode_i_32(2, serializer);
+        sse_encode_i_32(3, serializer);
         sse_encode_String(field0, serializer);
       case TranscriptionEvent_Segment(field0: final field0):
-        sse_encode_i_32(3, serializer);
+        sse_encode_i_32(4, serializer);
         sse_encode_box_autoadd_transcription_segment(field0, serializer);
     }
   }

@@ -14,22 +14,22 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$TranscriptionEvent {
 
- Object get field0;
+
 
 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is TranscriptionEvent&&const DeepCollectionEquality().equals(other.field0, field0));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is TranscriptionEvent);
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(field0));
+int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'TranscriptionEvent(field0: $field0)';
+  return 'TranscriptionEvent()';
 }
 
 
@@ -55,11 +55,12 @@ extension TranscriptionEventPatterns on TranscriptionEvent {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( TranscriptionEvent_Progress value)?  progress,TResult Function( TranscriptionEvent_Success value)?  success,TResult Function( TranscriptionEvent_Failure value)?  failure,TResult Function( TranscriptionEvent_Segment value)?  segment,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( TranscriptionEvent_Progress value)?  progress,TResult Function( TranscriptionEvent_ProgressDetail value)?  progressDetail,TResult Function( TranscriptionEvent_Success value)?  success,TResult Function( TranscriptionEvent_Failure value)?  failure,TResult Function( TranscriptionEvent_Segment value)?  segment,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case TranscriptionEvent_Progress() when progress != null:
-return progress(_that);case TranscriptionEvent_Success() when success != null:
+return progress(_that);case TranscriptionEvent_ProgressDetail() when progressDetail != null:
+return progressDetail(_that);case TranscriptionEvent_Success() when success != null:
 return success(_that);case TranscriptionEvent_Failure() when failure != null:
 return failure(_that);case TranscriptionEvent_Segment() when segment != null:
 return segment(_that);case _:
@@ -80,11 +81,12 @@ return segment(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( TranscriptionEvent_Progress value)  progress,required TResult Function( TranscriptionEvent_Success value)  success,required TResult Function( TranscriptionEvent_Failure value)  failure,required TResult Function( TranscriptionEvent_Segment value)  segment,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( TranscriptionEvent_Progress value)  progress,required TResult Function( TranscriptionEvent_ProgressDetail value)  progressDetail,required TResult Function( TranscriptionEvent_Success value)  success,required TResult Function( TranscriptionEvent_Failure value)  failure,required TResult Function( TranscriptionEvent_Segment value)  segment,}){
 final _that = this;
 switch (_that) {
 case TranscriptionEvent_Progress():
-return progress(_that);case TranscriptionEvent_Success():
+return progress(_that);case TranscriptionEvent_ProgressDetail():
+return progressDetail(_that);case TranscriptionEvent_Success():
 return success(_that);case TranscriptionEvent_Failure():
 return failure(_that);case TranscriptionEvent_Segment():
 return segment(_that);}
@@ -101,11 +103,12 @@ return segment(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( TranscriptionEvent_Progress value)?  progress,TResult? Function( TranscriptionEvent_Success value)?  success,TResult? Function( TranscriptionEvent_Failure value)?  failure,TResult? Function( TranscriptionEvent_Segment value)?  segment,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( TranscriptionEvent_Progress value)?  progress,TResult? Function( TranscriptionEvent_ProgressDetail value)?  progressDetail,TResult? Function( TranscriptionEvent_Success value)?  success,TResult? Function( TranscriptionEvent_Failure value)?  failure,TResult? Function( TranscriptionEvent_Segment value)?  segment,}){
 final _that = this;
 switch (_that) {
 case TranscriptionEvent_Progress() when progress != null:
-return progress(_that);case TranscriptionEvent_Success() when success != null:
+return progress(_that);case TranscriptionEvent_ProgressDetail() when progressDetail != null:
+return progressDetail(_that);case TranscriptionEvent_Success() when success != null:
 return success(_that);case TranscriptionEvent_Failure() when failure != null:
 return failure(_that);case TranscriptionEvent_Segment() when segment != null:
 return segment(_that);case _:
@@ -125,10 +128,11 @@ return segment(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( int field0)?  progress,TResult Function( List<TranscriptionSegment> field0)?  success,TResult Function( String field0)?  failure,TResult Function( TranscriptionSegment field0)?  segment,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( int field0)?  progress,TResult Function( PlatformInt64 processedMs,  PlatformInt64 totalMs)?  progressDetail,TResult Function( List<TranscriptionSegment> field0)?  success,TResult Function( String field0)?  failure,TResult Function( TranscriptionSegment field0)?  segment,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case TranscriptionEvent_Progress() when progress != null:
-return progress(_that.field0);case TranscriptionEvent_Success() when success != null:
+return progress(_that.field0);case TranscriptionEvent_ProgressDetail() when progressDetail != null:
+return progressDetail(_that.processedMs,_that.totalMs);case TranscriptionEvent_Success() when success != null:
 return success(_that.field0);case TranscriptionEvent_Failure() when failure != null:
 return failure(_that.field0);case TranscriptionEvent_Segment() when segment != null:
 return segment(_that.field0);case _:
@@ -149,10 +153,11 @@ return segment(_that.field0);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( int field0)  progress,required TResult Function( List<TranscriptionSegment> field0)  success,required TResult Function( String field0)  failure,required TResult Function( TranscriptionSegment field0)  segment,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( int field0)  progress,required TResult Function( PlatformInt64 processedMs,  PlatformInt64 totalMs)  progressDetail,required TResult Function( List<TranscriptionSegment> field0)  success,required TResult Function( String field0)  failure,required TResult Function( TranscriptionSegment field0)  segment,}) {final _that = this;
 switch (_that) {
 case TranscriptionEvent_Progress():
-return progress(_that.field0);case TranscriptionEvent_Success():
+return progress(_that.field0);case TranscriptionEvent_ProgressDetail():
+return progressDetail(_that.processedMs,_that.totalMs);case TranscriptionEvent_Success():
 return success(_that.field0);case TranscriptionEvent_Failure():
 return failure(_that.field0);case TranscriptionEvent_Segment():
 return segment(_that.field0);}
@@ -169,10 +174,11 @@ return segment(_that.field0);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( int field0)?  progress,TResult? Function( List<TranscriptionSegment> field0)?  success,TResult? Function( String field0)?  failure,TResult? Function( TranscriptionSegment field0)?  segment,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( int field0)?  progress,TResult? Function( PlatformInt64 processedMs,  PlatformInt64 totalMs)?  progressDetail,TResult? Function( List<TranscriptionSegment> field0)?  success,TResult? Function( String field0)?  failure,TResult? Function( TranscriptionSegment field0)?  segment,}) {final _that = this;
 switch (_that) {
 case TranscriptionEvent_Progress() when progress != null:
-return progress(_that.field0);case TranscriptionEvent_Success() when success != null:
+return progress(_that.field0);case TranscriptionEvent_ProgressDetail() when progressDetail != null:
+return progressDetail(_that.processedMs,_that.totalMs);case TranscriptionEvent_Success() when success != null:
 return success(_that.field0);case TranscriptionEvent_Failure() when failure != null:
 return failure(_that.field0);case TranscriptionEvent_Segment() when segment != null:
 return segment(_that.field0);case _:
@@ -190,7 +196,7 @@ class TranscriptionEvent_Progress extends TranscriptionEvent {
   const TranscriptionEvent_Progress(this.field0): super._();
   
 
-@override final  int field0;
+ final  int field0;
 
 /// Create a copy of TranscriptionEvent
 /// with the given fields replaced by the non-null parameter values.
@@ -252,12 +258,80 @@ as int,
 /// @nodoc
 
 
+class TranscriptionEvent_ProgressDetail extends TranscriptionEvent {
+  const TranscriptionEvent_ProgressDetail({required this.processedMs, required this.totalMs}): super._();
+  
+
+ final  PlatformInt64 processedMs;
+ final  PlatformInt64 totalMs;
+
+/// Create a copy of TranscriptionEvent
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$TranscriptionEvent_ProgressDetailCopyWith<TranscriptionEvent_ProgressDetail> get copyWith => _$TranscriptionEvent_ProgressDetailCopyWithImpl<TranscriptionEvent_ProgressDetail>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is TranscriptionEvent_ProgressDetail&&(identical(other.processedMs, processedMs) || other.processedMs == processedMs)&&(identical(other.totalMs, totalMs) || other.totalMs == totalMs));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,processedMs,totalMs);
+
+@override
+String toString() {
+  return 'TranscriptionEvent.progressDetail(processedMs: $processedMs, totalMs: $totalMs)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $TranscriptionEvent_ProgressDetailCopyWith<$Res> implements $TranscriptionEventCopyWith<$Res> {
+  factory $TranscriptionEvent_ProgressDetailCopyWith(TranscriptionEvent_ProgressDetail value, $Res Function(TranscriptionEvent_ProgressDetail) _then) = _$TranscriptionEvent_ProgressDetailCopyWithImpl;
+@useResult
+$Res call({
+ PlatformInt64 processedMs, PlatformInt64 totalMs
+});
+
+
+
+
+}
+/// @nodoc
+class _$TranscriptionEvent_ProgressDetailCopyWithImpl<$Res>
+    implements $TranscriptionEvent_ProgressDetailCopyWith<$Res> {
+  _$TranscriptionEvent_ProgressDetailCopyWithImpl(this._self, this._then);
+
+  final TranscriptionEvent_ProgressDetail _self;
+  final $Res Function(TranscriptionEvent_ProgressDetail) _then;
+
+/// Create a copy of TranscriptionEvent
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? processedMs = null,Object? totalMs = null,}) {
+  return _then(TranscriptionEvent_ProgressDetail(
+processedMs: null == processedMs ? _self.processedMs : processedMs // ignore: 将可空类型转换为非可空类型
+as PlatformInt64,totalMs: null == totalMs ? _self.totalMs : totalMs // ignore: 将可空类型转换为非可空类型
+as PlatformInt64,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
 class TranscriptionEvent_Success extends TranscriptionEvent {
   const TranscriptionEvent_Success(final  List<TranscriptionSegment> field0): _field0 = field0,super._();
   
 
  final  List<TranscriptionSegment> _field0;
-@override List<TranscriptionSegment> get field0 {
+ List<TranscriptionSegment> get field0 {
   if (_field0 is EqualUnmodifiableListView) return _field0;
   // ignore: implicit_dynamic_type
   return EqualUnmodifiableListView(_field0);
@@ -328,7 +402,7 @@ class TranscriptionEvent_Failure extends TranscriptionEvent {
   const TranscriptionEvent_Failure(this.field0): super._();
   
 
-@override final  String field0;
+ final  String field0;
 
 /// Create a copy of TranscriptionEvent
 /// with the given fields replaced by the non-null parameter values.
@@ -394,10 +468,10 @@ class TranscriptionEvent_Segment extends TranscriptionEvent {
   const TranscriptionEvent_Segment(this.field0): super._();
   
 
-@override final  TranscriptionSegment field0;
+ final  TranscriptionSegment field0;
 
-/// 创建转录事件副本
-/// 将给定字段替换为非空参数值
+/// Create a copy of TranscriptionEvent
+/// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
 $TranscriptionEvent_SegmentCopyWith<TranscriptionEvent_Segment> get copyWith => _$TranscriptionEvent_SegmentCopyWithImpl<TranscriptionEvent_Segment>(this, _$identity);
@@ -441,7 +515,8 @@ class _$TranscriptionEvent_SegmentCopyWithImpl<$Res>
   final TranscriptionEvent_Segment _self;
   final $Res Function(TranscriptionEvent_Segment) _then;
 
-
+/// Create a copy of TranscriptionEvent
+/// with the given fields replaced by the non-null parameter values.
 @pragma('vm:prefer-inline') $Res call({Object? field0 = null,}) {
   return _then(TranscriptionEvent_Segment(
 null == field0 ? _self.field0 : field0 // ignore: cast_nullable_to_non_nullable
@@ -452,3 +527,4 @@ as TranscriptionSegment,
 
 }
 
+// dart format on
