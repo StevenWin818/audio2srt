@@ -34,6 +34,10 @@ class BuildCMake {
       if (lib.type == AritifactType.dylib) {
         File(lib.path)
             .copySync(path.join(Environment.outputDir, lib.finalFileName));
+        final onnxDll = File(path.join(path.dirname(lib.path), 'onnxruntime.dll'));
+        if (onnxDll.existsSync()) {
+          onnxDll.copySync(path.join(Environment.outputDir, 'onnxruntime.dll'));
+        }
       }
     }
   }

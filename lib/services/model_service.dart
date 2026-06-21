@@ -158,7 +158,7 @@ class ModelService {
       await modelDir.create(recursive: true);
     }
     
-    final targetPath = p.join(modelDir.path, 'DeepFilterNet3_ll_onnx.tar.gz');
+    final targetPath = p.join(modelDir.path, 'DeepFilterNet3_onnx.tar.gz');
     final targetFile = File(targetPath);
     
     if (await targetFile.exists() && await targetFile.length() > 1024 * 1024) {
@@ -166,7 +166,7 @@ class ModelService {
     }
     
     // 加载模型
-    final data = await rootBundle.load('assets/models/DeepFilterNet3_ll_onnx.tar.gz');
+    final data = await rootBundle.load('assets/models/DeepFilterNet3_onnx.tar.gz');
     final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
     await targetFile.writeAsBytes(bytes);
     

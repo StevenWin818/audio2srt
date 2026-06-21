@@ -1,3 +1,4 @@
 [build]
-jobs = 1
+jobs = 8
 target-dir = "C:/t"
+rustflags = ["-C", "target-cpu=native"]

@@ -805,8 +805,11 @@ pub(crate) fn run_transcription_inner(
         }
         // 准备状态追踪变量
         let mut recent_history: std::collections::VecDeque<String> = std::collections::VecDeque::new();
-        let mut consecutive_repeats = 0;
+        
+        // 新增：用于纯文本语义传递的滑动提示词
+        let mut rolling_prompt = String::new();
 
+        #[allow(unused_assignments)]
         for (idx, &(start_sample, end_sample)) in speech_segments.iter().enumerate() {
             progress_ctx.current_segment = idx;
             let segment_samples = &samples[start_sample..end_sample];
@@ -821,10 +824,15 @@ pub(crate) fn run_transcription_inner(
                 segment_samples.len()
             );
 
-            // 1. 正常推理尝试（默认允许携带上下文以连贯语义，除非在全局设置中已明确关闭）
+            // 1. 正常推理尝试：永远斩断底层声学上下文，通过 prompt 传递纯文本语义
             let mut current_params = params.clone();
-            if !no_context {
-                current_params.set_no_context(false);
+            
+            // 强制清空上一段的音频 KV 缓存，防止死循环幻觉
+            current_params.set_no_context(true);
+            
+            // 如果全局设置允许携带上下文，且已有历史文本，则将其作为提示词注入
+            if !no_context && !rolling_prompt.is_empty() {
+                current_params.set_initial_prompt(&rolling_prompt);
             }
 
             state.full(current_params, segment_samples).map_err(|e| {
@@ -946,7 +954,6 @@ pub(crate) fn run_transcription_inner(
                 if retry_self_repeating {
                     println!("[Rust] 🛑 回退重试后依然检测到重复幻觉，保留该分段交由后处理清洗，但会重建状态以防污染: '{}'", current_text.trim());
                     // discard_segment = true; // 移除丢弃逻辑，保留有效内容
-                    consecutive_repeats = 0; // 重置重复计数
                     
                     // 重新创建推理状态以彻底清除 C++ 侧受污染 Hendrick/Whisper KV 缓存历史，防止污染后续分段
                     state = ctx.create_state().map_err(|e| {
@@ -956,7 +963,6 @@ pub(crate) fn run_transcription_inner(
                     })?;
                 } else {
                     println!("[Rust] ✅ 回退重试成功，新输出: '{}'", current_text.trim());
-                    consecutive_repeats = 0;
                     if !cleaned_retry.is_empty() {
                         recent_history.push_back(cleaned_retry.clone());
                         if recent_history.len() > 10 {
@@ -968,7 +974,6 @@ pub(crate) fn run_transcription_inner(
 
             // 5. 最终持久化写入字幕段列表
             if !discard_segment {
-                let offset_cs = (start_sample as i64) / 160;
                 let final_num_segments = state.full_n_segments();
 
                 for i in 0..final_num_segments {
@@ -983,8 +988,15 @@ pub(crate) fn run_transcription_inner(
                             continue;
                         }
 
-                        let start = segment.start_timestamp();
-                        let end = segment.end_timestamp();
+                        // 新增：更新滑动提示词
+                        if !no_context {
+                            rolling_prompt.push_str(&text);
+                            // 截断滑动窗口，保留最后 100 个字符
+                            let char_vec: Vec<char> = rolling_prompt.chars().collect();
+                            if char_vec.len() > 100 {
+                                rolling_prompt = char_vec[char_vec.len() - 100 ..].iter().collect();
+                            }
+                        }
 
                         combined_segments.push(TranscriptionSegment {
                             start_ms: segment.start_timestamp() * 10 + global_offset_ms,

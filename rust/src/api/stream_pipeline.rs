@@ -3,12 +3,12 @@ use std::io::{Read, BufRead, BufReader};
 use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::path::Path;
-use std::sync::Arc;
 use anyhow::{Result, Context, anyhow};
-use ndarray::ArrayView2;
-use deep_filter::tract::{DfParams, DfTract, RuntimeParams};
+use flate2::read::GzDecoder;
+use tar::Archive;
+use deepfilter_rt::DeepFilterStream;
 use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContextParameters};
 use crate::frb_generated::StreamSink;
 use crate::api::whisper::{
     TranscriptionSegment, TranscriptionEvent, get_or_create_context,
@@ -117,30 +117,7 @@ fn run_stream_pipeline_inner(
     };
     println!("[Rust] Media total duration: {} seconds", total_duration);
 
-    // 2. 初始化 DFN3 模型
-    println!("[Rust] Initializing DeepFilterNet3 from: {}", df_model_path);
-    let df_params = DfParams::new(Path::new(&df_model_path).to_path_buf())
-        .map_err(|e| anyhow!("Failed to load DeepFilterNet3 model parameters: {}", e))?;
-    let mut df_tract = DfTract::new(df_params, &RuntimeParams::default())
-        .map_err(|e| anyhow!("Failed to create DfTract instance: {}", e))?;
-    let hop_size = df_tract.hop_size; // typically 960 (20ms at 48kHz)
-    println!("[Rust] DFN3 initialized. Hop size: {}", hop_size);
-
-    // 3. 初始化 rubato 重采样器 (48kHz -> 16kHz)
-    let resampler_params = SincInterpolationParameters {
-        sinc_len: 256,
-        f_cutoff: 0.95,
-        interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 256,
-        window: WindowFunction::BlackmanHarris2,
-    };
-    let mut resampler = SincFixedIn::<f32>::new(
-        16000_f64 / 48000_f64,
-        2.0,
-        resampler_params,
-        hop_size,
-        1,
-    ).map_err(|e| anyhow!("Failed to initialize Rubato resampler: {:?}", e))?;
+    let chunk_size_48k = 24000;
 
     // 4. 初始化 Whisper 上下文
     println!("[Rust] Loading Whisper model context...");
@@ -227,7 +204,6 @@ fn run_stream_pipeline_inner(
     // 6. 建立带背压的通信通道 (最多缓冲 10 个数据块，即 5 秒音频)
     let (tx, rx) = sync_channel::<Vec<f32>>(10);
 
-    let pump_tx = tx.clone();
     let pump_thread = thread::spawn(move || -> Result<()> {
         let mut temp_buf = [0u8; 4096];
         loop {
@@ -254,145 +230,196 @@ fn run_stream_pipeline_inner(
                 samples[i] = f32::from_le_bytes(bytes.try_into().unwrap());
             }
 
-            if pump_tx.send(samples).is_err() {
+            if tx.send(samples).is_err() {
                 break;
             }
         }
         Ok(())
     });
 
-    // 7. 主管道循环
-    let mut audio_buffer: Vec<f32> = Vec::new();
-    let mut frame_states: Vec<AudioFrameState> = Vec::new();
-    let mut raw_48k_buf: Vec<f32> = Vec::new();
+    // 7. 解耦 CPU(降噪)、CPU(重采样与 VAD) 与 GPU(推理) 为三级并行流水线
     
-    let mut rolling_prompt = String::new();
-    let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
-    let mut current_offset_ms: i64 = 0;
-
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    let n_threads = threads.unwrap_or(4);
-    params.set_n_threads(n_threads);
-    params.set_translate(translate);
-    if let Some(ref lang) = language {
-        if lang != "auto" && !lang.is_empty() {
-            params.set_language(Some(lang.as_str()));
-        } else {
-            params.set_language(None);
-            params.set_detect_language(false);
-        }
-    } else {
-        params.set_language(None);
-        params.set_detect_language(false);
+    // 定义在 GPU 线程中执行的推理任务
+    struct WhisperTask {
+        samples: Vec<f32>,
+        start_ms: i64,
+        end_ms: i64,
     }
-    params.set_temperature(0.0);
-    params.set_temperature_inc(0.2);
-    params.set_entropy_thold(2.4);
-    params.set_logprob_thold(-1.0);
-    params.set_no_speech_thold(0.6);
 
-    let mut run_whisper_on_segment = |samples_16k: &[f32], start_ms: i64, end_ms: i64| -> Result<()> {
-        if samples_16k.is_empty() {
-            return Ok(());
-        }
+    // 管道 2: DFN3 降噪完毕 (48kHz) -> 重采样器 (容量10)
+    let (tx_clean_48k, rx_clean_48k) = sync_channel::<Vec<f32>>(10);
+    
+    // 管道 3: VAD 切割完毕 (16kHz完整句子) -> Whisper GPU (容量10)
+    let (whisper_tx, whisper_rx) = sync_channel::<WhisperTask>(10);
+    let sink_for_whisper = sink.clone();
 
-        let mut current_params = params.clone();
-        if !rolling_prompt.is_empty() {
-            current_params.set_initial_prompt(&rolling_prompt);
-            current_params.set_no_context(false);
+    // ==== 线程 C: Whisper 纯 GPU 推理线程 ====
+    let whisper_thread = thread::spawn(move || -> Result<()> {
+        let mut rolling_prompt = String::new();
+        let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
+        
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        let n_threads = threads.unwrap_or(4);
+        params.set_n_threads(n_threads);
+        params.set_translate(translate);
+        if let Some(ref lang) = language {
+            if lang != "auto" && !lang.is_empty() { params.set_language(Some(lang.as_str())); } 
+            else { params.set_language(None); params.set_detect_language(false); }
         } else {
-            current_params.set_no_context(true);
+            params.set_language(None); params.set_detect_language(false);
         }
+        params.set_temperature(0.0);
+        params.set_temperature_inc(0.2);
+        params.set_entropy_thold(2.4);
+        params.set_logprob_thold(-1.0);
+        params.set_no_speech_thold(0.6);
 
-        println!("[Rust] Running Whisper inference on segment: [{:.2}s - {:.2}s], samples: {}", 
-            start_ms as f64 / 1000.0, end_ms as f64 / 1000.0, samples_16k.len());
-
-        whisper_state.full(current_params, samples_16k)
-            .map_err(|e| anyhow!("Whisper inference error: {:?}", e))?;
-
-        let n_segments = whisper_state.full_n_segments();
-
-        let mut segment_text = String::new();
-        for i in 0..n_segments {
-            if let Some(segment) = whisper_state.get_segment(i) {
-                let text = segment
-                    .to_str_lossy()
-                    .unwrap_or_else(|_| std::borrow::Cow::Borrowed(""))
-                    .into_owned();
-                segment_text.push_str(&text);
-            }
-        }
-
-        let cleaned_text = segment_text.trim().to_string();
-        if !cleaned_text.is_empty() {
-            let mut final_text = deduplicate_repeats(&cleaned_text);
-            if to_simplified {
-                final_text = convert_chinese(final_text, true);
-            }
-
-            if !final_text.is_empty() {
-                if has_repetition_loop(&final_text) {
-                    println!("[Rust] Hallucination loop detected in: '{}'. Clearing rolling prompt.", final_text);
-                    rolling_prompt.clear();
-                    final_text = deduplicate_repeats(&final_text);
-                } else {
-                    rolling_prompt = final_text.clone();
-                    if rolling_prompt.chars().count() > 100 {
-                        let char_vec: Vec<char> = rolling_prompt.chars().collect();
-                        rolling_prompt = char_vec[char_vec.len() - 100 ..].iter().collect();
-                    }
-                }
-
-                let new_seg = TranscriptionSegment {
-                    start_ms,
-                    end_ms,
-                    text: final_text,
-                };
-                all_segments.push(new_seg.clone());
-                let _ = sink.add(TranscriptionEvent::Segment(new_seg));
-            }
-        }
-
-        let progress = ((end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
-        let progress = progress.clamp(0, 100);
-        let _ = sink.add(TranscriptionEvent::Progress(progress));
-
-        Ok(())
-    };
-
-    while let Ok(raw_chunk_48k) = rx.recv() {
-        raw_48k_buf.extend_from_slice(&raw_chunk_48k);
-
-        while raw_48k_buf.len() >= hop_size {
-            let frame_48k: Vec<f32> = raw_48k_buf.drain(..hop_size).collect();
+        while let Ok(task) = whisper_rx.recv() {
+            let WhisperTask { samples: samples_16k, start_ms, end_ms } = task;
             
-            // A. DFN3 Denoise
-            let noisy_arr = ArrayView2::from_shape((1, hop_size), &frame_48k)
-                .map_err(|e| anyhow!("Failed to create ndarray view: {}", e))?;
-            let mut clean_frame_48k = vec![0.0f32; hop_size];
-            {
-                let mut clean_arr = ndarray::ArrayViewMut2::from_shape((1, hop_size), &mut clean_frame_48k)
-                    .map_err(|e| anyhow!("Failed to create ndarray mut view: {}", e))?;
-                df_tract.process(noisy_arr, clean_arr)
-                    .map_err(|e| anyhow!("DFN3 process error: {:?}", e))?;
+            let mut current_params = params.clone();
+            current_params.set_no_context(true);
+            
+            if !rolling_prompt.is_empty() {
+                current_params.set_initial_prompt(&rolling_prompt);
             }
 
-            // B. Rubato Resample (48kHz -> 16kHz)
-            let resampled = resampler.process(&[clean_frame_48k], None)
-                .map_err(|e| anyhow!("Resampling error: {:?}", e))?;
-            let clean_frame_16k = &resampled[0];
+            println!("[Rust] Running Whisper inference on segment: [{:.2}s - {:.2}s], samples: {}", 
+                start_ms as f64 / 1000.0, end_ms as f64 / 1000.0, samples_16k.len());
 
-            if clean_frame_16k.is_empty() {
+            whisper_state.full(current_params, &samples_16k)
+                .map_err(|e| anyhow!("Whisper inference error: {:?}", e))?;
+
+            let n_segments = whisper_state.full_n_segments();
+            let mut segment_text = String::new();
+            for i in 0..n_segments {
+                if let Some(segment) = whisper_state.get_segment(i) {
+                    segment_text.push_str(&segment.to_str_lossy().unwrap_or_default());
+                }
+            }
+
+            let cleaned_text = segment_text.trim().to_string();
+            if !cleaned_text.is_empty() {
+                let mut final_text = deduplicate_repeats(&cleaned_text);
+                if to_simplified { final_text = convert_chinese(final_text, true); }
+
+                if !final_text.is_empty() {
+                    if has_repetition_loop(&final_text) {
+                        println!("[Rust] Hallucination loop detected in: '{}'. Clearing rolling prompt.", final_text);
+                        rolling_prompt.clear();
+                        final_text = deduplicate_repeats(&final_text);
+                    } else {
+                        rolling_prompt.push_str(&final_text);
+                        let char_vec: Vec<char> = rolling_prompt.chars().collect();
+                        if char_vec.len() > 100 {
+                            rolling_prompt = char_vec[char_vec.len() - 100 ..].iter().collect();
+                        }
+                    }
+
+                    let new_seg = TranscriptionSegment { start_ms, end_ms, text: final_text };
+                    all_segments.push(new_seg.clone());
+                    let _ = sink_for_whisper.add(TranscriptionEvent::Segment(new_seg));
+                }
+            }
+
+            let progress = ((end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
+            let _ = sink_for_whisper.add(TranscriptionEvent::Progress(progress.clamp(0, 100)));
+        }
+        
+        let _ = sink_for_whisper.add(TranscriptionEvent::Success(all_segments));
+        Ok(())
+    });
+
+    // ==== 核心线程 1: DFN3 专属降噪线程 ====
+    let df_model_path_clone = df_model_path.clone();
+    let dfn_thread = thread::spawn(move || -> Result<()> {
+        let extracted_dir = extract_tar_gz_if_needed(Path::new(&df_model_path_clone))?;
+        println!("[Rust] Initializing DeepFilterStream from: {:?}", extracted_dir);
+        
+        let mut stream = DeepFilterStream::new(&extracted_dir)
+            .map_err(|e| anyhow!("Failed to create DeepFilterStream: {:?}", e))?;
+        stream.warmup()
+            .map_err(|e| anyhow!("Failed to warmup DeepFilterStream: {:?}", e))?;
+        println!("[Rust] DFN3 ONNX Runtime (ort) initialized.");
+
+        let mut raw_48k_buf: Vec<f32> = Vec::with_capacity(chunk_size_48k * 2);
+
+        while let Ok(raw_chunk_48k) = rx.recv() {
+            raw_48k_buf.extend_from_slice(&raw_chunk_48k);
+
+            while raw_48k_buf.len() >= chunk_size_48k {
+                let process_block: Vec<f32> = raw_48k_buf.drain(..chunk_size_48k).collect();
+                let clean_48k_batch = stream.process(&process_block)
+                    .map_err(|e| anyhow!("DFN3 processing error: {:?}", e))?;
+                
+                if tx_clean_48k.send(clean_48k_batch).is_err() {
+                    break;
+                }
+            }
+        }
+
+        // 处理 EOF 残余
+        if !raw_48k_buf.is_empty() {
+            let remainder = raw_48k_buf.len() % 480;
+            if remainder > 0 {
+                let padding = 480 - remainder;
+                raw_48k_buf.extend(std::iter::repeat(0.0f32).take(padding));
+            }
+            let clean_48k_batch = stream.process(&raw_48k_buf)
+                .map_err(|e| anyhow!("DFN3 EOF processing error: {:?}", e))?;
+            if !clean_48k_batch.is_empty() {
+                let _ = tx_clean_48k.send(clean_48k_batch);
+            }
+        }
+        drop(tx_clean_48k);
+        Ok(())
+    });
+
+    // ==== 核心线程 2: 重采样与 VAD 寻峰线程 ====
+    let vad_thread = thread::spawn(move || -> Result<()> {
+        let resampler_params = SincInterpolationParameters {
+            sinc_len: 64,
+            f_cutoff: 0.95,
+            interpolation: SincInterpolationType::Nearest,
+            oversampling_factor: 128,
+            window: WindowFunction::BlackmanHarris2,
+        };
+        let mut resampler = SincFixedIn::<f32>::new(
+            16000_f64 / 48000_f64,
+            2.0,
+            resampler_params,
+            chunk_size_48k,
+            1,
+        ).map_err(|e| anyhow!("Failed to initialize Rubato resampler: {:?}", e))?;
+
+        let mut audio_buffer: Vec<f32> = Vec::with_capacity(30 * 16000);
+        let mut frame_states: Vec<AudioFrameState> = Vec::with_capacity(1500);
+        let mut current_offset_ms: i64 = 0;
+
+        while let Ok(clean_48k_batch) = rx_clean_48k.recv() {
+            let resampled = match resampler.process(&[&clean_48k_batch], None) {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("[Rust] Resampler error: {:?}", e);
+                    break;
+                }
+            };
+            let clean_block_16k = &resampled[0];
+            
+            if clean_block_16k.is_empty() {
                 continue;
             }
 
-            // C. VAD Update
-            audio_buffer.extend_from_slice(clean_frame_16k);
-
-            let sum_sq: f32 = clean_frame_16k.iter().map(|&s| s * s).sum();
-            let rms = (sum_sq / clean_frame_16k.len() as f32).sqrt();
-            let is_silent = rms < 0.01;
-            frame_states.push(AudioFrameState { rms, is_silent, samples_count: clean_frame_16k.len() });
+            audio_buffer.extend_from_slice(clean_block_16k);
+            for frame_16k in clean_block_16k.chunks(320) {
+                let sum_sq: f32 = frame_16k.iter().map(|&s| s * s).sum();
+                let rms = (sum_sq / frame_16k.len() as f32).sqrt();
+                frame_states.push(AudioFrameState {
+                    rms,
+                    is_silent: rms < 0.01,
+                    samples_count: frame_16k.len(),
+                });
+            }
 
             let mut check_and_cut = true;
             while check_and_cut {
@@ -400,22 +427,22 @@ fn run_stream_pipeline_inner(
                 let current_frames = frame_states.len();
                 let current_secs = current_frames as f32 * 0.02;
 
-                if current_frames < 150 {
+                if current_frames < 500 {
                     break;
                 }
 
                 let mut cut_frame_idx = None;
 
-                if current_secs <= 15.0 {
-                    if let Some((start, end)) = find_silence_sequence(&frame_states, 150, 40) {
+                if current_secs <= 20.0 {
+                    if let Some((start, end)) = find_silence_sequence(&frame_states, 500, 40) {
                         cut_frame_idx = Some(start + (end - start) / 2);
                     }
-                } else if current_secs <= 25.0 {
-                    if let Some((start, end)) = find_silence_sequence(&frame_states, 150, 15) {
+                } else if current_secs <= 28.0 {
+                    if let Some((start, end)) = find_silence_sequence(&frame_states, 500, 15) {
                         cut_frame_idx = Some(start + (end - start) / 2);
                     }
                 } else {
-                    if let Some((start, end)) = find_silence_sequence(&frame_states, 150, 15) {
+                    if let Some((start, end)) = find_silence_sequence(&frame_states, 500, 15) {
                         cut_frame_idx = Some(start + (end - start) / 2);
                     } else if current_frames >= 1400 {
                         let search_range_start = current_frames - 250;
@@ -442,52 +469,36 @@ fn run_stream_pipeline_inner(
                     let end_ms = current_offset_ms + seg_duration_ms;
                     current_offset_ms = end_ms;
 
-                    run_whisper_on_segment(&segment_samples, start_ms, end_ms)?;
+                    if whisper_tx.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
+                        break;
+                    }
                     check_and_cut = true;
                 }
             }
         }
-    }
 
-    // 8. EOF Residuals
-    if !raw_48k_buf.is_empty() {
-        let padding_needed = hop_size - raw_48k_buf.len();
-        raw_48k_buf.extend(std::iter::repeat(0.0f32).take(padding_needed));
-        
-        let noisy_arr = ArrayView2::from_shape((1, hop_size), &raw_48k_buf)
-            .map_err(|e| anyhow!("Failed to create ndarray view: {}", e))?;
-        let mut clean_frame_48k = vec![0.0f32; hop_size];
-        {
-            let mut clean_arr = ndarray::ArrayViewMut2::from_shape((1, hop_size), &mut clean_frame_48k)
-                .map_err(|e| anyhow!("Failed to create ndarray mut view: {}", e))?;
-            df_tract.process(noisy_arr, clean_arr)
-                .map_err(|e| anyhow!("DFN3 process error: {:?}", e))?;
+        if !audio_buffer.is_empty() {
+            let seg_duration_ms = (audio_buffer.len() as f64 / 16000.0 * 1000.0) as i64;
+            let start_ms = current_offset_ms;
+            let end_ms = current_offset_ms + seg_duration_ms;
+            let _ = whisper_tx.send(WhisperTask { samples: audio_buffer, start_ms, end_ms });
         }
 
-        let resampled = resampler.process(&[clean_frame_48k], None)
-            .map_err(|e| anyhow!("Resampling error: {:?}", e))?;
-        let clean_frame_16k = &resampled[0];
-        
-        audio_buffer.extend_from_slice(clean_frame_16k);
-    }
+        drop(whisper_tx);
+        Ok(())
+    });
 
-    if !audio_buffer.is_empty() {
-        let seg_duration_ms = (audio_buffer.len() as f64 / 16000.0 * 1000.0) as i64;
-        let start_ms = current_offset_ms;
-        let end_ms = current_offset_ms + seg_duration_ms;
-        run_whisper_on_segment(&audio_buffer, start_ms, end_ms)?;
-    }
-
-    // 9. Shutdown & wait
-    let _ = pump_thread.join().map_err(|_| anyhow!("Failed to join pump thread"))?;
-    let ffmpeg_status = child.wait().map_err(|e| anyhow!("Failed to wait for FFmpeg: {}", e))?;
-    let stderr_logs = stderr_thread.join().map_err(|_| anyhow!("Failed to join stderr thread"))?;
+    // 9. Shutdown & Wait
+    let _ = pump_thread.join();
+    let ffmpeg_status = child.wait().unwrap();
+    let stderr_logs = stderr_thread.join().unwrap();
+    let _ = dfn_thread.join().map_err(|_| anyhow!("DFN3 thread panicked"))??;
+    let _ = vad_thread.join().map_err(|_| anyhow!("VAD thread panicked"))??;
+    let _ = whisper_thread.join().map_err(|_| anyhow!("Failed to join Whisper GPU thread"))??;
 
     if !ffmpeg_status.success() {
         return Err(anyhow!("FFmpeg exited with error: {:?}\nStderr logs:\n{}", ffmpeg_status.code(), stderr_logs));
     }
-
-    let _ = sink.add(TranscriptionEvent::Success(all_segments));
     
     Ok(())
 }
@@ -516,4 +527,58 @@ fn find_silence_sequence(states: &[AudioFrameState], search_start: usize, min_le
         }
     }
     None
+}
+
+fn extract_tar_gz_if_needed(tar_gz_path: &Path) -> Result<std::path::PathBuf> {
+    let parent = tar_gz_path.parent().ok_or_else(|| anyhow!("No parent dir"))?;
+    let file_stem = tar_gz_path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.replace(".tar.gz", "_extracted"))
+        .ok_or_else(|| anyhow!("Invalid model filename"))?;
+    let dest_dir = parent.join(file_stem);
+    
+    // 检查所有预期的模型文件是否都已存在
+    let expected_files = [
+        "config.ini",
+        "enc_conv_streaming.onnx",
+        "enc_gru_streaming.onnx",
+        "erb_dec_streaming.onnx",
+        "df_dec_streaming.onnx",
+    ];
+    
+    let nested_dir = dest_dir.join("tmp").join("export");
+    let check_dir = if nested_dir.join("config.ini").exists() {
+        &nested_dir
+    } else {
+        &dest_dir
+    };
+    
+    let all_exist = expected_files.iter().all(|name| check_dir.join(name).exists());
+    if all_exist {
+        println!("[Rust] Model already extracted at: {:?}", check_dir);
+        return Ok(check_dir.to_path_buf());
+    }
+    
+    // 如果目标目录已存在，先进行清理，避免残留不完整的解压文件
+    if dest_dir.exists() {
+        let _ = std::fs::remove_dir_all(&dest_dir);
+    }
+    
+    println!("[Rust] Extracting model {:?} to {:?}", tar_gz_path, dest_dir);
+    let _ = std::fs::create_dir_all(&dest_dir);
+    
+    let file = std::fs::File::open(tar_gz_path)
+        .map_err(|e| anyhow!("Failed to open tar.gz: {}", e))?;
+    let tar_file = GzDecoder::new(file);
+    let mut archive = Archive::new(tar_file);
+    archive.unpack(&dest_dir)
+        .map_err(|e| anyhow!("Failed to unpack tarfile: {}", e))?;
+        
+    println!("[Rust] Extraction complete.");
+    
+    if nested_dir.join("config.ini").exists() {
+        Ok(nested_dir)
+    } else {
+        Ok(dest_dir)
+    }
 }
