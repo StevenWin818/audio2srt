@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -13,9 +15,25 @@ import 'ui/settings_view.dart';
 Future<void> main() async {
   // 必须初始化 Rust 绑定库
   WidgetsFlutterBinding.ensureInitialized();
-  await RustLib.init();
+  
+  bool isRustInitialized = false;
+  String initError = '';
+  String initStackTrace = '';
+  
+  try {
+    await RustLib.init();
+    isRustInitialized = true;
+  } catch (e, stackTrace) {
+    debugPrint('Rust initialization failed: $e\n$stackTrace');
+    initError = e.toString();
+    initStackTrace = stackTrace.toString();
+  }
 
-  runApp(const Audio2SrtApp());
+  if (isRustInitialized) {
+    runApp(const Audio2SrtApp());
+  } else {
+    runApp(InitializationErrorApp(error: initError, stackTrace: initStackTrace));
+  }
 }
 
 class Audio2SrtApp extends StatelessWidget {
@@ -122,5 +140,309 @@ class MainShell extends StatelessWidget {
       default:
         return const DashboardView(key: ValueKey('dashboard'));
     }
+  }
+}
+
+class InitializationErrorApp extends StatelessWidget {
+  final String error;
+  final String stackTrace;
+
+  const InitializationErrorApp({
+    super.key,
+    required this.error,
+    required this.stackTrace,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Audio2Srt - 初始化失败',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: const Color(0xFF07070F),
+        colorScheme: const ColorScheme.dark(
+          primary: Color(0xFF8B5CF6),
+          secondary: Color(0xFFEF4444),
+          surface: Color(0xFF131324),
+        ),
+        fontFamily: 'Segoe UI',
+      ),
+      home: InitializationErrorPage(error: error, stackTrace: stackTrace),
+    );
+  }
+}
+
+class InitializationErrorPage extends StatefulWidget {
+  final String error;
+  final String stackTrace;
+
+  const InitializationErrorPage({
+    super.key,
+    required this.error,
+    required this.stackTrace,
+  });
+
+  @override
+  State<InitializationErrorPage> createState() => _InitializationErrorPageState();
+}
+
+class _InitializationErrorPageState extends State<InitializationErrorPage> {
+  bool _showDetails = false;
+  String _copyStatus = '复制详细错误报告';
+  Color _copyStatusColor = const Color(0xFF8B5CF6);
+
+  void _downloadRedistributable() {
+    Process.run('cmd', ['/c', 'start', 'https://aka.ms/vs/17/release/vc_redist.x64.exe']);
+  }
+
+  void _copyToClipboard() {
+    final report = 'Audio2Srt Error Report\n'
+        'Error: ${widget.error}\n\n'
+        'Stack Trace:\n${widget.stackTrace}';
+    Clipboard.setData(ClipboardData(text: report));
+    setState(() {
+      _copyStatus = '复制成功！已存入剪贴板';
+      _copyStatusColor = Colors.green;
+    });
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) {
+        setState(() {
+          _copyStatus = '复制详细错误报告';
+          _copyStatusColor = const Color(0xFF8B5CF6);
+        });
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFF0D0D1E),
+              Color(0xFF07070F),
+              Color(0xFF1A102F),
+            ],
+          ),
+        ),
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(32.0),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 700),
+              padding: const EdgeInsets.all(40.0),
+              decoration: BoxDecoration(
+                color: const Color(0x0CFFFFFF),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: const Color(0x1F8B5CF6)),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x1A000000),
+                    blurRadius: 30,
+                    offset: Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0x1AEF4444),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: const Color(0x3FEF4444)),
+                        ),
+                        child: const Icon(
+                          Icons.gpp_maybe_outlined,
+                          color: Color(0xFFEF4444),
+                          size: 36,
+                        ),
+                      ),
+                      const SizedBox(width: 20),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '底层组件装载失败',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Audio2Srt Initialization Failed',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 32),
+                  const Text(
+                    '可能的原因：',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _buildCauseItem(
+                    '1. 缺少微软 Visual C++ 运行库：',
+                    '这是最常见的问题。如果这是您的新电脑或纯净系统，可能未安装 MSVC 运行库。请点击下方修复按钮进行一键安装。',
+                  ),
+                  const SizedBox(height: 10),
+                  _buildCauseItem(
+                    '2. 显卡 Vulkan 驱动兼容性问题：',
+                    '本软件核心使用 Vulkan GPU 加速，核显驱动损坏或过旧会导致库加载闪退。',
+                  ),
+                  const SizedBox(height: 32),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _downloadRedistributable,
+                          icon: const Icon(Icons.download_for_offline_outlined),
+                          label: const Text(
+                            '一键修复：下载 VC++ 运行库',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF8B5CF6),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 18),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 0,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _copyToClipboard,
+                          icon: const Icon(Icons.copy_outlined),
+                          label: Text(
+                            _copyStatus,
+                            style: TextStyle(
+                              color: _copyStatusColor,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: Color(0x3F8B5CF6)),
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  const Divider(color: Color(0x1FFFFFFF)),
+                  const SizedBox(height: 12),
+                  InkWell(
+                    onTap: () {
+                      setState(() {
+                        _showDetails = !_showDetails;
+                      });
+                    },
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            '查看详细崩溃日志与错误堆栈',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Icon(
+                            _showDetails ? Icons.expand_less : Icons.expand_more,
+                            color: Colors.grey,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (_showDetails) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0x05FFFFFF),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0x0FFFFFFF)),
+                      ),
+                      child: SelectableText(
+                        'Error Info:\n${widget.error}\n\nStack Trace:\n${widget.stackTrace}',
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          color: Color(0xFFEF4444),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCauseItem(String title, String desc) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFFA78BFA),
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          desc,
+          style: TextStyle(
+            fontSize: 12,
+            height: 1.5,
+            color: Colors.grey[300],
+          ),
+        ),
+      ],
+    );
   }
 }

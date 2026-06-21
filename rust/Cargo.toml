@@ -22,7 +22,7 @@ tract-core = "=0.21.4"
 tract-onnx = "=0.21.4"
 crossbeam-channel = "0.5"
 core_affinity = "0.8"
-windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", features = ["Win32_System_Threading", "Win32_System_LibraryLoader"] }
 
 
 [features]
@@ -39,6 +39,6 @@ debug-assertions = false
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-panic = "abort"
-strip = true
+# panic = "abort"
+# strip = true
 

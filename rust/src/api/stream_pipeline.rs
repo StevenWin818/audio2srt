@@ -157,6 +157,24 @@ fn run_stream_pipeline_inner(
     println!("[Rust] Loading Whisper model context...");
     let mut ctx_params = WhisperContextParameters::default();
     
+    // Enable DTW mode using the model preset if available
+    let dtw_preset = get_dtw_model_preset(&model_path);
+    if let Some(preset) = dtw_preset {
+        println!("[Rust] DTW alignment enabled with preset for model: {}", model_path);
+        let num_samples = (total_duration * 16000.0) as usize;
+        let mem_size = calculate_dtw_mem_size(num_samples);
+        ctx_params.dtw_parameters(whisper_rs::DtwParameters {
+            mode: whisper_rs::DtwMode::ModelPreset { model_preset: preset },
+            dtw_mem_size: mem_size,
+        });
+    } else {
+        println!("[Rust] DTW alignment disabled (no preset for model: {})", model_path);
+        ctx_params.dtw_parameters(whisper_rs::DtwParameters {
+            mode: whisper_rs::DtwMode::None,
+            dtw_mem_size: 0,
+        });
+    }
+    
     let mut selected_device_name = "CPU".to_string();
     if use_gpu {
         #[cfg(feature = "vulkan")]
@@ -182,6 +200,8 @@ fn run_stream_pipeline_inner(
                 }
             }
         }
+    } else {
+        ctx_params.use_gpu = false;
     }
     println!("[Rust] Hardware device for Whisper: {}", selected_device_name);
 
@@ -292,7 +312,6 @@ fn run_stream_pipeline_inner(
         #[cfg(target_os = "windows")]
         register_thread_as_pro_audio();
 
-        let mut rolling_prompt = String::new();
         let mut last_emitted_text = String::new();
         let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
         
@@ -311,18 +330,22 @@ fn run_stream_pipeline_inner(
         params.set_entropy_thold(2.4);
         params.set_logprob_thold(-1.0);
         params.set_no_speech_thold(0.6);
+        params.set_single_segment(false);
 
         while let Ok(task) = whisper_rx.recv() {
-            let WhisperTask { samples: samples_16k, start_ms, end_ms } = task;
+            let WhisperTask { samples: mut samples_16k, start_ms, end_ms } = task;
             
             // 【核心修改4：跳过纯静音推理】
             if !samples_16k.is_empty() {
-                let mut current_params = params.clone();
-                current_params.set_no_context(true);
-                
-                if !rolling_prompt.is_empty() {
-                    current_params.set_initial_prompt(&rolling_prompt);
+                // 强行对超短音频使用静音填充以保护 DTW 机制
+                const MIN_SAMPLES_FOR_DTW: usize = 8000; // 16kHz 下 0.5 秒 = 8000 个采样点
+                if samples_16k.len() < MIN_SAMPLES_FOR_DTW {
+                    println!("[Rust] ⚠️ 拦截到超短音频 ({} samples), 已自动静音填充至 0.5s 以保护 DTW。", samples_16k.len());
+                    samples_16k.resize(MIN_SAMPLES_FOR_DTW, 0.0);
                 }
+
+                let mut current_params = params.clone();
+                current_params.set_no_context(false);
 
                 println!("[Rust] Running Whisper inference on segment: [{:.2}s - {:.2}s], samples: {}", 
                     start_ms as f64 / 1000.0, end_ms as f64 / 1000.0, samples_16k.len());
@@ -348,16 +371,15 @@ fn run_stream_pipeline_inner(
                         }
 
                         if !final_text.is_empty() {
-                            let cleaned_current = clean_punctuation_and_whitespace(&final_text);
-                            let cleaned_last = clean_punctuation_and_whitespace(&last_emitted_text);
+                            let cleaned_current = clean_punctuation_and_whitespace(strip_leading_list_markers(&final_text));
+                            let cleaned_last = clean_punctuation_and_whitespace(strip_leading_list_markers(&last_emitted_text));
 
                             let is_cross_segment_dup = !cleaned_current.is_empty() && cleaned_current == cleaned_last;
                             let duration_cents = segment.end_timestamp() - segment.start_timestamp();
                             let is_integer_seconds = duration_cents > 0 && duration_cents % 100 == 0;
 
                             if is_cross_segment_dup {
-                                println!("[Rust] 检测到跨段/子句重复: '{}'。清理滑动提示词。", final_text);
-                                rolling_prompt.clear();
+                                println!("[Rust] 检测到跨段/子句重复: '{}'。", final_text);
                                 if cleaned_current.chars().count() >= 4 || is_integer_seconds {
                                     println!("[Rust] 判定为长句/整秒幻觉，丢弃该片段。");
                                     continue;
@@ -366,8 +388,7 @@ fn run_stream_pipeline_inner(
 
                             let has_rep = has_repetition_loop(&cleaned_current);
                             if has_rep {
-                                println!("[Rust] 检测到子句内幻觉循环: '{}'。清理滑动提示词并去重。", final_text);
-                                rolling_prompt.clear();
+                                println!("[Rust] 检测到子句内幻觉循环: '{}'。进行去重。", final_text);
                                 final_text = deduplicate_repeats(&final_text);
                                 if final_text.is_empty() {
                                     continue;
@@ -376,11 +397,7 @@ fn run_stream_pipeline_inner(
 
                             last_emitted_text = final_text.clone();
 
-                            rolling_prompt.push_str(&final_text);
-                            let char_vec: Vec<char> = rolling_prompt.chars().collect();
-                            if char_vec.len() > 100 {
-                                rolling_prompt = char_vec[char_vec.len() - 100 ..].iter().collect();
-                            }
+                            // 不再向 rolling_prompt 追加文本，依靠 whisper.cpp 的原生 token 级上下文连接
 
                             let new_seg = TranscriptionSegment {
                                 start_ms: sub_start_ms,
@@ -977,5 +994,96 @@ fn set_thread_affinity_mask(mask: usize) {
     use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadAffinityMask};
     unsafe {
         SetThreadAffinityMask(GetCurrentThread(), mask);
+    }
+}
+
+fn strip_leading_list_markers(text: &str) -> &str {
+    let chars: Vec<char> = text.chars().collect();
+    let mut start_idx = 0;
+    
+    // 过滤开头的数字、字母以及常见的列表标点、空格等分隔符
+    while start_idx < chars.len() {
+        let c = chars[start_idx];
+        if c.is_ascii_digit() 
+            || c.is_ascii_alphabetic()
+            || c.is_whitespace() 
+            || c == '.' 
+            || c == '、' 
+            || c == '-' 
+            || c == ']' 
+            || c == '[' 
+            || c == ')' 
+            || c == '(' 
+            || c == ':' 
+            || c == '：' 
+        {
+            start_idx += 1;
+        } else {
+            break;
+        }
+    }
+    
+    // 如果整个字符串全部由数字/列表标记组成（例如 "123" 或 "A."），则保留原样不截断
+    if start_idx < chars.len() {
+        let mut byte_idx = 0;
+        for i in 0..start_idx {
+            byte_idx += chars[i].len_utf8();
+        }
+        &text[byte_idx..]
+    } else {
+        text
+    }
+}
+
+fn calculate_dtw_mem_size(num_samples: usize) -> usize {
+    const FRAME_SAMPLES: usize = 160;
+    let num_frames = (num_samples + FRAME_SAMPLES - 1) / FRAME_SAMPLES;
+
+    const BYTES_F32: usize = 4;
+    const BYTES_I32: usize = 4;
+    const LANES: usize = 4;
+
+    let band_frames = match num_frames {
+        0..=15_000 => 96,
+        15_001..=45_000 => 128,
+        _ => 160,
+    };
+
+    let dp_bytes = num_frames
+        .saturating_mul(band_frames)
+        .saturating_mul(LANES)
+        .saturating_mul(BYTES_F32);
+
+    let bt_bytes = num_frames
+        .saturating_mul(BYTES_I32);
+
+    const BASELINE_MB: usize = 24;
+    let base_bytes = BASELINE_MB * 1024 * 1024;
+
+    let total = base_bytes
+        .saturating_add(dp_bytes)
+        .saturating_add(bt_bytes);
+
+    let min_bytes = 24 * 1024 * 1024;
+    let max_bytes = 768 * 1024 * 1024;
+    let clamped = total.clamp(min_bytes, max_bytes);
+
+    const ALIGN: usize = 8 * 1024 * 1024;
+    (clamped + (ALIGN - 1)) & !(ALIGN - 1)
+}
+
+fn get_dtw_model_preset(model_path: &str) -> Option<whisper_rs::DtwModelPreset> {
+    let path_lower = model_path.to_lowercase();
+    if path_lower.contains("medium.en") {
+        Some(whisper_rs::DtwModelPreset::MediumEn)
+    } else if path_lower.contains("medium") {
+        Some(whisper_rs::DtwModelPreset::Medium)
+    } else if path_lower.contains("large-v3-turbo") {
+        Some(whisper_rs::DtwModelPreset::LargeV3Turbo)
+    } else if path_lower.contains("large") {
+        Some(whisper_rs::DtwModelPreset::LargeV3)
+    } else {
+        // Disabling DTW for tiny, base, and small models to prevent median filter width ne[2] assertion crash.
+        None
     }
 }

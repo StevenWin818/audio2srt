@@ -1,7 +1,7 @@
 use crate::frb_generated::StreamSink;
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperSysContext,
-    WhisperSysState,
+    WhisperSysState, DtwParameters, DtwMode, DtwModelPreset,
 };
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -79,24 +79,108 @@ pub struct HardwareAccelerationInfo {
     pub devices: Vec<VulkanDeviceInfo>,
 }
 
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct DISPLAY_DEVICEA {
+    cb: u32,
+    device_name: [u8; 32],
+    device_string: [u8; 128],
+    state_flags: u32,
+    device_id: [u8; 128],
+    device_key: [u8; 128],
+}
+
+#[cfg(target_os = "windows")]
+extern "system" {
+    fn LoadLibraryA(lpLibFileName: *const u8) -> isize;
+    fn FreeLibrary(hLibModule: isize) -> i32;
+    fn EnumDisplayDevicesA(
+        lpDevice: *const u8,
+        iDevNum: u32,
+        lpDisplayDevice: *mut DISPLAY_DEVICEA,
+        dwFlags: u32,
+    ) -> i32;
+}
+
+#[cfg(target_os = "windows")]
+fn check_vulkan_supported_safely() -> bool {
+    unsafe {
+        println!("[Rust] Safe Vulkan Check: Loading vulkan-1.dll...");
+        let module = LoadLibraryA(b"vulkan-1.dll\0".as_ptr());
+        if module == 0 {
+            println!("[Rust] Safe Vulkan Check: vulkan-1.dll not found in system paths.");
+            return false;
+        }
+        FreeLibrary(module);
+
+        // 枚举 Windows 显示适配器名称，排除 Microsoft 默认基本适配器以校验是否存在真实图形驱动
+        let mut dd = DISPLAY_DEVICEA {
+            cb: std::mem::size_of::<DISPLAY_DEVICEA>() as u32,
+            device_name: [0; 32],
+            device_string: [0; 128],
+            state_flags: 0,
+            device_id: [0; 128],
+            device_key: [0; 128],
+        };
+
+        let mut found_real_gpu = false;
+        let mut i = 0;
+        while EnumDisplayDevicesA(std::ptr::null(), i, &mut dd, 0) != 0 {
+            if (dd.state_flags & 0x1) != 0 { // DISPLAY_DEVICE_ACTIVE = 1
+                let device_str = std::ffi::CStr::from_ptr(dd.device_string.as_ptr() as *const i8)
+                    .to_string_lossy()
+                    .to_lowercase();
+                println!("[Rust] Safe Vulkan Check: Active display adapter: {}", device_str);
+                if !device_str.contains("basic display") && !device_str.contains("basic render") {
+                    found_real_gpu = true;
+                }
+            }
+            i += 1;
+        }
+
+        if !found_real_gpu {
+            println!("[Rust] Safe Vulkan Check: Only Microsoft Basic Display adapter detected. Vulkan disabled.");
+            return false;
+        }
+
+        println!("[Rust] Safe Vulkan Check: Real hardware GPU adapter is active. Vulkan check passed.");
+        true
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn check_vulkan_supported_safely() -> bool {
+    true
+}
+
 pub fn get_hardware_acceleration_info() -> HardwareAccelerationInfo {
     #[cfg(feature = "vulkan")]
     {
-        println!("[Rust] Querying Vulkan devices...");
-        let devices = whisper_rs::vulkan::list_devices();
-        let is_vulkan_available = !devices.is_empty();
-        let mapped_devices = devices
-            .into_iter()
-            .map(|d| VulkanDeviceInfo {
-                id: d.id,
-                name: d.name,
-                total_vram_bytes: d.vram.total as u64,
-            })
-            .collect();
-        println!("[Rust] Vulkan support: {}, devices: {:?}", is_vulkan_available, mapped_devices);
-        HardwareAccelerationInfo {
-            is_vulkan_available,
-            devices: mapped_devices,
+        let is_vulkan_safe = check_vulkan_supported_safely();
+
+        if is_vulkan_safe {
+            println!("[Rust] Querying Vulkan devices...");
+            let devices = whisper_rs::vulkan::list_devices();
+            let is_vulkan_available = !devices.is_empty();
+            let mapped_devices = devices
+                .into_iter()
+                .map(|d| VulkanDeviceInfo {
+                    id: d.id,
+                    name: d.name,
+                    total_vram_bytes: d.vram.total as u64,
+                })
+                .collect();
+            println!("[Rust] Vulkan support: {}, devices: {:?}", is_vulkan_available, mapped_devices);
+            HardwareAccelerationInfo {
+                is_vulkan_available,
+                devices: mapped_devices,
+            }
+        } else {
+            println!("[Rust] Vulkan check failed. Bypassing Vulkan device listing to prevent crash.");
+            HardwareAccelerationInfo {
+                is_vulkan_available: false,
+                devices: vec![],
+            }
         }
     }
     #[cfg(not(feature = "vulkan"))]
@@ -666,9 +750,32 @@ pub(crate) fn run_transcription_inner(
     }
     println!("[Rust] Loaded {} audio samples ({:.2} seconds)", samples.len(), samples.len() as f64 / 16000.0);
 
+    // 确保音频总长度不少于 0.5 秒以防崩溃
+    if samples.len() < 8000 {
+        println!("[Rust] ⚠️ 整体音频过短 ({} samples), 已自动静音填充至 0.5s 以保护 DTW。", samples.len());
+        samples.resize(8000, 0.0);
+    }
+
     // 2. 加载模型上下文
     println!("[Rust] Loading Whisper model context (use_gpu={})...", use_gpu);
     let mut ctx_params = WhisperContextParameters::default();
+    
+    // Enable DTW mode using the model preset if available
+    let dtw_preset = get_dtw_model_preset(&model_path);
+    if let Some(preset) = dtw_preset {
+        println!("[Rust] DTW alignment enabled with preset for model: {}", model_path);
+        let mem_size = calculate_dtw_mem_size(samples.len());
+        ctx_params.dtw_parameters(DtwParameters {
+            mode: DtwMode::ModelPreset { model_preset: preset },
+            dtw_mem_size: mem_size,
+        });
+    } else {
+        println!("[Rust] DTW alignment disabled (no preset for model: {})", model_path);
+        ctx_params.dtw_parameters(DtwParameters {
+            mode: DtwMode::None,
+            dtw_mem_size: 0,
+        });
+    }
     
     let mut selected_device_name = "CPU".to_string();
     if use_gpu {
@@ -813,7 +920,15 @@ pub(crate) fn run_transcription_inner(
         #[allow(unused_assignments)]
         for (idx, &(start_sample, end_sample)) in speech_segments.iter().enumerate() {
             progress_ctx.current_segment = idx;
-            let segment_samples = &samples[start_sample..end_sample];
+            
+            // 提取为可变的 Vector 并强行对超短音频使用静音填充以保护 DTW 机制
+            let mut segment_samples = samples[start_sample..end_sample].to_vec();
+            const MIN_SAMPLES_FOR_DTW: usize = 8000; // 16kHz 下 0.5 秒 = 8000 个采样点
+            if segment_samples.len() < MIN_SAMPLES_FOR_DTW {
+                println!("[Rust] ⚠️ 拦截到超短音频 ({} samples), 已自动静音填充至 0.5s 以保护 DTW。", segment_samples.len());
+                segment_samples.resize(MIN_SAMPLES_FOR_DTW, 0.0);
+            }
+            
             let global_offset_ms = (start_sample as i64) / 16;
             
             println!(
@@ -836,7 +951,7 @@ pub(crate) fn run_transcription_inner(
                 current_params.set_initial_prompt(&rolling_prompt);
             }
 
-            state.full(current_params, segment_samples).map_err(|e| {
+            state.full(current_params, &segment_samples).map_err(|e| {
                 let err_msg = format!("VAD 分段转写推理失败 (序号 {}): {}", idx + 1, e);
                 println!("[Rust] {}", err_msg);
                 err_msg
@@ -934,7 +1049,7 @@ pub(crate) fn run_transcription_inner(
 
                 println!("[Rust] 正在执行回退推理: temp={:.2} (无 prompt)", fallback_temp);
 
-                state.full(fallback_params, segment_samples).map_err(|e| {
+                state.full(fallback_params, &segment_samples).map_err(|e| {
                     let err_msg = format!("VAD 分段回退推理失败 (序号 {}): {}", idx + 1, e);
                     println!("[Rust] {}", err_msg);
                     err_msg
@@ -1059,4 +1174,57 @@ pub(crate) fn run_transcription_inner(
     callback(TranscriptionEvent::Success(combined_segments));
     
     Ok(())
+}
+
+fn calculate_dtw_mem_size(num_samples: usize) -> usize {
+    const FRAME_SAMPLES: usize = 160;
+    let num_frames = (num_samples + FRAME_SAMPLES - 1) / FRAME_SAMPLES;
+
+    const BYTES_F32: usize = 4;
+    const BYTES_I32: usize = 4;
+    const LANES: usize = 4;
+
+    let band_frames = match num_frames {
+        0..=15_000 => 96,
+        15_001..=45_000 => 128,
+        _ => 160,
+    };
+
+    let dp_bytes = num_frames
+        .saturating_mul(band_frames)
+        .saturating_mul(LANES)
+        .saturating_mul(BYTES_F32);
+
+    let bt_bytes = num_frames
+        .saturating_mul(BYTES_I32);
+
+    const BASELINE_MB: usize = 24;
+    let base_bytes = BASELINE_MB * 1024 * 1024;
+
+    let total = base_bytes
+        .saturating_add(dp_bytes)
+        .saturating_add(bt_bytes);
+
+    let min_bytes = 24 * 1024 * 1024;
+    let max_bytes = 768 * 1024 * 1024;
+    let clamped = total.clamp(min_bytes, max_bytes);
+
+    const ALIGN: usize = 8 * 1024 * 1024;
+    (clamped + (ALIGN - 1)) & !(ALIGN - 1)
+}
+
+fn get_dtw_model_preset(model_path: &str) -> Option<DtwModelPreset> {
+    let path_lower = model_path.to_lowercase();
+    if path_lower.contains("medium.en") {
+        Some(DtwModelPreset::MediumEn)
+    } else if path_lower.contains("medium") {
+        Some(DtwModelPreset::Medium)
+    } else if path_lower.contains("large-v3-turbo") {
+        Some(DtwModelPreset::LargeV3Turbo)
+    } else if path_lower.contains("large") {
+        Some(DtwModelPreset::LargeV3)
+    } else {
+        // Disabling DTW for tiny, base, and small models to prevent median filter width ne[2] assertion crash.
+        None
+    }
 }
