@@ -115,6 +115,7 @@ abstract class RustLibApi extends BaseApi {
 
   Stream<TranscriptionEvent> crateApiWhisperTranscribe({
     required String modelPath,
+    required String vadModelPath,
     required String audioPath,
     String? language,
     required bool translate,
@@ -136,6 +137,7 @@ abstract class RustLibApi extends BaseApi {
     required String ffmpegPath,
     required String inputPath,
     required String modelPath,
+    required String vadModelPath,
     required String dfModelPath,
     String? language,
     required bool translate,
@@ -449,6 +451,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Stream<TranscriptionEvent> crateApiWhisperTranscribe({
     required String modelPath,
+    required String vadModelPath,
     required String audioPath,
     String? language,
     required bool translate,
@@ -473,6 +476,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             final serializer = SseSerializer(generalizedFrbRustBinding);
             sse_encode_StreamSink_transcription_event_Sse(sink, serializer);
             sse_encode_String(modelPath, serializer);
+            sse_encode_String(vadModelPath, serializer);
             sse_encode_String(audioPath, serializer);
             sse_encode_opt_String(language, serializer);
             sse_encode_bool(translate, serializer);
@@ -503,6 +507,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           argValues: [
             sink,
             modelPath,
+            vadModelPath,
             audioPath,
             language,
             translate,
@@ -531,6 +536,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     argNames: [
       "sink",
       "modelPath",
+      "vadModelPath",
       "audioPath",
       "language",
       "translate",
@@ -554,6 +560,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String ffmpegPath,
     required String inputPath,
     required String modelPath,
+    required String vadModelPath,
     required String dfModelPath,
     String? language,
     required bool translate,
@@ -576,6 +583,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_encode_String(ffmpegPath, serializer);
             sse_encode_String(inputPath, serializer);
             sse_encode_String(modelPath, serializer);
+            sse_encode_String(vadModelPath, serializer);
             sse_encode_String(dfModelPath, serializer);
             sse_encode_opt_String(language, serializer);
             sse_encode_bool(translate, serializer);
@@ -604,6 +612,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             ffmpegPath,
             inputPath,
             modelPath,
+            vadModelPath,
             dfModelPath,
             language,
             translate,
@@ -631,6 +640,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "ffmpegPath",
           "inputPath",
           "modelPath",
+          "vadModelPath",
           "dfModelPath",
           "language",
           "translate",

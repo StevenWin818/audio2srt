@@ -2,6 +2,7 @@ use crate::frb_generated::StreamSink;
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperSysContext,
     WhisperSysState, DtwParameters, DtwMode, DtwModelPreset,
+    WhisperVadContext, WhisperVadContextParams, WhisperVadParams,
 };
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -225,164 +226,7 @@ unsafe extern "C" fn progress_callback_trampoline(
     }
 }
 
-/// 基于能量（RMS）的轻量级端点检测（VAD）算法
-fn energy_based_vad(
-    samples: &[f32],
-    sample_rate: usize,
-    threshold: f32,
-    min_speech_ms: i32,
-    min_silence_ms: i32,
-) -> Vec<(usize, usize)> {
-    let window_ms = 30i32;
-    let window_size = (sample_rate * window_ms as usize) / 1000; // 30ms = 480 个采样点
-    if window_size == 0 || samples.len() < window_size {
-        return vec![(0, samples.len())];
-    }
 
-    // 计算全局能量用于自适应阈值
-    let mut global_sum_sq = 0.0;
-    // 每隔一定步长采样，加速计算
-    let step = 10.max(samples.len() / 100000);
-    let mut count = 0;
-    for i in (0..samples.len()).step_by(step) {
-        global_sum_sq += samples[i] * samples[i];
-        count += 1;
-    }
-    let global_rms = if count > 0 { (global_sum_sq / count as f32).sqrt() } else { 0.0 };
-    // 动态阈值：取用户设定阈值和 (全局能量的 0.6 倍 + 0.005) 的较小值
-    // 这能有效防止对于整体音量偏小的音频使用固定 0.05 导致大面积误判
-    let adaptive_threshold = threshold.min(global_rms * 0.6 + 0.005);
-    println!("[Rust] VAD global RMS: {:.4}, original threshold: {:.4}, adaptive threshold: {:.4}", global_rms, threshold, adaptive_threshold);
-
-    let min_speech_windows = (min_speech_ms / window_ms) as usize;
-    let min_silence_windows = (min_silence_ms / window_ms) as usize;
-
-    let num_windows = samples.len() / window_size;
-    let mut window_activities = vec![false; num_windows];
-
-    for i in 0..num_windows {
-        let start = i * window_size;
-        let end = start + window_size;
-        let window_slice = &samples[start..end];
-        let mut sum_sq = 0.0;
-        for &s in window_slice {
-            sum_sq += s * s;
-        }
-        let rms = (sum_sq / window_size as f32).sqrt();
-        window_activities[i] = rms >= adaptive_threshold;
-    }
-
-    let mut segments = Vec::new();
-    let mut in_speech = false;
-    let mut speech_start_window = 0;
-    let mut consecutive_silence_windows = 0;
-    let mut consecutive_speech_windows = 0;
-
-    for i in 0..num_windows {
-        let is_active = window_activities[i];
-        if !in_speech {
-            if is_active {
-                consecutive_speech_windows += 1;
-                if consecutive_speech_windows >= min_speech_windows {
-                    in_speech = true;
-                    speech_start_window = i + 1 - consecutive_speech_windows;
-                    consecutive_silence_windows = 0;
-                }
-            } else {
-                consecutive_speech_windows = 0;
-            }
-        } else {
-            if !is_active {
-                consecutive_silence_windows += 1;
-                if consecutive_silence_windows >= min_silence_windows {
-                    in_speech = false;
-                    let speech_end_window = i + 1 - consecutive_silence_windows;
-                    segments.push((speech_start_window * window_size, speech_end_window * window_size));
-                    consecutive_speech_windows = 0;
-                }
-            } else {
-                consecutive_silence_windows = 0;
-            }
-        }
-    }
-
-    if in_speech {
-        segments.push((speech_start_window * window_size, samples.len()));
-    }
-
-    segments
-}
-
-/// 将过长的 VAD 语音分段以自然停顿（RMS 能量最低点）为边界，切割成最长 max_speech_ms 的子分段，防止熔断级联丢弃
-fn split_long_segments(
-    segments: Vec<(usize, usize)>,
-    samples: &[f32],
-    sample_rate: usize,
-    max_speech_ms: i32,
-    search_window_ms: i32,
-) -> Vec<(usize, usize)> {
-    let max_samples = (sample_rate * max_speech_ms as usize) / 1000;
-    let search_samples = (sample_rate * search_window_ms as usize) / 1000;
-    let window_ms = 30;
-    let window_size = (sample_rate * window_ms) / 1000;
-
-    let mut result = Vec::new();
-
-    for (start, end) in segments {
-        let len = end - start;
-        if len <= max_samples {
-            result.push((start, end));
-            continue;
-        }
-
-        // 需要分割长片段
-        let mut curr_start = start;
-        while curr_start < end {
-            let remaining = end - curr_start;
-            if remaining <= max_samples {
-                result.push((curr_start, end));
-                break;
-            }
-
-            // 寻找分割点：在 [curr_start + max_samples - search_samples, curr_start + max_samples] 范围内
-            let search_start = curr_start + max_samples - search_samples;
-            let search_end = curr_start + max_samples;
-            
-            // 确保不超出边界
-            let search_start = search_start.clamp(curr_start, end);
-            let search_end = search_end.clamp(curr_start, end);
-
-            if search_start >= search_end {
-                result.push((curr_start, end));
-                break;
-            }
-
-            // 在该范围内以 30ms 窗口寻找音能（RMS）最低的点作为分割点
-            let mut min_rms = f32::MAX;
-            let mut best_split_sample = curr_start + max_samples - search_samples / 2; // 默认中点
-
-            let mut check_start = search_start;
-            while check_start + window_size <= search_end {
-                let window_slice = &samples[check_start..check_start + window_size];
-                let mut sum_sq = 0.0;
-                for &s in window_slice {
-                    sum_sq += s * s;
-                }
-                let rms = (sum_sq / window_size as f32).sqrt();
-                if rms < min_rms {
-                    min_rms = rms;
-                    best_split_sample = check_start + window_size; // 分割在窗口结束处
-                }
-                check_start += window_size;
-            }
-
-            result.push((curr_start, best_split_sample));
-            curr_start = best_split_sample;
-        }
-    }
-
-    result
-}
 
 pub fn convert_chinese(text: String, to_simplified: bool) -> String {
     let target = if to_simplified { zhconv::Variant::ZhCN } else { zhconv::Variant::ZhTW };
@@ -394,265 +238,10 @@ pub fn convert_chinese_list(texts: Vec<String>, to_simplified: bool) -> Vec<Stri
     texts.into_iter().map(|text| zhconv::zhconv(&text, target)).collect()
 }
 
-/// 清洗文本中的标点符号与空格以实现精确的比对
-pub(crate) fn clean_punctuation_and_whitespace(text: &str) -> String {
-    text.replace(|c: char| {
-        c.is_ascii_punctuation()
-            || c.is_whitespace()
-            || c == '。'
-            || c == '，'
-            || c == '！'
-            || c == '？'
-            || c == '、'
-            || c == '“'
-            || c == '”'
-            || c == '；'
-            || c == '：'
-    }, "")
-}
-
-/// 检测字符串是否包含高频/长句子的连续重复循环（幻觉）
-pub(crate) fn has_repetition_loop(text: &str) -> bool {
-    let chars: Vec<char> = text.chars().collect();
-    let n = chars.len();
-    if n < 4 {
-        return false;
-    }
-
-    // 1. 检测长短语连续重复：长度 L >= 4 的子串，连续重复出现 2 次及以上
-    for len in 4..=(n / 2) {
-        for i in 0..=(n - 2 * len) {
-            let sub1 = &chars[i..i+len];
-            let sub2 = &chars[i+len..i+2*len];
-            if sub1 == sub2 {
-                let first_char = sub1[0];
-                if sub1.iter().all(|&c| c == first_char) {
-                    continue;
-                }
-                return true;
-            }
-        }
-    }
-
-    // 2. 检测单字或双字短语的高频连续重复
-    // 单字连续重复 5 次及以上
-    let mut consecutive_single = 1;
-    let mut last_char = ' ';
-    for &c in &chars {
-        if c.is_whitespace() {
-            continue;
-        }
-        if c == last_char {
-            consecutive_single += 1;
-            if consecutive_single >= 5 {
-                return true;
-            }
-        } else {
-            consecutive_single = 1;
-            last_char = c;
-        }
-    }
-
-    // 双字词组连续重复 4 次及以上
-    if n >= 8 {
-        for i in 0..=(n - 8) {
-            let w1 = &chars[i..i+2];
-            let w2 = &chars[i+2..i+4];
-            let w3 = &chars[i+4..i+6];
-            let w4 = &chars[i+6..i+8];
-            if w1 == w2 && w2 == w3 && w3 == w4 {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
-/// 对文本中连续重复的部分进行去重，保留最多 1 次（长段）或 2 次（单字/双字）
-pub(crate) fn deduplicate_repeats(text: &str) -> String {
-    let mut chars: Vec<char> = text.chars().collect();
-    let mut changed = true;
-
-    while changed {
-        changed = false;
-        let n = chars.len();
-        if n < 8 {
-            break;
-        }
-
-        // 优先排重长度较大的子串，保证段落去重完整性
-        'outer: for len in (4..=(n / 2)).rev() {
-            for i in 0..=(n - 2 * len) {
-                let sub1 = &chars[i..i+len];
-                let sub2 = &chars[i+len..i+2*len];
-                if sub1 == sub2 {
-                    let first_char = sub1[0];
-                    if sub1.iter().all(|&c| c == first_char) {
-                        continue;
-                    }
-                    chars.drain(i+len..i+2*len);
-                    changed = true;
-                    break 'outer;
-                }
-            }
-        }
-    }
-
-    // 对单字/双字高频连续重复进行去重（最多保留 2 个）
-    // 单字
-    let mut i = 0;
-    while i < chars.len() {
-        let mut count = 1;
-        while i + count < chars.len() && chars[i + count] == chars[i] && !chars[i].is_whitespace() {
-            count += 1;
-        }
-        if count >= 3 {
-            chars.drain(i + 2 .. i + count);
-        }
-        i += 1;
-    }
-
-    // 双字
-    let mut j = 0;
-    while j + 4 <= chars.len() {
-        let w1 = chars[j..j+2].to_vec();
-        let w2 = chars[j+2..j+4].to_vec();
-        if w1 == w2 {
-            let mut count = 2;
-            while j + 2 * (count + 1) <= chars.len() && chars[j + 2 * count .. j + 2 * (count + 1)] == w1 {
-                count += 1;
-            }
-            if count >= 3 {
-                chars.drain(j + 4 .. j + 2 * count);
-            }
-        }
-        j += 1;
-    }
-
-    chars.into_iter().collect()
-}
-
-/// 对文本按标点/空格拆分为短语，并进行短语级连续重复去重
-fn deduplicate_phrases(text: &str) -> String {
-    let mut phrases = Vec::new();
-    let mut current_phrase = String::new();
-    let mut separators = Vec::new();
-
-    for c in text.chars() {
-        let is_sep = c.is_ascii_punctuation()
-            || c.is_whitespace()
-            || c == '。'
-            || c == '，'
-            || c == '！'
-            || c == '？'
-            || c == '、'
-            || c == '“'
-            || c == '”'
-            || c == '；'
-            || c == '：';
-        
-        if is_sep {
-            if !current_phrase.trim().is_empty() {
-                phrases.push(current_phrase.clone());
-                current_phrase.clear();
-                separators.push(c.to_string());
-            } else if !separators.is_empty() {
-                if let Some(last_sep) = separators.last_mut() {
-                    last_sep.push(c);
-                }
-            }
-        } else {
-            current_phrase.push(c);
-        }
-    }
-    if !current_phrase.trim().is_empty() {
-        phrases.push(current_phrase);
-        separators.push(String::new());
-    }
-
-    if phrases.is_empty() {
-        return text.to_string();
-    }
-
-    let mut i = 0;
-    while i < phrases.len() {
-        let mut found_dup = false;
-        let max_len = (phrases.len() - i) / 2;
-        
-        for len in (1..=max_len).rev() {
-            let sub1 = &phrases[i..i+len];
-            let sub2 = &phrases[i+len..i+2*len];
-            
-            let match_count = sub1.iter().zip(sub2.iter()).filter(|(s1, s2)| {
-                let c1 = clean_punctuation_and_whitespace(s1);
-                let c2 = clean_punctuation_and_whitespace(s2);
-                c1 == c2 && !c1.is_empty()
-            }).count();
-            
-            if match_count == len {
-                phrases.drain(i+len..i+2*len);
-                separators.drain(i+len..i+2*len);
-                found_dup = true;
-                break;
-            }
-        }
-        
-        if !found_dup {
-            i += 1;
-        }
-    }
-
-    let mut result = String::new();
-    for (p, sep) in phrases.into_iter().zip(separators.into_iter()) {
-        result.push_str(&p);
-        result.push_str(&sep);
-    }
-    result
-}
-
-/// 后处理已转写出来的字幕段列表，进行跨段去重及最后的质量净化
-fn post_process_segments(segments: Vec<TranscriptionSegment>) -> Vec<TranscriptionSegment> {
-    let mut result = Vec::new();
-    let mut last_cleaned_text = String::new();
-
-    for mut seg in segments {
-        // 0. 统一转换为简体中文，消除 Whisper 输出中简繁混用的现象
-        seg.text = zhconv::zhconv(&seg.text, zhconv::Variant::ZhCN);
-
-        // 1. 单句内短语与字符级去重
-        let text_dedup_phrases = deduplicate_phrases(&seg.text);
-        let cleaned_text = deduplicate_repeats(&text_dedup_phrases);
-        
-        if cleaned_text.trim().is_empty() {
-            continue;
-        }
-        
-        // 2. 检测单句内是否依然存在长字串自我重复（幻觉熔断兜底）
-        let cleaned_current = clean_punctuation_and_whitespace(&cleaned_text);
-        if has_repetition_loop(&cleaned_current) {
-            println!("[Rust] Post-process: 丢弃包含自我循环重复的字幕分段: '{}'", cleaned_text);
-            continue;
-        }
-
-        // 3. 跨句/跨段级完全重复或极高相似度过滤
-        let cleaned_last = clean_punctuation_and_whitespace(&last_cleaned_text);
-        if !cleaned_current.is_empty() && cleaned_current == cleaned_last {
-            println!("[Rust] Post-process: 丢弃跨段重复字幕分段: '{}'", cleaned_text);
-            continue;
-        }
-
-        seg.text = cleaned_text;
-        last_cleaned_text = seg.text.clone();
-        result.push(seg);
-    }
-
-    result
-}
-
 pub fn transcribe(
     sink: StreamSink<TranscriptionEvent>,
     model_path: String,
+    vad_model_path: String,
     audio_path: String,
     language: Option<String>,
     translate: bool,
@@ -679,6 +268,7 @@ pub fn transcribe(
         if let Err(e) = run_transcription_inner(
             &mut callback,
             model_path,
+            vad_model_path,
             audio_path,
             language,
             translate,
@@ -703,6 +293,7 @@ pub fn transcribe(
 pub(crate) fn run_transcription_inner(
     callback: &mut dyn FnMut(TranscriptionEvent),
     model_path: String,
+    vad_model_path: String,
     audio_path: String,
     language: Option<String>,
     translate: bool,
@@ -717,11 +308,11 @@ pub(crate) fn run_transcription_inner(
     entropy_thold: f32,
     logprob_thold: f32,
     no_speech_thold: f32,
-    no_context: bool,
+    _no_context: bool,
 ) -> Result<(), String> {
     println!(
-        "[Rust] run_transcription: model_path={}, audio_path={}, language={:?}, translate={}, use_gpu={}, vad={}",
-        model_path, audio_path, language, translate, use_gpu, vad_enabled
+        "[Rust] run_transcription: model_path={}, vad_model_path={}, audio_path={}, language={:?}, translate={}, use_gpu={}, vad={}",
+        model_path, vad_model_path, audio_path, language, translate, use_gpu, vad_enabled
     );
 
     // 1. 读取音频数据 (16kHz 单声道 16-bit PCM wav)
@@ -760,7 +351,7 @@ pub(crate) fn run_transcription_inner(
     println!("[Rust] Loading Whisper model context (use_gpu={})...", use_gpu);
     let mut ctx_params = WhisperContextParameters::default();
     
-    // Enable DTW mode using the model preset if available
+    // 启用 DTW 对齐模式
     let dtw_preset = get_dtw_model_preset(&model_path);
     if let Some(preset) = dtw_preset {
         println!("[Rust] DTW alignment enabled with preset for model: {}", model_path);
@@ -783,7 +374,6 @@ pub(crate) fn run_transcription_inner(
         {
             let devices = whisper_rs::vulkan::list_devices();
             if !devices.is_empty() {
-                // Find dGPU first
                 let dgpu = devices.iter().find(|d| {
                     let name_lower = d.name.to_lowercase();
                     let is_igpu = name_lower.contains("integrated")
@@ -827,7 +417,7 @@ pub(crate) fn run_transcription_inner(
     
     let ctx = get_or_create_context(&model_path, use_gpu, ctx_params)?;
     
-    // 3. 创建推理状态
+    // 3. 创建推理状态 (在此处创建一次并复用)
     println!("[Rust] Creating Whisper state...");
     let mut state = ctx.create_state().map_err(|e| {
         let err_msg = format!("创建推理状态失败: {}", e);
@@ -865,32 +455,39 @@ pub(crate) fn run_transcription_inner(
     params.set_entropy_thold(entropy_thold);
     params.set_logprob_thold(logprob_thold);
     params.set_no_speech_thold(no_speech_thold);
-    params.set_no_context(no_context);
+    params.set_no_context(false); // 必须允许使用底层 KV 缓存的 context 串联上下文
+    params.set_single_segment(false); // 允许模型自适应处理长句
     println!(
-        "[Rust] Whisper Params: temp={}, temp_inc={}, entropy_thold={}, logprob_thold={}, no_speech_thold={}, no_context={}",
-        temperature, temperature_inc, entropy_thold, logprob_thold, no_speech_thold, no_context
+        "[Rust] Whisper Params: temp={}, temp_inc={}, entropy_thold={}, logprob_thold={}, no_speech_thold={}, no_context=false",
+        temperature, temperature_inc, entropy_thold, logprob_thold, no_speech_thold
     );
 
     // 5. 运行转写与 VAD 切片逻辑
     let mut combined_segments = Vec::new();
 
     if vad_enabled {
-        let mut speech_segments = energy_based_vad(
-            &samples,
-            16000,
-            vad_threshold,
-            vad_min_speech_ms,
-            vad_min_silence_ms,
-        );
-        speech_segments = split_long_segments(
-            speech_segments,
-            &samples,
-            16000,
-            15000, // 默认最大分段长度 15 秒
-            5000,  // 寻找自然停顿（RMS 能量最低）的 5 秒滑动搜索窗口
-        );
+        println!("[Rust] Initializing Silero VAD from: {}", vad_model_path);
+        let vad_ctx_params = WhisperVadContextParams::new();
+        let mut vad = WhisperVadContext::new(&vad_model_path, vad_ctx_params).map_err(|e| e.to_string())?;
+        let mut vad_params = WhisperVadParams::new();
+        vad_params.set_min_silence_duration(vad_min_silence_ms as i32);
+        vad_params.set_min_speech_duration(vad_min_speech_ms as i32);
+        let prob_threshold = if vad_threshold > 0.0 && vad_threshold < 1.0 { vad_threshold } else { 0.5f32 };
+        vad_params.set_threshold(prob_threshold);
+
+        let segs = vad.segments_from_samples(vad_params, &samples).map_err(|e| e.to_string())?;
+        
+        let mut speech_segments = Vec::new();
+        for s in segs {
+            let start_sample = s.start as usize * 160;
+            let end_sample = s.end as usize * 160;
+            if end_sample > start_sample && end_sample <= samples.len() {
+                speech_segments.push((start_sample, end_sample));
+            }
+        }
+
         println!(
-            "[Rust] VAD enabled. Found {} active speech segments (after splitting long segments).",
+            "[Rust] VAD enabled. Found {} active speech segments via Silero VAD.",
             speech_segments.len()
         );
 
@@ -911,21 +508,14 @@ pub(crate) fn run_transcription_inner(
             params.set_progress_callback(Some(progress_callback_trampoline));
             params.set_progress_callback_user_data(&progress_ctx as *const ProgressContext as *mut std::ffi::c_void);
         }
-        // 准备状态追踪变量
-        let mut recent_history: std::collections::VecDeque<String> = std::collections::VecDeque::new();
-        
-        // 新增：用于纯文本语义传递的滑动提示词
-        let mut rolling_prompt = String::new();
 
-        #[allow(unused_assignments)]
         for (idx, &(start_sample, end_sample)) in speech_segments.iter().enumerate() {
             progress_ctx.current_segment = idx;
+            let _ = progress_ctx.current_segment;
             
-            // 提取为可变的 Vector 并强行对超短音频使用静音填充以保护 DTW 机制
             let mut segment_samples = samples[start_sample..end_sample].to_vec();
             const MIN_SAMPLES_FOR_DTW: usize = 8000; // 16kHz 下 0.5 秒 = 8000 个采样点
             if segment_samples.len() < MIN_SAMPLES_FOR_DTW {
-                println!("[Rust] ⚠️ 拦截到超短音频 ({} samples), 已自动静音填充至 0.5s 以保护 DTW。", segment_samples.len());
                 segment_samples.resize(MIN_SAMPLES_FOR_DTW, 0.0);
             }
             
@@ -940,16 +530,7 @@ pub(crate) fn run_transcription_inner(
                 segment_samples.len()
             );
 
-            // 1. 正常推理尝试：永远斩断底层声学上下文，通过 prompt 传递纯文本语义
-            let mut current_params = params.clone();
-            
-            // 强制清空上一段的音频 KV 缓存，防止死循环幻觉
-            current_params.set_no_context(true);
-            
-            // 如果全局设置允许携带上下文，且已有历史文本，则将其作为提示词注入
-            if !no_context && !rolling_prompt.is_empty() {
-                current_params.set_initial_prompt(&rolling_prompt);
-            }
+            let current_params = params.clone();
 
             state.full(current_params, &segment_samples).map_err(|e| {
                 let err_msg = format!("VAD 分段转写推理失败 (序号 {}): {}", idx + 1, e);
@@ -957,169 +538,24 @@ pub(crate) fn run_transcription_inner(
                 err_msg
             })?;
 
-            // 2. 提取当前正常推理产生的文本
-            let num_segments = state.full_n_segments();
-            let mut current_text = String::new();
-            
-            // 用于检测单 VAD 块内部的交替幻觉
-            let mut exact_match_count = 0;
-            let mut partial_match_count = 0;
-            let mut is_cross_segment_repeating = false;
-            let mut is_segment_self_repeating = false;
-
-            for i in 0..num_segments {
+            let final_num_segments = state.full_n_segments();
+            for i in 0..final_num_segments {
                 if let Some(segment) = state.get_segment(i) {
-                    let seg_text = segment.to_str_lossy().unwrap_or_default().into_owned();
-                    current_text.push_str(&seg_text);
-                    
-                    let cleaned_seg = clean_punctuation_and_whitespace(&seg_text);
-                    if cleaned_seg.trim().is_empty() {
+                    let text = segment
+                        .to_str_lossy()
+                        .unwrap_or_else(|_| std::borrow::Cow::Borrowed(""))
+                        .into_owned();
+
+                    // 过滤掉纯空白的段
+                    if text.trim().is_empty() {
                         continue;
                     }
 
-                    // 检测单句自我循环
-                    if has_repetition_loop(&cleaned_seg) {
-                        is_segment_self_repeating = true;
-                    }
-
-                    // 在历史中查找匹配
-                    let char_count = cleaned_seg.chars().count();
-                    for past_text in &recent_history {
-                        if *past_text == cleaned_seg {
-                            exact_match_count += 1;
-                        } else if (char_count >= 5 && past_text.contains(&cleaned_seg)) ||
-                            (past_text.chars().count() >= 5 && cleaned_seg.contains(past_text)) {
-                            partial_match_count += 1;
-                        }
-                    }
-
-                    // 加入历史
-                    recent_history.push_back(cleaned_seg.clone());
-                    if recent_history.len() > 25 {
-                        recent_history.pop_front();
-                    }
-                    
-                    if exact_match_count >= 3 {
-                        if char_count >= 4 {
-                            is_cross_segment_repeating = true;
-                        } else if exact_match_count >= 5 {
-                            is_cross_segment_repeating = true;
-                        }
-                    }
-                    if partial_match_count >= 3 {
-                        is_cross_segment_repeating = true;
-                    }
-                }
-            }
-
-            if current_text.trim().is_empty() {
-                println!("[Rust] ⚠️ 模型未输出任何文本！可能是音频太模糊触发了 no_speech_thold (无声阈值)，导致大模型将其误判为静音并跳过。");
-            }
-
-            let discard_segment = false;
-
-            if is_segment_self_repeating || is_cross_segment_repeating {
-                println!(
-                    "[Rust] ⚠️ 警告: 检测到内容重复 (单段自我循环: {}, 精确匹配: {}, 部分匹配: {})",
-                    is_segment_self_repeating,
-                    exact_match_count,
-                    partial_match_count
-                );
-            }
-
-            // 4. 熔断与回退处理
-            if is_segment_self_repeating || is_cross_segment_repeating {
-                println!("[Rust] 🛑 触发熔断！检测到持续重复或单段内自我循环，正在重新创建推理状态以彻底清除 C++ 侧受污染的 KV 缓存历史...");
-
-                state = ctx.create_state().map_err(|e| {
-                    let err_msg = format!("熔断回退重建推理状态失败: {}", e);
-                    println!("[Rust] {}", err_msg);
-                    err_msg
-                })?;
-
-                let mut fallback_params = params.clone();
-                // 斩断内部上下文历史
-                fallback_params.set_no_context(true);
-                // 不传入 initial_prompt，彻底切断幻觉源头
-                fallback_params.set_initial_prompt("");
-
-                // 微升温度增加采样随机性
-                let fallback_temp = if temperature < 0.2_f32 { 0.3_f32 } else { temperature + 0.2_f32 };
-                fallback_params.set_temperature(fallback_temp);
-
-                println!("[Rust] 正在执行回退推理: temp={:.2} (无 prompt)", fallback_temp);
-
-                state.full(fallback_params, &segment_samples).map_err(|e| {
-                    let err_msg = format!("VAD 分段回退推理失败 (序号 {}): {}", idx + 1, e);
-                    println!("[Rust] {}", err_msg);
-                    err_msg
-                })?;
-
-                // 重新提取重试后的文本
-                current_text.clear();
-                let num_segments_retry = state.full_n_segments();
-                for i in 0..num_segments_retry {
-                    if let Some(segment) = state.get_segment(i) {
-                        current_text.push_str(&segment.to_str_lossy().unwrap_or_default());
-                    }
-                }
-                
-                let cleaned_retry = clean_punctuation_and_whitespace(&current_text);
-                let retry_self_repeating = has_repetition_loop(&cleaned_retry);
-                
-                if retry_self_repeating {
-                    println!("[Rust] 🛑 回退重试后依然检测到重复幻觉，保留该分段交由后处理清洗，但会重建状态以防污染: '{}'", current_text.trim());
-                    // discard_segment = true; // 移除丢弃逻辑，保留有效内容
-                    
-                    // 重新创建推理状态以彻底清除 C++ 侧受污染 Hendrick/Whisper KV 缓存历史，防止污染后续分段
-                    state = ctx.create_state().map_err(|e| {
-                        let err_msg = format!("熔断重建推理状态失败: {}", e);
-                        println!("[Rust] {}", err_msg);
-                        err_msg
-                    })?;
-                } else {
-                    println!("[Rust] ✅ 回退重试成功，新输出: '{}'", current_text.trim());
-                    if !cleaned_retry.is_empty() {
-                        recent_history.push_back(cleaned_retry.clone());
-                        if recent_history.len() > 10 {
-                            recent_history.pop_front();
-                        }
-                    }
-                }
-            }
-
-            // 5. 最终持久化写入字幕段列表
-            if !discard_segment {
-                let final_num_segments = state.full_n_segments();
-
-                for i in 0..final_num_segments {
-                    if let Some(segment) = state.get_segment(i) {
-                        let text = segment
-                            .to_str_lossy()
-                            .unwrap_or_else(|_| std::borrow::Cow::Borrowed(""))
-                            .into_owned();
-
-                        // 过滤掉纯空白的段
-                        if text.trim().is_empty() {
-                            continue;
-                        }
-
-                        // 新增：更新滑动提示词
-                        if !no_context {
-                            rolling_prompt.push_str(&text);
-                            // 截断滑动窗口，保留最后 100 个字符
-                            let char_vec: Vec<char> = rolling_prompt.chars().collect();
-                            if char_vec.len() > 100 {
-                                rolling_prompt = char_vec[char_vec.len() - 100 ..].iter().collect();
-                            }
-                        }
-
-                        combined_segments.push(TranscriptionSegment {
-                            start_ms: segment.start_timestamp() * 10 + global_offset_ms,
-                            end_ms: segment.end_timestamp() * 10 + global_offset_ms,
-                            text,
-                        });
-                    }
+                    combined_segments.push(TranscriptionSegment {
+                        start_ms: segment.start_timestamp() * 10 + global_offset_ms,
+                        end_ms: segment.end_timestamp() * 10 + global_offset_ms,
+                        text,
+                    });
                 }
             }
         }
@@ -1168,8 +604,10 @@ pub(crate) fn run_transcription_inner(
         }
     }
 
-    // 6. 发送转写成功事件
-    let combined_segments = post_process_segments(combined_segments);
+    // 6. 发送转写成功事件 (进行简体中文转换)
+    for seg in &mut combined_segments {
+        seg.text = zhconv::zhconv(&seg.text, zhconv::Variant::ZhCN);
+    }
     println!("[Rust] Sending Success event with {} segments", combined_segments.len());
     callback(TranscriptionEvent::Success(combined_segments));
     

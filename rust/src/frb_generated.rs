@@ -368,6 +368,7 @@ fn wire__crate__api__whisper__transcribe_impl(
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
             let api_model_path = <String>::sse_decode(&mut deserializer);
+            let api_vad_model_path = <String>::sse_decode(&mut deserializer);
             let api_audio_path = <String>::sse_decode(&mut deserializer);
             let api_language = <Option<String>>::sse_decode(&mut deserializer);
             let api_translate = <bool>::sse_decode(&mut deserializer);
@@ -390,6 +391,7 @@ fn wire__crate__api__whisper__transcribe_impl(
                         crate::api::whisper::transcribe(
                             api_sink,
                             api_model_path,
+                            api_vad_model_path,
                             api_audio_path,
                             api_language,
                             api_translate,
@@ -442,6 +444,7 @@ fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
             let api_ffmpeg_path = <String>::sse_decode(&mut deserializer);
             let api_input_path = <String>::sse_decode(&mut deserializer);
             let api_model_path = <String>::sse_decode(&mut deserializer);
+            let api_vad_model_path = <String>::sse_decode(&mut deserializer);
             let api_df_model_path = <String>::sse_decode(&mut deserializer);
             let api_language = <Option<String>>::sse_decode(&mut deserializer);
             let api_translate = <bool>::sse_decode(&mut deserializer);
@@ -462,6 +465,7 @@ fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
                             api_ffmpeg_path,
                             api_input_path,
                             api_model_path,
+                            api_vad_model_path,
                             api_df_model_path,
                             api_language,
                             api_translate,

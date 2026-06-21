@@ -197,4 +197,26 @@ class ModelService {
     
     return targetPath;
   }
+
+  Future<String> prepareVADModel() async {
+    final appDir = await getApplicationSupportDirectory();
+    final modelDir = Directory(p.join(appDir.path, 'models'));
+    if (!await modelDir.exists()) {
+      await modelDir.create(recursive: true);
+    }
+    
+    final targetPath = p.join(modelDir.path, 'ggml-silero-v5.1.2.bin');
+    final targetFile = File(targetPath);
+    
+    if (await targetFile.exists() && await targetFile.length() > 1024 * 1024) {
+      return targetPath;
+    }
+    
+    final data = await rootBundle.load('assets/models/ggml-silero-v5.1.2.bin');
+    final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    await targetFile.writeAsBytes(bytes);
+    
+    return targetPath;
+  }
 }
+

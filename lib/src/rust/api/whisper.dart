@@ -8,8 +8,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'whisper.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `clean_punctuation_and_whitespace`, `deduplicate_phrases`, `deduplicate_repeats`, `energy_based_vad`, `get_or_create_context`, `has_repetition_loop`, `post_process_segments`, `progress_callback_trampoline`, `run_transcription_inner`, `split_long_segments`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedContext`, `ProgressContext`
+// These functions are ignored because they are not marked as `pub`: `calculate_dtw_mem_size`, `check_vulkan_supported_safely`, `get_dtw_model_preset`, `get_or_create_context`, `progress_callback_trampoline`, `run_transcription_inner`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedContext`, `DISPLAY_DEVICEA`, `ProgressContext`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`
 
 Future<HardwareAccelerationInfo> getHardwareAccelerationInfo() =>
@@ -33,6 +33,7 @@ Future<List<String>> convertChineseList({
 
 Stream<TranscriptionEvent> transcribe({
   required String modelPath,
+  required String vadModelPath,
   required String audioPath,
   String? language,
   required bool translate,
@@ -50,6 +51,7 @@ Stream<TranscriptionEvent> transcribe({
   required bool noContext,
 }) => RustLib.instance.api.crateApiWhisperTranscribe(
   modelPath: modelPath,
+  vadModelPath: vadModelPath,
   audioPath: audioPath,
   language: language,
   translate: translate,

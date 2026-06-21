@@ -400,6 +400,13 @@ class TranscriptionProvider with ChangeNotifier {
         dfModelPath = await _modelService.prepareDFModel();
       }
 
+      String vadModelPath = "";
+      if (_vadEnabled) {
+        _statusMessage = '正在准备 Silero VAD 引擎...';
+        notifyListeners();
+        vadModelPath = await _modelService.prepareVADModel();
+      }
+
       _statusMessage = _enableDenoise
           ? '正在进行实时语音流提取、降噪与转写...'
           : '正在进行实时语音流提取与转写...';
@@ -411,6 +418,7 @@ class TranscriptionProvider with ChangeNotifier {
         ffmpegPath: _ffmpegService.ffmpegPath,
         inputPath: _inputMediaFile!.path,
         modelPath: modelPath,
+        vadModelPath: vadModelPath,
         dfModelPath: dfModelPath,
         language: _selectedLanguage == 'auto' ? null : _selectedLanguage,
         translate: _translateToEnglish,

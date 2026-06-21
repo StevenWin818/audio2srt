@@ -7,14 +7,13 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'whisper.dart';
 
-// These functions are ignored because they are not marked as `pub`: `disable_power_throttling`, `extract_tar_gz_if_needed`, `find_silence_sequence`, `get_media_duration_secs`, `get_physical_pcore_mask`, `lock_high_priority`, `parse_duration_str`, `register_thread_as_pro_audio`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AudioFrameState`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `calculate_dtw_mem_size`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_dtw_model_preset`, `get_media_duration_secs`, `get_physical_pcore_mask`, `lock_high_priority`, `parse_duration_str`, `register_thread_as_pro_audio`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `strip_leading_list_markers`
 
 Stream<TranscriptionEvent> transcribeStream({
   required String ffmpegPath,
   required String inputPath,
   required String modelPath,
+  required String vadModelPath,
   required String dfModelPath,
   String? language,
   required bool translate,
@@ -30,6 +29,7 @@ Stream<TranscriptionEvent> transcribeStream({
   ffmpegPath: ffmpegPath,
   inputPath: inputPath,
   modelPath: modelPath,
+  vadModelPath: vadModelPath,
   dfModelPath: dfModelPath,
   language: language,
   translate: translate,

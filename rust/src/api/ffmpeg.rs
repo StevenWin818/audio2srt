@@ -96,6 +96,26 @@ pub fn extract_audio_from_media(
     input_path: String,
     output_path: String,
 ) -> Result<(), String> {
+    // 动态探测音频流数量
+    let mut probe_cmd = Command::new(&ffmpeg_path);
+    probe_cmd.arg("-i").arg(&input_path);
+    #[cfg(target_os = "windows")]
+    probe_cmd.creation_flags(0x08000000); // 隐藏窗口
+
+    let audio_stream_count = if let Ok(output) = probe_cmd.output() {
+        let stderr_str = String::from_utf8_lossy(&output.stderr);
+        let mut count = 0;
+        for line in stderr_str.lines() {
+            if line.contains("Stream #") && line.contains("Audio:") {
+                count += 1;
+            }
+        }
+        count
+    } else {
+        1
+    };
+    println!("[Rust] 检测到音频流数量: {}，文件: {}", audio_stream_count, input_path);
+
     let mut cmd = Command::new(&ffmpeg_path);
     
     cmd.arg("-y")
@@ -103,8 +123,17 @@ pub fn extract_audio_from_media(
        .arg(&input_path)
        .arg("-vn") // 忽略视频
        .arg("-sn") // 忽略字幕
-       .arg("-dn") // 忽略数据
-       .arg("-ar")
+       .arg("-dn"); // 忽略数据
+
+    // 多音频流时使用 amix 进行声道混合，并配合 volume 还原音量
+    if audio_stream_count > 1 {
+        cmd.arg("-filter_complex")
+           .arg(format!("amix=inputs={}:duration=longest:dropout_transition=0,volume={}[a]", audio_stream_count, audio_stream_count))
+           .arg("-map")
+           .arg("[a]");
+    }
+
+    cmd.arg("-ar")
        .arg("16000")
        .arg("-ac")
        .arg("1")
