@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'whisper.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `calculate_dtw_mem_size`, `check_vulkan_supported_safely`, `get_dtw_model_preset`, `get_or_create_context`, `progress_callback_trampoline`, `run_transcription_inner`
+// These functions are ignored because they are not marked as `pub`: `calculate_dtw_mem_size`, `calculate_rms`, `check_vulkan_supported_safely`, `get_dtw_model_preset`, `get_or_create_context`, `progress_callback_trampoline`, `run_transcription_inner`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedContext`, `DISPLAY_DEVICEA`, `ProgressContext`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`
 
@@ -49,6 +49,7 @@ Stream<TranscriptionEvent> transcribe({
   required double logprobThold,
   required double noSpeechThold,
   required bool noContext,
+  required bool noStateHistory,
 }) => RustLib.instance.api.crateApiWhisperTranscribe(
   modelPath: modelPath,
   vadModelPath: vadModelPath,
@@ -67,6 +68,7 @@ Stream<TranscriptionEvent> transcribe({
   logprobThold: logprobThold,
   noSpeechThold: noSpeechThold,
   noContext: noContext,
+  noStateHistory: noStateHistory,
 );
 
 class HardwareAccelerationInfo {

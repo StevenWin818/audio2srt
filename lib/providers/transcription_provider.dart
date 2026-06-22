@@ -77,13 +77,13 @@ class TranscriptionProvider with ChangeNotifier {
   bool _vadEnabled = true;
   bool get vadEnabled => _vadEnabled;
 
-  double _vadThreshold = 0.010; // RMS 音能阈值
+  double _vadThreshold = 0.5; // Silero VAD 语音概率阈值
   double get vadThreshold => _vadThreshold;
 
   int _vadMinSpeechMs = 300; // 最小语音长度 (ms)
   int get vadMinSpeechMs => _vadMinSpeechMs;
 
-  int _vadMinSilenceMs = 800; // 最小静音判定时间 (ms)
+  int _vadMinSilenceMs = 400; // 最小静音判定时间 (ms)
   int get vadMinSilenceMs => _vadMinSilenceMs;
 
   // Whisper 惩罚与降级参数配置
@@ -104,6 +104,9 @@ class TranscriptionProvider with ChangeNotifier {
 
   bool _noContext = true;
   bool get noContext => _noContext;
+
+  bool _noStateHistory = true; // 禁用 KV 缓存记忆
+  bool get noStateHistory => _noStateHistory;
 
   TranscriptionStatus _status = TranscriptionStatus.idle;
   TranscriptionStatus get status => _status;
@@ -357,6 +360,11 @@ class TranscriptionProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  void setNoStateHistory(bool value) {
+    _noStateHistory = value;
+    notifyListeners();
+  }
+
   /// 核心流程：一键开始提取并转写 (全新三级流式降噪与转写管道)
   Future<void> startTranscription() async {
     if (_inputMediaFile == null) {
@@ -431,6 +439,7 @@ class TranscriptionProvider with ChangeNotifier {
         vadMinSpeechMs: _vadMinSpeechMs,
         vadMinSilenceMs: _vadMinSilenceMs,
         noContext: _noContext,
+        noStateHistory: _noStateHistory,
       );
 
       await _transcriptionSub?.cancel();
@@ -606,6 +615,14 @@ class TranscriptionProvider with ChangeNotifier {
       buffer.writeln();
     }
     return buffer.toString();
+  }
+
+  Future<void> cancelTranscription() async {
+    await _transcriptionSub?.cancel();
+    _transcriptionSub = null;
+    _status = TranscriptionStatus.idle;
+    _statusMessage = '转写任务已手动停止';
+    notifyListeners();
   }
 
   @override

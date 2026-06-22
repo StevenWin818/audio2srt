@@ -26,6 +26,7 @@ Stream<TranscriptionEvent> transcribeStream({
   required int vadMinSpeechMs,
   required int vadMinSilenceMs,
   required bool noContext,
+  required bool noStateHistory,
 }) => RustLib.instance.api.crateApiStreamPipelineTranscribeStream(
   ffmpegPath: ffmpegPath,
   inputPath: inputPath,
@@ -43,4 +44,5 @@ Stream<TranscriptionEvent> transcribeStream({
   vadMinSpeechMs: vadMinSpeechMs,
   vadMinSilenceMs: vadMinSilenceMs,
   noContext: noContext,
+  noStateHistory: noStateHistory,
 );

@@ -14,10 +14,63 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContextParameters, Whisper
 use crate::frb_generated::StreamSink;
 use crate::api::whisper::{
     TranscriptionSegment, TranscriptionEvent, get_or_create_context,
-    convert_chinese,
+    convert_chinese, calculate_rms,
 };
 
+#[cfg(test)]
+fn add_perf_record(stage: &str, elapsed_ms: u64, audio_duration_sec: f64) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::sync::Mutex;
 
+    static FILE_MUTEX: Mutex<()> = Mutex::new(());
+    let _lock = FILE_MUTEX.lock().unwrap();
+
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let rtf = if audio_duration_sec > 0.0 {
+        (elapsed_ms as f64 / 1000.0) / audio_duration_sec
+    } else {
+        0.0
+    };
+    println!(
+        "[PERF] Stage: {}, Time: {}ms, Audio: {:.2}s, RTF: {:.4}",
+        stage, elapsed_ms, audio_duration_sec, rtf
+    );
+
+    let filename = "rust_pipeline_perf.csv";
+    let file_exists = std::path::Path::new(filename).exists();
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open(filename)
+    {
+        if !file_exists {
+            let _ = writeln!(file, "timestamp_ms,stage,elapsed_ms,audio_duration_sec,rtf");
+        }
+        let _ = writeln!(
+            file,
+            "{},{},{},{:.4},{:.4}",
+            timestamp_ms, stage, elapsed_ms, audio_duration_sec, rtf
+        );
+    }
+}
+
+#[cfg(test)]
+macro_rules! log_perf {
+    ($stage:expr, $elapsed_ms:expr, $audio_duration_sec:expr) => {
+        add_perf_record($stage, $elapsed_ms, $audio_duration_sec);
+    };
+}
+
+#[cfg(not(test))]
+macro_rules! log_perf {
+    ($stage:expr, $elapsed_ms:expr, $audio_duration_sec:expr) => {};
+}
 
 fn parse_duration_str(time_str: &str) -> Option<f64> {
     let parts: Vec<&str> = time_str.split(':').collect();
@@ -48,7 +101,6 @@ fn get_media_duration_secs(ffmpeg_path: &str, input_path: &str) -> Result<f64> {
                 if let Some(time_str) = duration_str.split(',').next() {
                     if let Some(parts) = parse_duration_str(time_str.trim()) {
                         duration_secs = parts;
-                        break;
                     }
                 }
             }
@@ -58,6 +110,16 @@ fn get_media_duration_secs(ffmpeg_path: &str, input_path: &str) -> Result<f64> {
         Ok(duration_secs)
     } else {
         Err(anyhow!("Could not detect media duration"))
+    }
+}
+
+pub trait TranscriptionSink: Send + Sync {
+    fn add(&self, event: TranscriptionEvent) -> Result<(), String>;
+}
+
+impl TranscriptionSink for StreamSink<TranscriptionEvent> {
+    fn add(&self, event: TranscriptionEvent) -> Result<(), String> {
+        self.add(event).map_err(|e| e.to_string())
     }
 }
 
@@ -79,11 +141,13 @@ pub fn transcribe_stream(
     vad_min_speech_ms: i32,
     vad_min_silence_ms: i32,
     no_context: bool,
+    no_state_history: bool,
 ) {
-    let sink_clone = sink.clone();
+    let sink_arc: Arc<dyn TranscriptionSink> = Arc::new(sink);
+    let sink_clone = sink_arc.clone();
     thread::spawn(move || {
         if let Err(e) = run_stream_pipeline_inner(
-            &sink_clone,
+            sink_clone.clone(),
             ffmpeg_path,
             input_path,
             model_path,
@@ -100,6 +164,7 @@ pub fn transcribe_stream(
             vad_min_speech_ms,
             vad_min_silence_ms,
             no_context,
+            no_state_history,
         ) {
             let _ = sink_clone.add(TranscriptionEvent::Failure(e.to_string()));
         }
@@ -107,7 +172,7 @@ pub fn transcribe_stream(
 }
 
 fn run_stream_pipeline_inner(
-    sink: &StreamSink<TranscriptionEvent>,
+    sink: Arc<dyn TranscriptionSink>,
     ffmpeg_path: String,
     input_path: String,
     model_path: String,
@@ -124,6 +189,7 @@ fn run_stream_pipeline_inner(
     vad_min_speech_ms: i32,
     vad_min_silence_ms: i32,
     no_context: bool,
+    no_state_history: bool,
 ) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
@@ -294,6 +360,7 @@ fn run_stream_pipeline_inner(
     let pump_thread = thread::spawn(move || -> Result<()> {
         let mut temp_buf = [0u8; 4096];
         loop {
+            let start_time = std::time::Instant::now();
             let mut chunk_bytes = Vec::with_capacity(192000);
             while chunk_bytes.len() < 192000 {
                 let to_read = std::cmp::min(temp_buf.len(), 192000 - chunk_bytes.len());
@@ -316,6 +383,10 @@ fn run_stream_pipeline_inner(
             for (i, bytes) in chunk_bytes.chunks_exact(4).enumerate() {
                 samples[i] = f32::from_le_bytes(bytes.try_into().unwrap());
             }
+
+            let _elapsed_ms = start_time.elapsed().as_millis() as u64;
+            let _audio_dur_sec = samples.len() as f64 / 48000.0;
+            log_perf!("FFmpeg", _elapsed_ms, _audio_dur_sec);
 
             if tx.send(samples).is_err() {
                 break;
@@ -382,8 +453,13 @@ fn run_stream_pipeline_inner(
                 // 原生抑制无声空白
                 current_params.set_suppress_blank(true);
 
-                whisper_state.full(current_params, &samples_16k)
-                    .map_err(|e| anyhow!("Whisper inference error: {:?}", e))?;
+                let start_time = std::time::Instant::now();
+                let full_res = whisper_state.full(current_params, &samples_16k);
+                let _elapsed_ms = start_time.elapsed().as_millis() as u64;
+                let _audio_dur_sec = samples_16k.len() as f64 / 16000.0;
+                log_perf!("Whisper", _elapsed_ms, _audio_dur_sec);
+
+                full_res.map_err(|e| anyhow!("Whisper inference error: {:?}", e))?;
 
                 let n_segments = whisper_state.full_n_segments();
                 for i in 0..n_segments {
@@ -488,6 +564,7 @@ fn run_stream_pipeline_inner(
             let mask = p_core_mask;
 
             let handle = thread::spawn(move || -> Result<()> {
+                println!("[Rust] Worker {} starting thread...", worker_id);
                 #[cfg(target_os = "windows")]
                 {
                     set_thread_affinity_mask(mask);
@@ -495,14 +572,25 @@ fn run_stream_pipeline_inner(
                 }
 
                 // 独占一个模型推理流，配置 1 线程以达到极佳流式推理速度
-                let mut stream = DeepFilterStream::with_threads(&model_dir, 1)
-                    .map_err(|e| anyhow!("Worker {} failed to create DeepFilterStream: {:?}", worker_id, e))?;
-                stream.warmup()
-                    .map_err(|e| anyhow!("Worker {} failed to warmup: {:?}", worker_id, e))?;
+                println!("[Rust] Worker {} loading DeepFilterStream from {:?}", worker_id, model_dir);
+                let mut stream = match DeepFilterStream::with_threads(&model_dir, 1) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        println!("[Rust] Worker {} failed to create DeepFilterStream: {:?}", worker_id, e);
+                        return Err(anyhow!("Worker {} failed to create DeepFilterStream: {:?}", worker_id, e));
+                    }
+                };
+                println!("[Rust] Worker {} warming up DeepFilterStream...", worker_id);
+                if let Err(e) = stream.warmup() {
+                    println!("[Rust] Worker {} failed to warmup: {:?}", worker_id, e);
+                    return Err(anyhow!("Worker {} failed to warmup: {:?}", worker_id, e));
+                }
+                println!("[Rust] Worker {} warmup complete and ready!", worker_id);
 
                 while let Ok(task) = rx.recv() {
                     let DfnTask { seq_id, warmup_samples, real_samples } = task;
                     let mut cleaned_samples = Vec::with_capacity(real_samples.len());
+                    let start_time = std::time::Instant::now();
 
                     // 1. 重置 GRU 隐藏状态
                     stream.reset();
@@ -522,6 +610,10 @@ fn run_stream_pipeline_inner(
                     let flushed = stream.flush()
                         .map_err(|e| anyhow!("Worker {} flush error: {:?}", worker_id, e))?;
                     cleaned_samples.extend_from_slice(&flushed);
+
+                    let _elapsed_ms = start_time.elapsed().as_millis() as u64;
+                    let _audio_dur_sec = real_samples.len() as f64 / 48000.0;
+                    log_perf!("DFN3", _elapsed_ms, _audio_dur_sec);
 
                     if tx.send(DfnResult { seq_id, cleaned_samples }).is_err() {
                         break;
@@ -628,8 +720,10 @@ fn run_stream_pipeline_inner(
 
         // 等待所有工作线程完成
         for handle in worker_handles {
-            if let Err(e) = handle.join() {
-                println!("[Rust] DFN3 Worker thread panicked: {:?}", e);
+            match handle.join() {
+                Ok(Err(e)) => println!("[Rust] DFN3 Worker thread returned error: {:?}", e),
+                Err(e) => println!("[Rust] DFN3 Worker thread panicked: {:?}", e),
+                _ => {}
             }
         }
 
@@ -684,21 +778,37 @@ fn run_stream_pipeline_inner(
         let prob_threshold = if vad_threshold > 0.0 && vad_threshold < 1.0 { vad_threshold as f32 } else { 0.5f32 };
         vad_params.set_threshold(prob_threshold);
 
-        while let Ok(clean_48k_batch) = rx_clean_48k.recv() {
-            let resampled = match resampler.process(&[&clean_48k_batch], None) {
-                Ok(r) => r,
-                Err(e) => {
-                    println!("[Rust] 重采样出错: {:?}", e);
-                    break;
-                }
-            };
-            let clean_block_16k = &resampled[0];
+        while let Ok(mut clean_48k_batch) = rx_clean_48k.recv() {
+            let start_time = std::time::Instant::now();
+            let mut audio_to_process = Vec::new();
             
-            if clean_block_16k.is_empty() {
+            loop {
+                let resampled = match resampler.process(&[&clean_48k_batch], None) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("[Rust] 重采样出错: {:?}", e);
+                        break;
+                    }
+                };
+                let clean_block_16k = &resampled[0];
+                audio_to_process.extend_from_slice(clean_block_16k);
+                
+                match rx_clean_48k.try_recv() {
+                    Ok(b) => {
+                        clean_48k_batch = b;
+                    }
+                    Err(_) => {
+                        break;
+                    }
+                }
+            }
+
+            if audio_to_process.is_empty() {
                 continue;
             }
 
-            audio_buffer.extend_from_slice(clean_block_16k);
+            let _audio_dur_sec = audio_to_process.len() as f64 / 16000.0;
+            audio_buffer.extend_from_slice(&audio_to_process);
 
             let mut check_and_cut = true;
             while check_and_cut {
@@ -776,6 +886,9 @@ fn run_stream_pipeline_inner(
                     }
                 }
             }
+
+            let _elapsed_ms = start_time.elapsed().as_millis() as u64;
+            log_perf!("SileroVAD", _elapsed_ms, _audio_dur_sec);
         }
         // 处理 EOF 残余音频
         if !audio_buffer.is_empty() {
@@ -996,5 +1109,87 @@ fn get_dtw_model_preset(model_path: &str) -> Option<whisper_rs::DtwModelPreset> 
     } else {
         // Disabling DTW for tiny, base, and small models to prevent median filter width ne[2] assertion crash.
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::whisper::TranscriptionEvent;
+
+    struct MockSink;
+
+    impl TranscriptionSink for MockSink {
+        fn add(&self, event: TranscriptionEvent) -> Result<(), String> {
+            println!("[MockSink] Received event: {:?}", event);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_pipeline_performance() {
+        // Check model file and input file, with fallbacks.
+        let movie_file = "C:\\FFOutput\\testmovie.mkv";
+        let fallback_audio = "C:\\Projects\\audio2srt\\testaudio.wav";
+        let input_path = if std::path::Path::new(movie_file).exists() {
+            movie_file.to_string()
+        } else {
+            fallback_audio.to_string()
+        };
+
+        let large_model = "C:\\Users\\Steven\\AppData\\Roaming\\com.audio2srt\\audio2srt\\models\\ggml-large-v3-q8_0.bin";
+        let base_model = "C:\\Users\\Steven\\AppData\\Roaming\\com.audio2srt\\audio2srt\\models\\ggml-base.bin";
+        let model_path = if std::path::Path::new(large_model).exists() {
+            large_model.to_string()
+        } else {
+            base_model.to_string()
+        };
+
+        let vad_model_path = "C:\\Users\\Steven\\AppData\\Roaming\\com.audio2srt\\audio2srt\\models\\ggml-silero-v5.1.2.bin".to_string();
+        
+        // DeepFilterNet model directory (normally extracted from DeepFilterNet3_onnx.tar.gz)
+        // Let's pass the tar.gz path directly as it will be prepared
+        let df_model_path = "C:\\Users\\Steven\\AppData\\Roaming\\com.audio2srt\\audio2srt\\models\\DeepFilterNet3_onnx.tar.gz".to_string();
+
+        println!("Running performance test using input: {}", input_path);
+        println!("Model: {}", model_path);
+
+        let ffmpeg_path = "ffmpeg".to_string(); // Assume ffmpeg is in path for tests
+        let sink = Arc::new(MockSink) as Arc<dyn TranscriptionSink>;
+
+        let sink_clone = sink.clone();
+        let input_path_clone = input_path.clone();
+        let model_path_clone = model_path.clone();
+        let vad_model_path_clone = vad_model_path.clone();
+        let df_model_path_clone = df_model_path.clone();
+
+        let handle = thread::spawn(move || {
+            let res = run_stream_pipeline_inner(
+                sink_clone,
+                ffmpeg_path,
+                input_path_clone,
+                model_path_clone,
+                vad_model_path_clone,
+                df_model_path_clone,
+                Some("zh".to_string()),
+                false, // translate
+                Some(4), // threads
+                true, // use_gpu
+                true, // to_simplified
+                true, // enable_denoise
+                true, // vad_enabled
+                0.5, // vad_threshold
+                300, // vad_min_speech_ms
+                400, // vad_min_silence_ms
+                true, // no_context
+                true, // no_state_history
+            );
+            println!("Pipeline run result: {:?}", res);
+        });
+
+        // Run for 60 seconds, then exit test. Because writing is appended in real-time, 
+        // we'll have cached the performance data.
+        thread::sleep(std::time::Duration::from_secs(60));
+        println!("Test timed out after 60s, exiting to terminate background threads.");
     }
 }

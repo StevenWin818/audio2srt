@@ -131,6 +131,7 @@ abstract class RustLibApi extends BaseApi {
     required double logprobThold,
     required double noSpeechThold,
     required bool noContext,
+    required bool noStateHistory,
   });
 
   Stream<TranscriptionEvent> crateApiStreamPipelineTranscribeStream({
@@ -150,6 +151,7 @@ abstract class RustLibApi extends BaseApi {
     required int vadMinSpeechMs,
     required int vadMinSilenceMs,
     required bool noContext,
+    required bool noStateHistory,
   });
 
   Future<TranscriptionSegment> crateApiWhisperTranscriptionSegmentDefault();
@@ -468,6 +470,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required double logprobThold,
     required double noSpeechThold,
     required bool noContext,
+    required bool noStateHistory,
   }) {
     final sink = RustStreamSink<TranscriptionEvent>();
     unawaited(
@@ -493,6 +496,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_encode_f_32(logprobThold, serializer);
             sse_encode_f_32(noSpeechThold, serializer);
             sse_encode_bool(noContext, serializer);
+            sse_encode_bool(noStateHistory, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
@@ -524,6 +528,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             logprobThold,
             noSpeechThold,
             noContext,
+            noStateHistory,
           ],
           apiImpl: this,
         ),
@@ -553,6 +558,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "logprobThold",
       "noSpeechThold",
       "noContext",
+      "noStateHistory",
     ],
   );
 
@@ -574,6 +580,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required int vadMinSpeechMs,
     required int vadMinSilenceMs,
     required bool noContext,
+    required bool noStateHistory,
   }) {
     final sink = RustStreamSink<TranscriptionEvent>();
     unawaited(
@@ -598,6 +605,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_encode_i_32(vadMinSpeechMs, serializer);
             sse_encode_i_32(vadMinSilenceMs, serializer);
             sse_encode_bool(noContext, serializer);
+            sse_encode_bool(noStateHistory, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
@@ -628,6 +636,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             vadMinSpeechMs,
             vadMinSilenceMs,
             noContext,
+            noStateHistory,
           ],
           apiImpl: this,
         ),
@@ -657,6 +666,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "vadMinSpeechMs",
           "vadMinSilenceMs",
           "noContext",
+          "noStateHistory",
         ],
       );
 

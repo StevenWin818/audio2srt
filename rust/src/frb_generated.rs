@@ -384,6 +384,7 @@ fn wire__crate__api__whisper__transcribe_impl(
             let api_logprob_thold = <f32>::sse_decode(&mut deserializer);
             let api_no_speech_thold = <f32>::sse_decode(&mut deserializer);
             let api_no_context = <bool>::sse_decode(&mut deserializer);
+            let api_no_state_history = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
@@ -407,6 +408,7 @@ fn wire__crate__api__whisper__transcribe_impl(
                             api_logprob_thold,
                             api_no_speech_thold,
                             api_no_context,
+                            api_no_state_history,
                         );
                     })?;
                     Ok(output_ok)
@@ -457,6 +459,7 @@ fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
             let api_vad_min_speech_ms = <i32>::sse_decode(&mut deserializer);
             let api_vad_min_silence_ms = <i32>::sse_decode(&mut deserializer);
             let api_no_context = <bool>::sse_decode(&mut deserializer);
+            let api_no_state_history = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
@@ -479,6 +482,7 @@ fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
                             api_vad_min_speech_ms,
                             api_vad_min_silence_ms,
                             api_no_context,
+                            api_no_state_history,
                         );
                     })?;
                     Ok(output_ok)

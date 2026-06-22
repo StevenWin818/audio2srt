@@ -235,20 +235,20 @@ class _SettingsViewState extends State<SettingsView> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const Text(
-                      'VAD 能量判定阈值 (RMS)',
+                      'VAD 语音概率阈值',
                       style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
                     ),
                     Text(
-                      provider.vadThreshold.toStringAsFixed(3),
+                      provider.vadThreshold.toStringAsFixed(2),
                       style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFFA78BFA)),
                     ),
                   ],
                 ),
                 Slider(
                   value: provider.vadThreshold,
-                  min: 0.001,
-                  max: 0.050,
-                  divisions: 49,
+                  min: 0.1,
+                  max: 0.9,
+                  divisions: 80,
                   activeColor: const Color(0xFF8B5CF6),
                   inactiveColor: const Color(0x1FFFFFFF),
                   onChanged: (val) {
@@ -256,7 +256,7 @@ class _SettingsViewState extends State<SettingsView> {
                   },
                 ),
                 Text(
-                  '低于此音量均值将被判断为静音。对于有背景噪声的音频，可适当调高此值。',
+                  'Silero VAD 判断为语音的概率阈值。值越高判定越严格，能有效过滤杂音，但值过高可能会漏掉微弱人声（推荐默认 0.5）。',
                   style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                 ),
               ],
@@ -329,6 +329,41 @@ class _SettingsViewState extends State<SettingsView> {
                 activeColor: const Color(0xFF8B5CF6),
                 onChanged: (val) {
                   provider.setNoContext(val);
+                },
+              ),
+            ],
+          ),
+          
+          const SizedBox(height: 16),
+          const Divider(color: Color(0x1FFFFFFF)),
+          const SizedBox(height: 16),
+
+          // No State History 开关
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '禁用 KV 缓存记忆 (No KV Cache)',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '在推理新分段时彻底隔离并重建模型状态。能有效解决音频中更换语言时被强行翻译成上一句语言的现象。',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              Switch(
+                value: provider.noStateHistory,
+                activeColor: const Color(0xFF8B5CF6),
+                onChanged: (val) {
+                  provider.setNoStateHistory(val);
                 },
               ),
             ],

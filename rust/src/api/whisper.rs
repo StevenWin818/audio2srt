@@ -92,9 +92,15 @@ struct DISPLAY_DEVICEA {
 }
 
 #[cfg(target_os = "windows")]
+#[link(name = "kernel32")]
 extern "system" {
     fn LoadLibraryA(lpLibFileName: *const u8) -> isize;
     fn FreeLibrary(hLibModule: isize) -> i32;
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "user32")]
+extern "system" {
     fn EnumDisplayDevicesA(
         lpDevice: *const u8,
         iDevNum: u32,
@@ -259,9 +265,13 @@ pub fn transcribe(
     logprob_thold: f32,
     no_speech_thold: f32,
     no_context: bool,
+    no_state_history: bool,
 ) {
     // 异步执行转写任务，防止界面卡顿
     std::thread::spawn(move || {
+        #[cfg(target_os = "windows")]
+        register_thread_as_pro_audio();
+
         let mut callback = |event| {
             let _ = sink.add(event);
         };
@@ -284,6 +294,7 @@ pub fn transcribe(
             logprob_thold,
             no_speech_thold,
             no_context,
+            no_state_history,
         ) {
             let _ = sink.add(TranscriptionEvent::Failure(e));
         }
@@ -309,6 +320,7 @@ pub(crate) fn run_transcription_inner(
     logprob_thold: f32,
     no_speech_thold: f32,
     no_context: bool,
+    no_state_history: bool,
 ) -> Result<(), String> {
     println!(
         "[Rust] run_transcription: model_path={}, vad_model_path={}, audio_path={}, language={:?}, translate={}, use_gpu={}, vad={}",
@@ -497,7 +509,7 @@ pub(crate) fn run_transcription_inner(
             return Ok(());
         }
 
-        let mut progress_ctx = ProgressContext {
+        let progress_ctx = ProgressContext {
             callback,
             current_segment: 0,
             total_segments: speech_segments.len(),
@@ -521,6 +533,13 @@ pub(crate) fn run_transcription_inner(
             if segment_samples.len() < 3200 {
                 continue;
             }
+
+            // 计算 RMS 能量，过滤低能量的静音/微弱噪声
+            let rms = calculate_rms(&segment_samples);
+            if rms < 0.002 {
+                println!("[Rust] VAD 段能量过低 (RMS: {:.5} < 0.002)，跳过该片段", rms);
+                continue;
+            }
             
             const MIN_SAMPLES_FOR_DTW: usize = 8000; // 0.5s
             if segment_samples.len() < MIN_SAMPLES_FOR_DTW {
@@ -530,15 +549,34 @@ pub(crate) fn run_transcription_inner(
             let global_offset_ms = (safe_start as i64) / 16;
             let current_params = params.clone();
 
-            state.full(current_params, &segment_samples).map_err(|e| {
+            let mut active_state;
+            let state_ref = if no_state_history {
+                active_state = ctx.create_state().map_err(|e| e.to_string())?;
+                &mut active_state
+            } else {
+                &mut state
+            };
+
+            state_ref.full(current_params, &segment_samples).map_err(|e| {
                 let err_msg = format!("VAD 分段转写推理失败 (序号 {}): {}", idx + 1, e);
                 println!("[Rust] {}", err_msg);
                 err_msg
             })?;
 
-            let final_num_segments = state.full_n_segments();
+            let final_num_segments = state_ref.full_n_segments();
             for i in 0..final_num_segments {
-                if let Some(segment) = state.get_segment(i) {
+                if let Some(segment) = state_ref.get_segment(i) {
+                    let no_speech_prob = segment.no_speech_probability();
+                    if no_speech_prob > no_speech_thold as f32 {
+                        println!(
+                            "[Rust] Whisper: 过滤置信度低的分片 (无声概率: {:.3} > {}), 文本: '{}'",
+                            no_speech_prob,
+                            no_speech_thold,
+                            segment.to_str_lossy().unwrap_or_default().trim()
+                        );
+                        continue;
+                    }
+
                     let text = segment.to_str_lossy().unwrap_or_default().into_owned();
 
                     // 滤除音乐符号
@@ -665,5 +703,33 @@ fn get_dtw_model_preset(model_path: &str) -> Option<DtwModelPreset> {
     } else {
         // Disabling DTW for tiny, base, and small models to prevent median filter width ne[2] assertion crash.
         None
+    }
+}
+
+pub(crate) fn calculate_rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let sum: f32 = samples.iter().map(|&x| x * x).sum();
+    (sum / samples.len() as f32).sqrt()
+}
+
+#[cfg(target_os = "windows")]
+fn register_thread_as_pro_audio() {
+    use windows_sys::Win32::System::Threading::AvSetMmThreadCharacteristicsW;
+    use windows_sys::core::PCWSTR;
+
+    unsafe {
+        let task_name: Vec<u16> = "Pro Audio\0".encode_utf16().collect();
+        let mut task_index = 0;
+        let handle = AvSetMmThreadCharacteristicsW(
+            task_name.as_ptr() as PCWSTR, 
+            &mut task_index
+        );
+        if handle.is_null() {
+            // println!("[Rust] MMCSS 注册失败，退回普通调度");
+        } else {
+            // println!("[Rust] 线程成功接入 MMCSS 绿色通道！");
+        }
     }
 }
