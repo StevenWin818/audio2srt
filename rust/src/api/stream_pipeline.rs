@@ -5,6 +5,7 @@ use std::thread;
 use std::path::Path;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Result, Context, anyhow};
 use flate2::read::GzDecoder;
 use tar::Archive;
@@ -17,8 +18,18 @@ use crate::api::whisper::{
     convert_chinese, calculate_rms,
 };
 
-#[cfg(test)]
+static PERF_LOG_ENABLED: AtomicBool = AtomicBool::new(false);
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn set_rust_perf_logging(enable: bool) {
+    PERF_LOG_ENABLED.store(enable, Ordering::Relaxed);
+}
+
 fn add_perf_record(stage: &str, elapsed_ms: u64, audio_duration_sec: f64) {
+    if !PERF_LOG_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+
     use std::time::{SystemTime, UNIX_EPOCH};
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -60,16 +71,10 @@ fn add_perf_record(stage: &str, elapsed_ms: u64, audio_duration_sec: f64) {
     }
 }
 
-#[cfg(test)]
 macro_rules! log_perf {
     ($stage:expr, $elapsed_ms:expr, $audio_duration_sec:expr) => {
         add_perf_record($stage, $elapsed_ms, $audio_duration_sec);
     };
-}
-
-#[cfg(not(test))]
-macro_rules! log_perf {
-    ($stage:expr, $elapsed_ms:expr, $audio_duration_sec:expr) => {};
 }
 
 fn parse_duration_str(time_str: &str) -> Option<f64> {
@@ -311,12 +316,16 @@ fn run_stream_pipeline_inner(
        .arg("-sn")
        .arg("-dn");
 
-    // 多音频流时使用 amix 进行声道混合，并配合 volume 还原音量
+    // 如果检测到多音轨，不要混音！明确只提取第一条音频流（Index 为 0）
+    // 避免中英双语同时播放导致 Whisper 识别崩溃
     if audio_stream_count > 1 {
-        cmd.arg("-filter_complex")
-           .arg(format!("amix=inputs={}:duration=longest:dropout_transition=0,volume={}[a]", audio_stream_count, audio_stream_count))
-           .arg("-map")
-           .arg("[a]");
+        println!("[Rust] 检测到多音轨，放弃混音，默认提取第一条音轨 (0:a:0)");
+        cmd.arg("-map")
+           .arg("0:a:0"); 
+    } else {
+        // 如果只有一个音轨，或者没检测出音轨，让 FFmpeg 自动决定默认流
+        cmd.arg("-map")
+           .arg("0:a?"); // 0:a? 表示尝试映射音频，如果没有也不会报错退出
     }
 
     cmd.arg("-f")
@@ -548,7 +557,7 @@ fn run_stream_pipeline_inner(
         let (task_tx, task_rx) = crossbeam_channel::bounded::<DfnTask>(16);
         let (result_tx, result_rx) = crossbeam_channel::unbounded::<DfnResult>();
 
-        let num_workers = 6;
+        let num_workers = 4;
         let mut worker_handles = Vec::with_capacity(num_workers);
 
         // 使用 Arc 来让所有工作线程免拷贝共享模型目录
@@ -684,7 +693,8 @@ fn run_stream_pipeline_inner(
                 };
 
                 // 提取本次分片结尾的 1 秒数据，作为下一次分片的预热源
-                history_1s = real_samples[real_samples.len() - warmup_size..].to_vec();
+                let start_idx = real_samples.len().saturating_sub(warmup_size);
+                history_1s = real_samples[start_idx..].to_vec();
 
                 let task = DfnTask {
                     seq_id,
@@ -1128,6 +1138,7 @@ mod tests {
 
     #[test]
     fn test_pipeline_performance() {
+        set_rust_perf_logging(true);
         // Check model file and input file, with fallbacks.
         let movie_file = "C:\\FFOutput\\testmovie.mkv";
         let fallback_audio = "C:\\Projects\\audio2srt\\testaudio.wav";

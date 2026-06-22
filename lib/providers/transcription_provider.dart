@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import '../src/rust/api/ffmpeg.dart' as rust_ffmpeg;
 import '../src/rust/api/whisper.dart' as rust_whisper;
@@ -34,8 +33,48 @@ class SubtitleItem {
 }
 
 class TranscriptionProvider with ChangeNotifier {
-  final FFmpegService _ffmpegService = FFmpegService();
+    final FFmpegService _ffmpegService = FFmpegService();
   final ModelService _modelService = ModelService();
+
+  // 高频状态：定义为私有 ValueNotifier 并对外暴露只读 ValueListenable
+  final ValueNotifier<int> _progressNotifier = ValueNotifier<int>(0);
+  ValueListenable<int> get progressNotifier => _progressNotifier;
+
+  final ValueNotifier<String> _statusMessageNotifier = ValueNotifier<String>('');
+  ValueListenable<String> get statusMessageNotifier => _statusMessageNotifier;
+
+  final ValueNotifier<TranscriptionStatus> _statusNotifier = ValueNotifier<TranscriptionStatus>(TranscriptionStatus.idle);
+  ValueListenable<TranscriptionStatus> get statusNotifier => _statusNotifier;
+
+  final ValueNotifier<String> _progressDetailNotifier = ValueNotifier<String>('');
+  ValueListenable<String> get progressDetailNotifier => _progressDetailNotifier;
+
+  final ValueNotifier<String> _etaNotifier = ValueNotifier<String>('');
+  ValueListenable<String> get etaNotifier => _etaNotifier;
+
+  // Microtask 批处理通知，合并同一帧内的多次调用
+  bool _isNotifyScheduled = false;
+  bool _disposed = false;
+
+  void _safeNotifyListeners() {
+    if (!_isNotifyScheduled) {
+      _isNotifyScheduled = true;
+      scheduleMicrotask(() {
+        if (!_disposed) {
+          notifyListeners();
+        }
+        _isNotifyScheduled = false;
+      });
+    }
+  }
+
+  void _syncHighFreqNotifiers() {
+    _progressNotifier.value = _progress;
+    _statusMessageNotifier.value = _statusMessage;
+    _statusNotifier.value = _status;
+    _progressDetailNotifier.value = '$processedStr / $remainingStr';
+    _etaNotifier.value = etaStr;
+  }
 
   FFmpegService get ffmpegService => _ffmpegService;
   ModelService get modelService => _modelService;
@@ -56,12 +95,12 @@ class TranscriptionProvider with ChangeNotifier {
   bool _translateToEnglish = false;
   bool get translateToEnglish => _translateToEnglish;
 
-  bool _enableDenoise = true;
+  bool _enableDenoise = false;
   bool get enableDenoise => _enableDenoise;
 
   void setEnableDenoise(bool value) {
     _enableDenoise = value;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   bool _useGpu = true;
@@ -285,84 +324,85 @@ class TranscriptionProvider with ChangeNotifier {
     _inputMediaFile = file;
     _status = TranscriptionStatus.idle;
     _progress = 0;
-    _subtitles = [];
+    _subtitles = const [];
     _statusMessage = '已导入文件: ${p.basename(file.path)}';
-    notifyListeners();
+    _syncHighFreqNotifiers();
+    _safeNotifyListeners();
   }
 
   void setSelectedModel(String filename) {
     _selectedModel = filename;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setSelectedLanguage(String langCode) {
     _selectedLanguage = langCode;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setTranslate(bool translate) {
     _translateToEnglish = translate;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setUseGpu(bool value) {
     _useGpu = value;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setVadEnabled(bool value) {
     _vadEnabled = value;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setVadThreshold(double value) {
     _vadThreshold = value;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setVadMinSpeechMs(int value) {
     _vadMinSpeechMs = value;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setVadMinSilenceMs(int value) {
     _vadMinSilenceMs = value;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setTemperature(double value) {
     _temperature = value;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setTemperatureInc(double value) {
     _temperatureInc = value;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setEntropyThold(double value) {
     _entropyThold = value;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setLogprobThold(double value) {
     _logprobThold = value;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setNoSpeechThold(double value) {
     _noSpeechThold = value;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setNoContext(bool value) {
     _noContext = value;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   void setNoStateHistory(bool value) {
     _noStateHistory = value;
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   /// 核心流程：一键开始提取并转写 (全新三级流式降噪与转写管道)
@@ -397,13 +437,15 @@ class TranscriptionProvider with ChangeNotifier {
       _totalMs = 0;
       _etaSeconds = 0.0;
       _transcribeStartTime = DateTime.now();
-      _subtitles = [];
+      _subtitles = const [];
       _status = TranscriptionStatus.transcribing;
+      _syncHighFreqNotifiers();
       
       String dfModelPath = "";
       if (_enableDenoise) {
         _statusMessage = '正在初始化 DeepFilterNet 降噪引擎...';
-        notifyListeners();
+        _syncHighFreqNotifiers();
+        _safeNotifyListeners();
         // 准备 DeepFilterNet 降噪模型
         dfModelPath = await _modelService.prepareDFModel();
       }
@@ -411,14 +453,16 @@ class TranscriptionProvider with ChangeNotifier {
       String vadModelPath = "";
       if (_vadEnabled) {
         _statusMessage = '正在准备 Silero VAD 引擎...';
-        notifyListeners();
+        _syncHighFreqNotifiers();
+        _safeNotifyListeners();
         vadModelPath = await _modelService.prepareVADModel();
       }
 
       _statusMessage = _enableDenoise
           ? '正在进行实时语音流提取、降噪与转写...'
           : '正在进行实时语音流提取与转写...';
-      notifyListeners();
+      _syncHighFreqNotifiers();
+      _safeNotifyListeners();
 
       final modelPath = await _modelService.getModelPath(_selectedModel!);
 
@@ -449,7 +493,7 @@ class TranscriptionProvider with ChangeNotifier {
             progress: (val) {
               _progress = val;
               _statusMessage = '正在流式转写中 ($progressText)...';
-              notifyListeners();
+              _syncHighFreqNotifiers();
             },
             progressDetail: (processedMs, totalMs) {
               _processedMs = processedMs.toInt();
@@ -466,15 +510,18 @@ class TranscriptionProvider with ChangeNotifier {
                 }
               }
               _statusMessage = '正在流式转写中 ($progressText)...';
-              notifyListeners();
+              _syncHighFreqNotifiers();
             },
             segment: (seg) {
-              _subtitles.add(SubtitleItem(
-                startMs: seg.startMs.toInt(),
-                endMs: seg.endMs.toInt(),
-                text: seg.text,
-              ));
-              notifyListeners();
+              _subtitles = [
+                ..._subtitles,
+                SubtitleItem(
+                  startMs: seg.startMs.toInt(),
+                  endMs: seg.endMs.toInt(),
+                  text: seg.text,
+                )
+              ];
+              _safeNotifyListeners();
             },
             success: (segments) {
               _subtitles = segments
@@ -486,7 +533,8 @@ class TranscriptionProvider with ChangeNotifier {
                   .toList();
               _status = TranscriptionStatus.completed;
               _statusMessage = '语音转字幕完成！共生成 ${_subtitles.length} 条字幕';
-              notifyListeners();
+              _syncHighFreqNotifiers();
+              _safeNotifyListeners();
             },
             failure: (err) {
               _setError('转写失败: $err');
@@ -505,30 +553,47 @@ class TranscriptionProvider with ChangeNotifier {
   /// 更新某一条字幕的文本
   void updateSubtitleText(int index, String newText) {
     if (index >= 0 && index < _subtitles.length) {
-      _subtitles[index].text = newText;
-      notifyListeners();
+      final updatedList = List<SubtitleItem>.from(_subtitles);
+      updatedList[index] = SubtitleItem(
+        startMs: _subtitles[index].startMs,
+        endMs: _subtitles[index].endMs,
+        text: newText,
+      );
+      _subtitles = updatedList;
+      _safeNotifyListeners();
     }
   }
 
   /// 更新某一条字幕的时间戳
   void updateSubtitleTimes(int index, int startMs, int endMs) {
     if (index >= 0 && index < _subtitles.length) {
-      _subtitles[index].startMs = startMs;
-      _subtitles[index].endMs = endMs;
-      notifyListeners();
+      final updatedList = List<SubtitleItem>.from(_subtitles);
+      updatedList[index] = SubtitleItem(
+        startMs: startMs,
+        endMs: endMs,
+        text: _subtitles[index].text,
+      );
+      _subtitles = updatedList;
+      _safeNotifyListeners();
     }
   }
   Future<void> convertSubtitlesToChinese(bool toSimplified) async {
     try {
       final texts = _subtitles.map((e) => e.text).toList();
       final converted = await rust_whisper.convertChineseList(texts: texts, toSimplified: toSimplified);
+      final newList = <SubtitleItem>[];
       for (var i = 0; i < _subtitles.length; i++) {
-        _subtitles[i].text = converted[i];
+        newList.add(SubtitleItem(
+          startMs: _subtitles[i].startMs,
+          endMs: _subtitles[i].endMs,
+          text: converted[i],
+        ));
       }
+      _subtitles = newList;
     } catch (e) {
       debugPrint('Conversion error: $e');
     }
-    notifyListeners();
+    _safeNotifyListeners();
   }
 
   /// 导出字幕文件到指定路径
@@ -560,7 +625,7 @@ class TranscriptionProvider with ChangeNotifier {
     await for (final event in muxStream) {
       if (event.progress != null) {
         _progress = event.progress!;
-        notifyListeners();
+        _syncHighFreqNotifiers();
       } else if (event.success != null) {
         resultPath = event.success;
       } else if (event.error != null) {
@@ -571,14 +636,15 @@ class TranscriptionProvider with ChangeNotifier {
     if (resultPath == null) {
       throw Exception('Failed to mux subtitles');
     }
-    return resultPath!;
+    return resultPath;
   }
 
   void _setError(String msg) {
     _status = TranscriptionStatus.failed;
     _statusMessage = msg;
     _progress = 0;
-    notifyListeners();
+    _syncHighFreqNotifiers();
+    _safeNotifyListeners();
   }
 
   // 格式化时间戳显示 00:00:00,000
@@ -622,12 +688,19 @@ class TranscriptionProvider with ChangeNotifier {
     _transcriptionSub = null;
     _status = TranscriptionStatus.idle;
     _statusMessage = '转写任务已手动停止';
-    notifyListeners();
+    _syncHighFreqNotifiers();
+    _safeNotifyListeners();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _transcriptionSub?.cancel();
+    _progressNotifier.dispose();
+    _statusMessageNotifier.dispose();
+    _statusNotifier.dispose();
+    _progressDetailNotifier.dispose();
+    _etaNotifier.dispose();
     super.dispose();
   }
 }

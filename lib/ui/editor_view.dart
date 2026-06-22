@@ -55,33 +55,44 @@ class _EditorViewState extends State<EditorView> {
 
   @override
   Widget build(BuildContext context) {
-    final provider = Provider.of<TranscriptionProvider>(context);
-    final subs = provider.subtitles;
+    final provider = Provider.of<TranscriptionProvider>(context, listen: false);
+    final selectedLanguage = context.select<TranscriptionProvider, String>((p) => p.selectedLanguage);
+    final hasInputFile = context.select<TranscriptionProvider, bool>((p) => p.inputMediaFile != null);
 
-    final filteredSubs = subs.asMap().entries.where((entry) {
-      return entry.value.text.toLowerCase().contains(_searchQuery.toLowerCase());
-    }).toList();
+    return Selector<TranscriptionProvider, List<SubtitleItem>>(
+      selector: (context, provider) => provider.subtitles,
+      builder: (context, subs, child) {
+        final filteredSubs = subs.asMap().entries.where((entry) {
+          return entry.value.text.toLowerCase().contains(_searchQuery.toLowerCase());
+        }).toList();
 
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildHeader(provider),
-          const SizedBox(height: 24),
-          _buildSearchAndToolbar(provider),
-          const SizedBox(height: 16),
-          Expanded(
-            child: subs.isEmpty
-                ? _buildEmptyState()
-                : _buildSubtitlesList(filteredSubs, provider),
+        return Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildHeader(provider, subs, selectedLanguage, hasInputFile),
+              const SizedBox(height: 24),
+              _buildSearchAndToolbar(provider, subs),
+              const SizedBox(height: 16),
+              Expanded(
+                child: subs.isEmpty
+                    ? _buildEmptyState()
+                    : _buildSubtitlesList(filteredSubs, provider),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
-  Widget _buildHeader(TranscriptionProvider provider) {
+  Widget _buildHeader(
+    TranscriptionProvider provider,
+    List<SubtitleItem> subs,
+    String selectedLanguage,
+    bool hasInputFile,
+  ) {
     return Row(
       children: [
         const Column(
@@ -99,8 +110,8 @@ class _EditorViewState extends State<EditorView> {
           ],
         ),
         const Spacer(),
-        if (provider.subtitles.isNotEmpty) ...[
-          if (provider.selectedLanguage == 'zh' || provider.selectedLanguage == 'auto') ...[
+        if (subs.isNotEmpty) ...[
+          if (selectedLanguage == 'zh' || selectedLanguage == 'auto') ...[
             PopupMenuButton<bool>(
               tooltip: '简繁转换',
               position: PopupMenuPosition.under,
@@ -163,7 +174,7 @@ class _EditorViewState extends State<EditorView> {
     );
   }
 
-  Widget _buildSearchAndToolbar(TranscriptionProvider provider) {
+  Widget _buildSearchAndToolbar(TranscriptionProvider provider, List<SubtitleItem> subs) {
     return Row(
       children: [
         Expanded(
@@ -189,9 +200,9 @@ class _EditorViewState extends State<EditorView> {
           ),
         ),
         const SizedBox(width: 16),
-        if (provider.subtitles.isNotEmpty)
+        if (subs.isNotEmpty)
           Text(
-            '共 ${provider.subtitles.length} 条字幕',
+            '共 ${subs.length} 条字幕',
             style: const TextStyle(fontSize: 13, color: Colors.grey),
           ),
       ],

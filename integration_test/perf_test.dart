@@ -6,12 +6,17 @@ import 'package:integration_test/integration_test.dart';
 import 'package:audio2srt/main.dart';
 import 'package:audio2srt/providers/transcription_provider.dart';
 import 'package:audio2srt/src/rust/frb_generated.dart';
+import 'dart:ui';
+import 'package:audio2srt/src/rust/api/stream_pipeline.dart';
 
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
+  binding.framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.fullyLive;
+
   setUpAll(() async {
     await RustLib.init();
+    setRustPerfLogging(enable: true);
   });
 
   testWidgets('Performance Profiling Test', (WidgetTester tester) async {
@@ -80,12 +85,18 @@ void main() {
       print('[PerfTest] Starting transcription...');
       await provider.startTranscription();
 
-      // 5. Keep the test running for 3 minutes (180 seconds) to accumulate performance data
-      print('[PerfTest] Running transcription profiling for 3 minutes...');
-      for (int i = 0; i < 36; i++) {
-        // Pump frame cycles to trigger UI rendering and keep integration test event loop spinning
-        await tester.pump(const Duration(seconds: 5));
-        print('[PerfTest] Elapsed: ${(i + 1) * 5} seconds. Progress: ${provider.progress}%. Status: ${provider.statusMessage}');
+      // 5. Keep the test running for 6 minutes (180 seconds) to accumulate performance data
+      print('[PerfTest] Running transcription profiling for 6 minutes...');
+      for (int i = 0; i < 72; i++) {
+        // 使用原生的 Future.delayed 让真实时间流逝
+        await Future.delayed(const Duration(seconds: 5));
+
+        // 配合一个无参数的 pump()，确保测试框架能抓取到最新的 Widget 树状态进行校验
+        await tester.pump();
+
+        print(
+          '[PerfTest] Elapsed: ${(i + 1) * 5} seconds. Progress: ${provider.progress}%. Status: ${provider.statusMessage}',
+        );
       }
 
       // 6. Explicitly trigger cancelTranscription() to cleanly stop

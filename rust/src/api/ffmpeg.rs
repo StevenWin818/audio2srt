@@ -125,12 +125,16 @@ pub fn extract_audio_from_media(
        .arg("-sn") // 忽略字幕
        .arg("-dn"); // 忽略数据
 
-    // 多音频流时使用 amix 进行声道混合，并配合 volume 还原音量
+    // 如果检测到多音轨，不要混音！明确只提取第一条音频流（Index 为 0）
+    // 避免中英双语同时播放导致 Whisper 识别崩溃
     if audio_stream_count > 1 {
-        cmd.arg("-filter_complex")
-           .arg(format!("amix=inputs={}:duration=longest:dropout_transition=0,volume={}[a]", audio_stream_count, audio_stream_count))
-           .arg("-map")
-           .arg("[a]");
+        println!("[Rust] 检测到多音轨，放弃混音，默认提取第一条音轨 (0:a:0)");
+        cmd.arg("-map")
+           .arg("0:a:0"); 
+    } else {
+        // 如果只有一个音轨，或者没检测出音轨，让 FFmpeg 自动决定默认流
+        cmd.arg("-map")
+           .arg("0:a?"); // 0:a? 表示尝试映射音频，如果没有也不会报错退出
     }
 
     cmd.arg("-ar")

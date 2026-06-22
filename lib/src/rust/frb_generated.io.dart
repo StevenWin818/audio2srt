@@ -37,10 +37,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  TranscriptionSink dco_decode_TraitDef_TranscriptionSink(dynamic raw);
+
+  @protected
   bool dco_decode_bool(dynamic raw);
 
   @protected
   int dco_decode_box_autoadd_i_32(dynamic raw);
+
+  @protected
+  TranscriptionEvent dco_decode_box_autoadd_transcription_event(dynamic raw);
 
   @protected
   TranscriptionSegment dco_decode_box_autoadd_transcription_segment(
@@ -121,6 +127,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int sse_decode_box_autoadd_i_32(SseDeserializer deserializer);
+
+  @protected
+  TranscriptionEvent sse_decode_box_autoadd_transcription_event(
+    SseDeserializer deserializer,
+  );
 
   @protected
   TranscriptionSegment sse_decode_box_autoadd_transcription_segment(
@@ -217,6 +228,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_box_autoadd_i_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_transcription_event(
+    TranscriptionEvent self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_box_autoadd_transcription_segment(

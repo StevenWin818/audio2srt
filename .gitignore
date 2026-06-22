@@ -70,4 +70,6 @@ assets/models/
 rust/src/bin/test_df.rs
 rust/third_party/
 devtools_options.yaml
+
 *.csv
+*.py

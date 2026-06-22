@@ -12,8 +12,6 @@ class DashboardView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final provider = Provider.of<TranscriptionProvider>(context);
-
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24.0),
       child: Column(
@@ -21,14 +19,14 @@ class DashboardView extends StatelessWidget {
         children: [
           _buildHeader(),
           const SizedBox(height: 24),
-          _buildImportArea(context, provider),
+          _buildImportArea(context),
           const SizedBox(height: 24),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(flex: 3, child: _buildConfigCard(context, provider)),
+              Expanded(flex: 3, child: _buildConfigCard(context)),
               const SizedBox(width: 24),
-              Expanded(flex: 2, child: _buildStatusCard(context, provider)),
+              Expanded(flex: 2, child: _buildStatusCard(context)),
             ],
           ),
         ],
@@ -60,8 +58,10 @@ class DashboardView extends StatelessWidget {
     );
   }
 
-  Widget _buildImportArea(BuildContext context, TranscriptionProvider provider) {
-    final hasFile = provider.inputMediaFile != null;
+  Widget _buildImportArea(BuildContext context) {
+    final provider = Provider.of<TranscriptionProvider>(context, listen: false);
+    final inputMediaFile = context.select<TranscriptionProvider, File?>((p) => p.inputMediaFile);
+    final hasFile = inputMediaFile != null;
 
     return DropTarget(
       onDragDone: (details) {
@@ -128,7 +128,7 @@ class DashboardView extends StatelessWidget {
                     ),
                     const SizedBox(height: 16),
                     Text(
-                      hasFile ? p.basename(provider.inputMediaFile!.path) : '拖拽音视频文件到此处，或点击浏览本地文件',
+                      hasFile ? p.basename(inputMediaFile.path) : '拖拽音视频文件到此处，或点击浏览本地文件',
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
@@ -137,7 +137,7 @@ class DashboardView extends StatelessWidget {
                     const SizedBox(height: 8),
                     Text(
                       hasFile
-                          ? '文件大小: ${(provider.inputMediaFile!.lengthSync() / (1024 * 1024)).toStringAsFixed(2)} MB'
+                          ? '文件大小: ${(inputMediaFile.lengthSync() / (1024 * 1024)).toStringAsFixed(2)} MB'
                           : '支持 mp4, mkv, mp3, wav, m4a, flac 等常见格式',
                       style: TextStyle(
                         fontSize: 12,
@@ -154,7 +154,15 @@ class DashboardView extends StatelessWidget {
     );
   }
 
-  Widget _buildConfigCard(BuildContext context, TranscriptionProvider provider) {
+  Widget _buildConfigCard(BuildContext context) {
+    final provider = Provider.of<TranscriptionProvider>(context, listen: false);
+    final selectedModel = context.select<TranscriptionProvider, String?>((p) => p.selectedModel);
+    final downloadedModels = context.select<TranscriptionProvider, List<String>>((p) => p.downloadedModels);
+    final showLowPowerWarning = context.select<TranscriptionProvider, bool>((p) => p.showLowPowerWarning);
+    final enableDenoise = context.select<TranscriptionProvider, bool>((p) => p.enableDenoise);
+    final selectedLanguage = context.select<TranscriptionProvider, String>((p) => p.selectedLanguage);
+    final translateToEnglish = context.select<TranscriptionProvider, bool>((p) => p.translateToEnglish);
+
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -184,10 +192,10 @@ class DashboardView extends StatelessWidget {
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
                 isExpanded: true,
-                value: provider.selectedModel,
+                value: selectedModel,
                 dropdownColor: const Color(0xFF1E1E2C),
                 items: ModelService.availableModels.map((m) {
-                  final isDl = provider.downloadedModels.contains(m.filename);
+                  final isDl = downloadedModels.contains(m.filename);
                   return DropdownMenuItem<String>(
                     value: m.filename,
                     child: Row(
@@ -225,7 +233,7 @@ class DashboardView extends StatelessWidget {
               ),
             ),
           ),
-          if (provider.showLowPowerWarning) ...[
+          if (showLowPowerWarning) ...[
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),
@@ -280,14 +288,14 @@ class DashboardView extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('语音降噪预处理', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                    Text('语音降噪预处理【实验性功能】', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                     SizedBox(height: 4),
                     Text('使用 DeepFilterNet3 神经网络对音频进行高保真人声降噪（可能需要更长时间）', style: TextStyle(fontSize: 11, color: Colors.grey)),
                   ],
                 ),
               ),
               Switch(
-                value: provider.enableDenoise,
+                value: enableDenoise,
                 activeColor: const Color(0xFF8B5CF6),
                 onChanged: (val) {
                   provider.setEnableDenoise(val);
@@ -310,7 +318,7 @@ class DashboardView extends StatelessWidget {
             child: DropdownButtonHideUnderline(
               child: DropdownButton<String>(
                 isExpanded: true,
-                value: provider.selectedLanguage,
+                value: selectedLanguage,
                 dropdownColor: const Color(0xFF1E1E2C),
                 items: const [
                   DropdownMenuItem(value: 'auto', child: Text('自动检测语言 (Auto Detect)')),
@@ -341,7 +349,7 @@ class DashboardView extends StatelessWidget {
                 ),
               ),
               Switch(
-                value: provider.translateToEnglish,
+                value: translateToEnglish,
                 activeColor: const Color(0xFF8B5CF6),
                 onChanged: (val) {
                   provider.setTranslate(val);
@@ -354,9 +362,8 @@ class DashboardView extends StatelessWidget {
     );
   }
 
-  Widget _buildStatusCard(BuildContext context, TranscriptionProvider provider) {
-    final isLoading = provider.status == TranscriptionStatus.extractingAudio ||
-        provider.status == TranscriptionStatus.transcribing;
+  Widget _buildStatusCard(BuildContext context) {
+    final provider = Provider.of<TranscriptionProvider>(context, listen: false);
 
     return Container(
       padding: const EdgeInsets.all(24),
@@ -365,123 +372,156 @@ class DashboardView extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: const Color(0x1FFFFFFF)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            '处理控制与状态',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 24),
-          
-          // 运行阶段显示
-          _buildStageIndicator(
-            '1. 音频重采样',
-            provider.status == TranscriptionStatus.extractingAudio,
-            provider.status == TranscriptionStatus.transcribing ||
-                provider.status == TranscriptionStatus.completed,
-          ),
-          const SizedBox(height: 12),
-          _buildStageIndicator(
-            '2. 神经网络转写',
-            provider.status == TranscriptionStatus.transcribing,
-            provider.status == TranscriptionStatus.completed,
-          ),
-          const SizedBox(height: 24),
+      child: ValueListenableBuilder<TranscriptionStatus>(
+        valueListenable: provider.statusNotifier,
+        builder: (context, status, child) {
+          final isLoading = status == TranscriptionStatus.extractingAudio ||
+              status == TranscriptionStatus.transcribing;
 
-          // 进度展示
-          if (isLoading) ...[
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: provider.status == TranscriptionStatus.transcribing
-                    ? provider.progress / 100
-                    : null, // 音频提取为不确定进度
-                backgroundColor: const Color(0x1FFFFFFF),
-                color: const Color(0xFF8B5CF6),
-                minHeight: 8,
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '处理控制与状态',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
-            ),
-            const SizedBox(height: 12),
-            if (provider.status == TranscriptionStatus.transcribing)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('识别进度', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                  Text('${provider.progress}%', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                ],
+              const SizedBox(height: 24),
+              
+              // 运行阶段显示
+              _buildStageIndicator(
+                '1. 音频重采样',
+                status == TranscriptionStatus.extractingAudio,
+                status == TranscriptionStatus.transcribing ||
+                    status == TranscriptionStatus.completed,
               ),
-          ],
+              const SizedBox(height: 12),
+              _buildStageIndicator(
+                '2. 神经网络转写',
+                status == TranscriptionStatus.transcribing,
+                status == TranscriptionStatus.completed,
+              ),
+              const SizedBox(height: 24),
 
-          const SizedBox(height: 20),
-          if (provider.status == TranscriptionStatus.transcribing && provider.totalMs > 0) ...[
-            const Text(
-              '正在流式转写中...',
-              style: TextStyle(
-                fontSize: 13,
-                color: Colors.white,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  '${provider.processedStr} / ${provider.remainingStr}',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: Colors.white,
-                  ),
-                ),
-                Text(
-                  '--${provider.etaStr}',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
+              // 进度展示
+              if (isLoading) ...[
+                ValueListenableBuilder<int>(
+                  valueListenable: provider.progressNotifier,
+                  builder: (context, progress, child) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: status == TranscriptionStatus.transcribing
+                                ? progress / 100
+                                : null, // 音频提取为不确定进度
+                            backgroundColor: const Color(0x1FFFFFFF),
+                            color: const Color(0xFF8B5CF6),
+                            minHeight: 8,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        if (status == TranscriptionStatus.transcribing)
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text('识别进度', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                              Text('$progress%', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                      ],
+                    );
+                  },
                 ),
               ],
-            ),
-          ] else ...[
-            Text(
-              provider.statusMessage,
-              style: TextStyle(
-                fontSize: 13,
-                color: provider.status == TranscriptionStatus.failed
-                    ? Colors.redAccent
-                    : provider.status == TranscriptionStatus.completed
-                        ? Colors.green
-                        : Colors.white,
-              ),
-            ),
-          ],
-          const SizedBox(height: 24),
 
-          // 开始按钮
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: ElevatedButton(
-              onPressed: isLoading ? null : () => provider.startTranscription(),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF8B5CF6),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+              const SizedBox(height: 20),
+              if (status == TranscriptionStatus.transcribing) ...[
+                const Text(
+                  '正在流式转写中...',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.white,
+                  ),
                 ),
-                disabledBackgroundColor: const Color(0x1F8B5CF6),
+                const SizedBox(height: 6),
+                ValueListenableBuilder<String>(
+                  valueListenable: provider.progressDetailNotifier,
+                  builder: (context, detailStr, child) {
+                    return ValueListenableBuilder<String>(
+                      valueListenable: provider.etaNotifier,
+                      builder: (context, etaStr, child) {
+                        return Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              detailStr,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: Colors.white,
+                              ),
+                            ),
+                            Text(
+                              '--$etaStr',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    );
+                  },
+                ),
+              ] else ...[
+                ValueListenableBuilder<String>(
+                  valueListenable: provider.statusMessageNotifier,
+                  builder: (context, statusMessage, child) {
+                    return Text(
+                      statusMessage,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: status == TranscriptionStatus.failed
+                            ? Colors.redAccent
+                            : status == TranscriptionStatus.completed
+                                ? Colors.green
+                                : Colors.white,
+                      ),
+                    );
+                  },
+                ),
+              ],
+              const SizedBox(height: 24),
+
+              // 开始按钮
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  onPressed: isLoading ? null : () => provider.startTranscription(),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF8B5CF6),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    disabledBackgroundColor: const Color(0x1F8B5CF6),
+                  ),
+                  child: isLoading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text('开始提取并转写', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                ),
               ),
-              child: isLoading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Text('开始提取并转写', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-            ),
-          ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }
