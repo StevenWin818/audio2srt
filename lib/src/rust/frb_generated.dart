@@ -149,6 +149,7 @@ abstract class RustLibApi extends BaseApi {
     required double vadThreshold,
     required int vadMinSpeechMs,
     required int vadMinSilenceMs,
+    required bool noContext,
   });
 
   Future<TranscriptionSegment> crateApiWhisperTranscriptionSegmentDefault();
@@ -572,6 +573,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required double vadThreshold,
     required int vadMinSpeechMs,
     required int vadMinSilenceMs,
+    required bool noContext,
   }) {
     final sink = RustStreamSink<TranscriptionEvent>();
     unawaited(
@@ -595,6 +597,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_encode_f_64(vadThreshold, serializer);
             sse_encode_i_32(vadMinSpeechMs, serializer);
             sse_encode_i_32(vadMinSilenceMs, serializer);
+            sse_encode_bool(noContext, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
@@ -624,6 +627,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             vadThreshold,
             vadMinSpeechMs,
             vadMinSilenceMs,
+            noContext,
           ],
           apiImpl: this,
         ),
@@ -652,6 +656,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "vadThreshold",
           "vadMinSpeechMs",
           "vadMinSilenceMs",
+          "noContext",
         ],
       );
 

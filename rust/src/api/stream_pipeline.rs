@@ -78,6 +78,7 @@ pub fn transcribe_stream(
     vad_threshold: f64,
     vad_min_speech_ms: i32,
     vad_min_silence_ms: i32,
+    no_context: bool,
 ) {
     let sink_clone = sink.clone();
     thread::spawn(move || {
@@ -98,6 +99,7 @@ pub fn transcribe_stream(
             vad_threshold,
             vad_min_speech_ms,
             vad_min_silence_ms,
+            no_context,
         ) {
             let _ = sink_clone.add(TranscriptionEvent::Failure(e.to_string()));
         }
@@ -121,6 +123,7 @@ fn run_stream_pipeline_inner(
     vad_threshold: f64,
     vad_min_speech_ms: i32,
     vad_min_silence_ms: i32,
+    no_context: bool,
 ) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
@@ -373,7 +376,7 @@ fn run_stream_pipeline_inner(
 
                 let mut current_params = params.clone();
 
-                current_params.set_no_context(false); 
+                current_params.set_no_context(no_context);
                 // 允许引擎自动切分短句，解决 30 秒不间断字幕的问题
                 current_params.set_single_segment(false); 
                 // 原生抑制无声空白

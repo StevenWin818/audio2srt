@@ -308,7 +308,7 @@ pub(crate) fn run_transcription_inner(
     entropy_thold: f32,
     logprob_thold: f32,
     no_speech_thold: f32,
-    _no_context: bool,
+    no_context: bool,
 ) -> Result<(), String> {
     println!(
         "[Rust] run_transcription: model_path={}, vad_model_path={}, audio_path={}, language={:?}, translate={}, use_gpu={}, vad={}",
@@ -455,11 +455,11 @@ pub(crate) fn run_transcription_inner(
     params.set_entropy_thold(entropy_thold);
     params.set_logprob_thold(logprob_thold);
     params.set_no_speech_thold(no_speech_thold);
-    params.set_no_context(false); // 必须允许使用底层 KV 缓存的 context 串联上下文
+    params.set_no_context(no_context);
     params.set_single_segment(false); // 允许模型自适应处理长句
     println!(
-        "[Rust] Whisper Params: temp={}, temp_inc={}, entropy_thold={}, logprob_thold={}, no_speech_thold={}, no_context=false",
-        temperature, temperature_inc, entropy_thold, logprob_thold, no_speech_thold
+        "[Rust] Whisper Params: temp={}, temp_inc={}, entropy_thold={}, logprob_thold={}, no_speech_thold={}, no_context={}",
+        temperature, temperature_inc, entropy_thold, logprob_thold, no_speech_thold, no_context
     );
 
     // 5. 运行转写与 VAD 切片逻辑

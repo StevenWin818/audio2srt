@@ -456,6 +456,7 @@ fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
             let api_vad_threshold = <f64>::sse_decode(&mut deserializer);
             let api_vad_min_speech_ms = <i32>::sse_decode(&mut deserializer);
             let api_vad_min_silence_ms = <i32>::sse_decode(&mut deserializer);
+            let api_no_context = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
@@ -477,6 +478,7 @@ fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
                             api_vad_threshold,
                             api_vad_min_speech_ms,
                             api_vad_min_silence_ms,
+                            api_no_context,
                         );
                     })?;
                     Ok(output_ok)

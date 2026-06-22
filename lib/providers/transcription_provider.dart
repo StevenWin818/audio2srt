@@ -102,7 +102,7 @@ class TranscriptionProvider with ChangeNotifier {
   double _noSpeechThold = 0.6;
   double get noSpeechThold => _noSpeechThold;
 
-  bool _noContext = false;
+  bool _noContext = true;
   bool get noContext => _noContext;
 
   TranscriptionStatus _status = TranscriptionStatus.idle;
@@ -430,6 +430,7 @@ class TranscriptionProvider with ChangeNotifier {
         vadThreshold: _vadThreshold,
         vadMinSpeechMs: _vadMinSpeechMs,
         vadMinSilenceMs: _vadMinSilenceMs,
+        noContext: _noContext,
       );
 
       await _transcriptionSub?.cancel();
