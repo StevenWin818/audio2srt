@@ -137,23 +137,7 @@ abstract class RustLibApi extends BaseApi {
   });
 
   Stream<TranscriptionEvent> crateApiStreamPipelineTranscribeStream({
-    required String ffmpegPath,
-    required String inputPath,
-    required String modelPath,
-    required String vadModelPath,
-    required String dfModelPath,
-    String? language,
-    required bool translate,
-    int? threads,
-    required bool useGpu,
-    required bool toSimplified,
-    required bool enableDenoise,
-    required bool vadEnabled,
-    required double vadThreshold,
-    required int vadMinSpeechMs,
-    required int vadMinSilenceMs,
-    required bool noContext,
-    required bool noStateHistory,
+    required PipelineConfig config,
   });
 
   Future<TranscriptionSegment> crateApiWhisperTranscriptionSegmentDefault();
@@ -592,23 +576,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Stream<TranscriptionEvent> crateApiStreamPipelineTranscribeStream({
-    required String ffmpegPath,
-    required String inputPath,
-    required String modelPath,
-    required String vadModelPath,
-    required String dfModelPath,
-    String? language,
-    required bool translate,
-    int? threads,
-    required bool useGpu,
-    required bool toSimplified,
-    required bool enableDenoise,
-    required bool vadEnabled,
-    required double vadThreshold,
-    required int vadMinSpeechMs,
-    required int vadMinSilenceMs,
-    required bool noContext,
-    required bool noStateHistory,
+    required PipelineConfig config,
   }) {
     final sink = RustStreamSink<TranscriptionEvent>();
     unawaited(
@@ -617,23 +585,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           callFfi: (port_) {
             final serializer = SseSerializer(generalizedFrbRustBinding);
             sse_encode_StreamSink_transcription_event_Sse(sink, serializer);
-            sse_encode_String(ffmpegPath, serializer);
-            sse_encode_String(inputPath, serializer);
-            sse_encode_String(modelPath, serializer);
-            sse_encode_String(vadModelPath, serializer);
-            sse_encode_String(dfModelPath, serializer);
-            sse_encode_opt_String(language, serializer);
-            sse_encode_bool(translate, serializer);
-            sse_encode_opt_box_autoadd_i_32(threads, serializer);
-            sse_encode_bool(useGpu, serializer);
-            sse_encode_bool(toSimplified, serializer);
-            sse_encode_bool(enableDenoise, serializer);
-            sse_encode_bool(vadEnabled, serializer);
-            sse_encode_f_64(vadThreshold, serializer);
-            sse_encode_i_32(vadMinSpeechMs, serializer);
-            sse_encode_i_32(vadMinSilenceMs, serializer);
-            sse_encode_bool(noContext, serializer);
-            sse_encode_bool(noStateHistory, serializer);
+            sse_encode_box_autoadd_pipeline_config(config, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
@@ -646,26 +598,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             decodeErrorData: null,
           ),
           constMeta: kCrateApiStreamPipelineTranscribeStreamConstMeta,
-          argValues: [
-            sink,
-            ffmpegPath,
-            inputPath,
-            modelPath,
-            vadModelPath,
-            dfModelPath,
-            language,
-            translate,
-            threads,
-            useGpu,
-            toSimplified,
-            enableDenoise,
-            vadEnabled,
-            vadThreshold,
-            vadMinSpeechMs,
-            vadMinSilenceMs,
-            noContext,
-            noStateHistory,
-          ],
+          argValues: [sink, config],
           apiImpl: this,
         ),
       ),
@@ -676,26 +609,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStreamPipelineTranscribeStreamConstMeta =>
       const TaskConstMeta(
         debugName: "transcribe_stream",
-        argNames: [
-          "sink",
-          "ffmpegPath",
-          "inputPath",
-          "modelPath",
-          "vadModelPath",
-          "dfModelPath",
-          "language",
-          "translate",
-          "threads",
-          "useGpu",
-          "toSimplified",
-          "enableDenoise",
-          "vadEnabled",
-          "vadThreshold",
-          "vadMinSpeechMs",
-          "vadMinSilenceMs",
-          "noContext",
-          "noStateHistory",
-        ],
+        argNames: ["sink", "config"],
       );
 
   @override
@@ -804,6 +718,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  PipelineConfig dco_decode_box_autoadd_pipeline_config(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_pipeline_config(raw);
+  }
+
+  @protected
   TranscriptionEvent dco_decode_box_autoadd_transcription_event(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_transcription_event(raw);
@@ -904,6 +824,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   int? dco_decode_opt_box_autoadd_i_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_i_32(raw);
+  }
+
+  @protected
+  PipelineConfig dco_decode_pipeline_config(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 17)
+      throw Exception('unexpected arr length: expect 17 but see ${arr.length}');
+    return PipelineConfig(
+      ffmpegPath: dco_decode_String(arr[0]),
+      inputPath: dco_decode_String(arr[1]),
+      modelPath: dco_decode_String(arr[2]),
+      vadModelPath: dco_decode_String(arr[3]),
+      dfModelPath: dco_decode_String(arr[4]),
+      language: dco_decode_opt_String(arr[5]),
+      translate: dco_decode_bool(arr[6]),
+      threads: dco_decode_opt_box_autoadd_i_32(arr[7]),
+      useGpu: dco_decode_bool(arr[8]),
+      toSimplified: dco_decode_bool(arr[9]),
+      noContext: dco_decode_bool(arr[10]),
+      noStateHistory: dco_decode_bool(arr[11]),
+      enableDenoise: dco_decode_bool(arr[12]),
+      vadEnabled: dco_decode_bool(arr[13]),
+      vadThreshold: dco_decode_f_64(arr[14]),
+      vadMinSpeechMs: dco_decode_i_32(arr[15]),
+      vadMinSilenceMs: dco_decode_i_32(arr[16]),
+    );
   }
 
   @protected
@@ -1015,6 +962,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   int sse_decode_box_autoadd_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_i_32(deserializer));
+  }
+
+  @protected
+  PipelineConfig sse_decode_box_autoadd_pipeline_config(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_pipeline_config(deserializer));
   }
 
   @protected
@@ -1150,6 +1105,47 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     } else {
       return null;
     }
+  }
+
+  @protected
+  PipelineConfig sse_decode_pipeline_config(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_ffmpegPath = sse_decode_String(deserializer);
+    var var_inputPath = sse_decode_String(deserializer);
+    var var_modelPath = sse_decode_String(deserializer);
+    var var_vadModelPath = sse_decode_String(deserializer);
+    var var_dfModelPath = sse_decode_String(deserializer);
+    var var_language = sse_decode_opt_String(deserializer);
+    var var_translate = sse_decode_bool(deserializer);
+    var var_threads = sse_decode_opt_box_autoadd_i_32(deserializer);
+    var var_useGpu = sse_decode_bool(deserializer);
+    var var_toSimplified = sse_decode_bool(deserializer);
+    var var_noContext = sse_decode_bool(deserializer);
+    var var_noStateHistory = sse_decode_bool(deserializer);
+    var var_enableDenoise = sse_decode_bool(deserializer);
+    var var_vadEnabled = sse_decode_bool(deserializer);
+    var var_vadThreshold = sse_decode_f_64(deserializer);
+    var var_vadMinSpeechMs = sse_decode_i_32(deserializer);
+    var var_vadMinSilenceMs = sse_decode_i_32(deserializer);
+    return PipelineConfig(
+      ffmpegPath: var_ffmpegPath,
+      inputPath: var_inputPath,
+      modelPath: var_modelPath,
+      vadModelPath: var_vadModelPath,
+      dfModelPath: var_dfModelPath,
+      language: var_language,
+      translate: var_translate,
+      threads: var_threads,
+      useGpu: var_useGpu,
+      toSimplified: var_toSimplified,
+      noContext: var_noContext,
+      noStateHistory: var_noStateHistory,
+      enableDenoise: var_enableDenoise,
+      vadEnabled: var_vadEnabled,
+      vadThreshold: var_vadThreshold,
+      vadMinSpeechMs: var_vadMinSpeechMs,
+      vadMinSilenceMs: var_vadMinSilenceMs,
+    );
   }
 
   @protected
@@ -1293,6 +1289,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_pipeline_config(
+    PipelineConfig self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_pipeline_config(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_transcription_event(
     TranscriptionEvent self,
     SseSerializer serializer,
@@ -1413,6 +1418,31 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     if (self != null) {
       sse_encode_box_autoadd_i_32(self, serializer);
     }
+  }
+
+  @protected
+  void sse_encode_pipeline_config(
+    PipelineConfig self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.ffmpegPath, serializer);
+    sse_encode_String(self.inputPath, serializer);
+    sse_encode_String(self.modelPath, serializer);
+    sse_encode_String(self.vadModelPath, serializer);
+    sse_encode_String(self.dfModelPath, serializer);
+    sse_encode_opt_String(self.language, serializer);
+    sse_encode_bool(self.translate, serializer);
+    sse_encode_opt_box_autoadd_i_32(self.threads, serializer);
+    sse_encode_bool(self.useGpu, serializer);
+    sse_encode_bool(self.toSimplified, serializer);
+    sse_encode_bool(self.noContext, serializer);
+    sse_encode_bool(self.noStateHistory, serializer);
+    sse_encode_bool(self.enableDenoise, serializer);
+    sse_encode_bool(self.vadEnabled, serializer);
+    sse_encode_f_64(self.vadThreshold, serializer);
+    sse_encode_i_32(self.vadMinSpeechMs, serializer);
+    sse_encode_i_32(self.vadMinSilenceMs, serializer);
   }
 
   @protected

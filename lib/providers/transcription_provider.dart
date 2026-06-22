@@ -467,23 +467,25 @@ class TranscriptionProvider with ChangeNotifier {
       final modelPath = await _modelService.getModelPath(_selectedModel!);
 
       final eventStream = rust_stream.transcribeStream(
-        ffmpegPath: _ffmpegService.ffmpegPath,
-        inputPath: _inputMediaFile!.path,
-        modelPath: modelPath,
-        vadModelPath: vadModelPath,
-        dfModelPath: dfModelPath,
-        language: _selectedLanguage == 'auto' ? null : _selectedLanguage,
-        translate: _translateToEnglish,
-        threads: 4,
-        useGpu: _useGpu,
-        toSimplified: _selectedLanguage == 'zh' || _selectedLanguage == 'auto',
-        enableDenoise: _enableDenoise,
-        vadEnabled: _vadEnabled,
-        vadThreshold: _vadThreshold,
-        vadMinSpeechMs: _vadMinSpeechMs,
-        vadMinSilenceMs: _vadMinSilenceMs,
-        noContext: _noContext,
-        noStateHistory: _noStateHistory,
+        config: rust_stream.PipelineConfig(
+          ffmpegPath: _ffmpegService.ffmpegPath,
+          inputPath: _inputMediaFile!.path,
+          modelPath: modelPath,
+          vadModelPath: vadModelPath,
+          dfModelPath: dfModelPath,
+          language: _selectedLanguage == 'auto' ? null : _selectedLanguage,
+          translate: _translateToEnglish,
+          threads: 4,
+          useGpu: _useGpu,
+          toSimplified: _selectedLanguage == 'zh' || _selectedLanguage == 'auto',
+          enableDenoise: _enableDenoise,
+          vadEnabled: _vadEnabled,
+          vadThreshold: _vadThreshold,
+          vadMinSpeechMs: _vadMinSpeechMs,
+          vadMinSilenceMs: _vadMinSilenceMs,
+          noContext: _noContext,
+          noStateHistory: _noStateHistory,
+        ),
       );
 
       await _transcriptionSub?.cancel();

@@ -653,7 +653,7 @@ pub(crate) fn run_transcription_inner(
     Ok(())
 }
 
-fn calculate_dtw_mem_size(num_samples: usize) -> usize {
+pub(crate) fn calculate_dtw_mem_size(num_samples: usize) -> usize {
     const FRAME_SAMPLES: usize = 160;
     let num_frames = (num_samples + FRAME_SAMPLES - 1) / FRAME_SAMPLES;
 
@@ -690,7 +690,7 @@ fn calculate_dtw_mem_size(num_samples: usize) -> usize {
     (clamped + (ALIGN - 1)) & !(ALIGN - 1)
 }
 
-fn get_dtw_model_preset(model_path: &str) -> Option<DtwModelPreset> {
+pub(crate) fn get_dtw_model_preset(model_path: &str) -> Option<DtwModelPreset> {
     let path_lower = model_path.to_lowercase();
     if path_lower.contains("medium.en") {
         Some(DtwModelPreset::MediumEn)
@@ -701,7 +701,7 @@ fn get_dtw_model_preset(model_path: &str) -> Option<DtwModelPreset> {
     } else if path_lower.contains("large") {
         Some(DtwModelPreset::LargeV3)
     } else {
-        // Disabling DTW for tiny, base, and small models to prevent median filter width ne[2] assertion crash.
+        // 禁用 tiny, base, small 模型的 DTW，防止 median filter width ne[2] 断言崩溃
         None
     }
 }
@@ -715,21 +715,21 @@ pub(crate) fn calculate_rms(samples: &[f32]) -> f32 {
 }
 
 #[cfg(target_os = "windows")]
-fn register_thread_as_pro_audio() {
+pub(crate) fn register_thread_as_pro_audio() {
     use windows_sys::Win32::System::Threading::AvSetMmThreadCharacteristicsW;
     use windows_sys::core::PCWSTR;
 
     unsafe {
         let task_name: Vec<u16> = "Pro Audio\0".encode_utf16().collect();
         let mut task_index = 0;
-        let handle = AvSetMmThreadCharacteristicsW(
+        let _handle = AvSetMmThreadCharacteristicsW(
             task_name.as_ptr() as PCWSTR, 
             &mut task_index
         );
-        if handle.is_null() {
-            // println!("[Rust] MMCSS 注册失败，退回普通调度");
-        } else {
-            // println!("[Rust] 线程成功接入 MMCSS 绿色通道！");
-        }
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn register_thread_as_pro_audio() {
+    // 非 Windows 平台下为空实现
 }

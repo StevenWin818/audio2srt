@@ -475,47 +475,13 @@ fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
                 crate::api::whisper::TranscriptionEvent,
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
-            let api_ffmpeg_path = <String>::sse_decode(&mut deserializer);
-            let api_input_path = <String>::sse_decode(&mut deserializer);
-            let api_model_path = <String>::sse_decode(&mut deserializer);
-            let api_vad_model_path = <String>::sse_decode(&mut deserializer);
-            let api_df_model_path = <String>::sse_decode(&mut deserializer);
-            let api_language = <Option<String>>::sse_decode(&mut deserializer);
-            let api_translate = <bool>::sse_decode(&mut deserializer);
-            let api_threads = <Option<i32>>::sse_decode(&mut deserializer);
-            let api_use_gpu = <bool>::sse_decode(&mut deserializer);
-            let api_to_simplified = <bool>::sse_decode(&mut deserializer);
-            let api_enable_denoise = <bool>::sse_decode(&mut deserializer);
-            let api_vad_enabled = <bool>::sse_decode(&mut deserializer);
-            let api_vad_threshold = <f64>::sse_decode(&mut deserializer);
-            let api_vad_min_speech_ms = <i32>::sse_decode(&mut deserializer);
-            let api_vad_min_silence_ms = <i32>::sse_decode(&mut deserializer);
-            let api_no_context = <bool>::sse_decode(&mut deserializer);
-            let api_no_state_history = <bool>::sse_decode(&mut deserializer);
+            let api_config =
+                <crate::api::stream_pipeline::PipelineConfig>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok = Result::<_, ()>::Ok({
-                        crate::api::stream_pipeline::transcribe_stream(
-                            api_sink,
-                            api_ffmpeg_path,
-                            api_input_path,
-                            api_model_path,
-                            api_vad_model_path,
-                            api_df_model_path,
-                            api_language,
-                            api_translate,
-                            api_threads,
-                            api_use_gpu,
-                            api_to_simplified,
-                            api_enable_denoise,
-                            api_vad_enabled,
-                            api_vad_threshold,
-                            api_vad_min_speech_ms,
-                            api_vad_min_silence_ms,
-                            api_no_context,
-                            api_no_state_history,
-                        );
+                        crate::api::stream_pipeline::transcribe_stream(api_sink, api_config);
                     })?;
                     Ok(output_ok)
                 })())
@@ -767,6 +733,48 @@ impl SseDecode for Option<i32> {
     }
 }
 
+impl SseDecode for crate::api::stream_pipeline::PipelineConfig {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_ffmpegPath = <String>::sse_decode(deserializer);
+        let mut var_inputPath = <String>::sse_decode(deserializer);
+        let mut var_modelPath = <String>::sse_decode(deserializer);
+        let mut var_vadModelPath = <String>::sse_decode(deserializer);
+        let mut var_dfModelPath = <String>::sse_decode(deserializer);
+        let mut var_language = <Option<String>>::sse_decode(deserializer);
+        let mut var_translate = <bool>::sse_decode(deserializer);
+        let mut var_threads = <Option<i32>>::sse_decode(deserializer);
+        let mut var_useGpu = <bool>::sse_decode(deserializer);
+        let mut var_toSimplified = <bool>::sse_decode(deserializer);
+        let mut var_noContext = <bool>::sse_decode(deserializer);
+        let mut var_noStateHistory = <bool>::sse_decode(deserializer);
+        let mut var_enableDenoise = <bool>::sse_decode(deserializer);
+        let mut var_vadEnabled = <bool>::sse_decode(deserializer);
+        let mut var_vadThreshold = <f64>::sse_decode(deserializer);
+        let mut var_vadMinSpeechMs = <i32>::sse_decode(deserializer);
+        let mut var_vadMinSilenceMs = <i32>::sse_decode(deserializer);
+        return crate::api::stream_pipeline::PipelineConfig {
+            ffmpeg_path: var_ffmpegPath,
+            input_path: var_inputPath,
+            model_path: var_modelPath,
+            vad_model_path: var_vadModelPath,
+            df_model_path: var_dfModelPath,
+            language: var_language,
+            translate: var_translate,
+            threads: var_threads,
+            use_gpu: var_useGpu,
+            to_simplified: var_toSimplified,
+            no_context: var_noContext,
+            no_state_history: var_noStateHistory,
+            enable_denoise: var_enableDenoise,
+            vad_enabled: var_vadEnabled,
+            vad_threshold: var_vadThreshold,
+            vad_min_speech_ms: var_vadMinSpeechMs,
+            vad_min_silence_ms: var_vadMinSilenceMs,
+        };
+    }
+}
+
 impl SseDecode for crate::api::whisper::TranscriptionEvent {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -968,6 +976,42 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::whisper::HardwareAcceleration
     for crate::api::whisper::HardwareAccelerationInfo
 {
     fn into_into_dart(self) -> crate::api::whisper::HardwareAccelerationInfo {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::stream_pipeline::PipelineConfig {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.ffmpeg_path.into_into_dart().into_dart(),
+            self.input_path.into_into_dart().into_dart(),
+            self.model_path.into_into_dart().into_dart(),
+            self.vad_model_path.into_into_dart().into_dart(),
+            self.df_model_path.into_into_dart().into_dart(),
+            self.language.into_into_dart().into_dart(),
+            self.translate.into_into_dart().into_dart(),
+            self.threads.into_into_dart().into_dart(),
+            self.use_gpu.into_into_dart().into_dart(),
+            self.to_simplified.into_into_dart().into_dart(),
+            self.no_context.into_into_dart().into_dart(),
+            self.no_state_history.into_into_dart().into_dart(),
+            self.enable_denoise.into_into_dart().into_dart(),
+            self.vad_enabled.into_into_dart().into_dart(),
+            self.vad_threshold.into_into_dart().into_dart(),
+            self.vad_min_speech_ms.into_into_dart().into_dart(),
+            self.vad_min_silence_ms.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::stream_pipeline::PipelineConfig
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::stream_pipeline::PipelineConfig>
+    for crate::api::stream_pipeline::PipelineConfig
+{
+    fn into_into_dart(self) -> crate::api::stream_pipeline::PipelineConfig {
         self
     }
 }
@@ -1202,6 +1246,29 @@ impl SseEncode for Option<i32> {
         if let Some(value) = self {
             <i32>::sse_encode(value, serializer);
         }
+    }
+}
+
+impl SseEncode for crate::api::stream_pipeline::PipelineConfig {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.ffmpeg_path, serializer);
+        <String>::sse_encode(self.input_path, serializer);
+        <String>::sse_encode(self.model_path, serializer);
+        <String>::sse_encode(self.vad_model_path, serializer);
+        <String>::sse_encode(self.df_model_path, serializer);
+        <Option<String>>::sse_encode(self.language, serializer);
+        <bool>::sse_encode(self.translate, serializer);
+        <Option<i32>>::sse_encode(self.threads, serializer);
+        <bool>::sse_encode(self.use_gpu, serializer);
+        <bool>::sse_encode(self.to_simplified, serializer);
+        <bool>::sse_encode(self.no_context, serializer);
+        <bool>::sse_encode(self.no_state_history, serializer);
+        <bool>::sse_encode(self.enable_denoise, serializer);
+        <bool>::sse_encode(self.vad_enabled, serializer);
+        <f64>::sse_encode(self.vad_threshold, serializer);
+        <i32>::sse_encode(self.vad_min_speech_ms, serializer);
+        <i32>::sse_encode(self.vad_min_silence_ms, serializer);
     }
 }
 

@@ -7,50 +7,100 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'whisper.dart';
 
-// These functions are ignored because they are not marked as `pub`: `add_perf_record`, `calculate_dtw_mem_size`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_dtw_model_preset`, `get_media_duration_secs`, `get_physical_pcore_mask`, `lock_high_priority`, `parse_duration_str`, `register_thread_as_pro_audio`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`
+// These functions are ignored because they are not marked as `pub`: `add_perf_record`, `calculate_dtw_mem_size`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_dtw_model_preset`, `get_media_duration_secs`, `get_physical_pcore_mask`, `join`, `lock_high_priority`, `parse_duration_str`, `register_thread_as_pro_audio`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_vad_worker`, `spawn_whisper_worker`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FfmpegPumpHandle`, `WhisperTask`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
 // These functions are ignored (category: IgnoreBecauseNotAllowedOwner): `add`
 
 void setRustPerfLogging({required bool enable}) => RustLib.instance.api
     .crateApiStreamPipelineSetRustPerfLogging(enable: enable);
 
-Stream<TranscriptionEvent> transcribeStream({
-  required String ffmpegPath,
-  required String inputPath,
-  required String modelPath,
-  required String vadModelPath,
-  required String dfModelPath,
-  String? language,
-  required bool translate,
-  int? threads,
-  required bool useGpu,
-  required bool toSimplified,
-  required bool enableDenoise,
-  required bool vadEnabled,
-  required double vadThreshold,
-  required int vadMinSpeechMs,
-  required int vadMinSilenceMs,
-  required bool noContext,
-  required bool noStateHistory,
-}) => RustLib.instance.api.crateApiStreamPipelineTranscribeStream(
-  ffmpegPath: ffmpegPath,
-  inputPath: inputPath,
-  modelPath: modelPath,
-  vadModelPath: vadModelPath,
-  dfModelPath: dfModelPath,
-  language: language,
-  translate: translate,
-  threads: threads,
-  useGpu: useGpu,
-  toSimplified: toSimplified,
-  enableDenoise: enableDenoise,
-  vadEnabled: vadEnabled,
-  vadThreshold: vadThreshold,
-  vadMinSpeechMs: vadMinSpeechMs,
-  vadMinSilenceMs: vadMinSilenceMs,
-  noContext: noContext,
-  noStateHistory: noStateHistory,
-);
+Stream<TranscriptionEvent> transcribeStream({required PipelineConfig config}) =>
+    RustLib.instance.api.crateApiStreamPipelineTranscribeStream(config: config);
 
 abstract class TranscriptionSink {
   Future<void> add({required TranscriptionEvent event});
+}
+
+class PipelineConfig {
+  final String ffmpegPath;
+  final String inputPath;
+  final String modelPath;
+  final String vadModelPath;
+  final String dfModelPath;
+  final String? language;
+  final bool translate;
+  final int? threads;
+  final bool useGpu;
+  final bool toSimplified;
+  final bool noContext;
+  final bool noStateHistory;
+  final bool enableDenoise;
+  final bool vadEnabled;
+  final double vadThreshold;
+  final int vadMinSpeechMs;
+  final int vadMinSilenceMs;
+
+  const PipelineConfig({
+    required this.ffmpegPath,
+    required this.inputPath,
+    required this.modelPath,
+    required this.vadModelPath,
+    required this.dfModelPath,
+    this.language,
+    required this.translate,
+    this.threads,
+    required this.useGpu,
+    required this.toSimplified,
+    required this.noContext,
+    required this.noStateHistory,
+    required this.enableDenoise,
+    required this.vadEnabled,
+    required this.vadThreshold,
+    required this.vadMinSpeechMs,
+    required this.vadMinSilenceMs,
+  });
+
+  @override
+  int get hashCode =>
+      ffmpegPath.hashCode ^
+      inputPath.hashCode ^
+      modelPath.hashCode ^
+      vadModelPath.hashCode ^
+      dfModelPath.hashCode ^
+      language.hashCode ^
+      translate.hashCode ^
+      threads.hashCode ^
+      useGpu.hashCode ^
+      toSimplified.hashCode ^
+      noContext.hashCode ^
+      noStateHistory.hashCode ^
+      enableDenoise.hashCode ^
+      vadEnabled.hashCode ^
+      vadThreshold.hashCode ^
+      vadMinSpeechMs.hashCode ^
+      vadMinSilenceMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PipelineConfig &&
+          runtimeType == other.runtimeType &&
+          ffmpegPath == other.ffmpegPath &&
+          inputPath == other.inputPath &&
+          modelPath == other.modelPath &&
+          vadModelPath == other.vadModelPath &&
+          dfModelPath == other.dfModelPath &&
+          language == other.language &&
+          translate == other.translate &&
+          threads == other.threads &&
+          useGpu == other.useGpu &&
+          toSimplified == other.toSimplified &&
+          noContext == other.noContext &&
+          noStateHistory == other.noStateHistory &&
+          enableDenoise == other.enableDenoise &&
+          vadEnabled == other.vadEnabled &&
+          vadThreshold == other.vadThreshold &&
+          vadMinSpeechMs == other.vadMinSpeechMs &&
+          vadMinSilenceMs == other.vadMinSilenceMs;
 }

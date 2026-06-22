@@ -15,7 +15,8 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContextParameters, Whisper
 use crate::frb_generated::StreamSink;
 use crate::api::whisper::{
     TranscriptionSegment, TranscriptionEvent, get_or_create_context,
-    convert_chinese, calculate_rms,
+    convert_chinese, calculate_dtw_mem_size, get_dtw_model_preset,
+    register_thread_as_pro_audio,
 };
 
 static PERF_LOG_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -128,48 +129,40 @@ impl TranscriptionSink for StreamSink<TranscriptionEvent> {
     }
 }
 
+// ✅ 配置结构体以消除“过长参数列表”
+#[derive(Clone, Debug)]
+pub struct PipelineConfig {
+    pub ffmpeg_path: String,
+    pub input_path: String,
+    pub model_path: String,
+    pub vad_model_path: String,
+    pub df_model_path: String,
+    // Whisper 设置
+    pub language: Option<String>,
+    pub translate: bool,
+    pub threads: Option<i32>,
+    pub use_gpu: bool,
+    pub to_simplified: bool,
+    pub no_context: bool,
+    pub no_state_history: bool,
+    // VAD & DFN 设置
+    pub enable_denoise: bool,
+    pub vad_enabled: bool,
+    pub vad_threshold: f64,
+    pub vad_min_speech_ms: i32,
+    pub vad_min_silence_ms: i32,
+}
+
 pub fn transcribe_stream(
     sink: StreamSink<TranscriptionEvent>,
-    ffmpeg_path: String,
-    input_path: String,
-    model_path: String,
-    vad_model_path: String,
-    df_model_path: String,
-    language: Option<String>,
-    translate: bool,
-    threads: Option<i32>,
-    use_gpu: bool,
-    to_simplified: bool,
-    enable_denoise: bool,
-    vad_enabled: bool,
-    vad_threshold: f64,
-    vad_min_speech_ms: i32,
-    vad_min_silence_ms: i32,
-    no_context: bool,
-    no_state_history: bool,
+    config: PipelineConfig,
 ) {
     let sink_arc: Arc<dyn TranscriptionSink> = Arc::new(sink);
     let sink_clone = sink_arc.clone();
     thread::spawn(move || {
         if let Err(e) = run_stream_pipeline_inner(
             sink_clone.clone(),
-            ffmpeg_path,
-            input_path,
-            model_path,
-            vad_model_path,
-            df_model_path,
-            language,
-            translate,
-            threads,
-            use_gpu,
-            to_simplified,
-            enable_denoise,
-            vad_enabled,
-            vad_threshold,
-            vad_min_speech_ms,
-            vad_min_silence_ms,
-            no_context,
-            no_state_history,
+            config,
         ) {
             let _ = sink_clone.add(TranscriptionEvent::Failure(e.to_string()));
         }
@@ -178,23 +171,7 @@ pub fn transcribe_stream(
 
 fn run_stream_pipeline_inner(
     sink: Arc<dyn TranscriptionSink>,
-    ffmpeg_path: String,
-    input_path: String,
-    model_path: String,
-    vad_model_path: String,
-    df_model_path: String,
-    language: Option<String>,
-    translate: bool,
-    threads: Option<i32>,
-    use_gpu: bool,
-    to_simplified: bool,
-    enable_denoise: bool,
-    vad_enabled: bool,
-    vad_threshold: f64,
-    vad_min_speech_ms: i32,
-    vad_min_silence_ms: i32,
-    no_context: bool,
-    no_state_history: bool,
+    config: PipelineConfig,
 ) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
@@ -203,7 +180,7 @@ fn run_stream_pipeline_inner(
     }
 
     // 1. 获取视频总时长
-    let total_duration = match get_media_duration_secs(&ffmpeg_path, &input_path) {
+    let total_duration = match get_media_duration_secs(&config.ffmpeg_path, &config.input_path) {
         Ok(d) => d,
         Err(e) => {
             println!("[Rust] Warning: Failed to get duration: {}. Defaulting to 1.0", e);
@@ -212,26 +189,14 @@ fn run_stream_pipeline_inner(
     };
     println!("[Rust] Media total duration: {} seconds", total_duration);
 
-    let chunk_size_48k = 48000;
-
-    // 提前在主流程中解压并准备好模型目录，避免在专属计算线程中执行重度 I/O 操作
-    let extracted_dir = if enable_denoise {
-        println!("[Rust] Preparing DeepFilterNet3 models from tar.gz...");
-        let extracted = extract_tar_gz_if_needed(Path::new(&df_model_path))?;
-        println!("[Rust] DeepFilterStream prepared at: {:?}", extracted);
-        extracted
-    } else {
-        std::path::PathBuf::new()
-    };
-
-    // 4. 初始化 Whisper 上下文
+    // 2. 初始化 Whisper 上下文
     println!("[Rust] Loading Whisper model context...");
     let mut ctx_params = WhisperContextParameters::default();
     
-    // Enable DTW mode using the model preset if available
-    let dtw_preset = get_dtw_model_preset(&model_path);
+    // 如果可用，使用模型预设启用 DTW 模式
+    let dtw_preset = get_dtw_model_preset(&config.model_path);
     if let Some(preset) = dtw_preset {
-        println!("[Rust] DTW alignment enabled with preset for model: {}", model_path);
+        println!("[Rust] DTW alignment enabled with preset for model: {}", config.model_path);
         let num_samples = (total_duration * 16000.0) as usize;
         let mem_size = calculate_dtw_mem_size(num_samples);
         ctx_params.dtw_parameters(whisper_rs::DtwParameters {
@@ -239,7 +204,7 @@ fn run_stream_pipeline_inner(
             dtw_mem_size: mem_size,
         });
     } else {
-        println!("[Rust] DTW alignment disabled (no preset for model: {})", model_path);
+        println!("[Rust] DTW alignment disabled (no preset for model: {})", config.model_path);
         ctx_params.dtw_parameters(whisper_rs::DtwParameters {
             mode: whisper_rs::DtwMode::None,
             dtw_mem_size: 0,
@@ -247,7 +212,7 @@ fn run_stream_pipeline_inner(
     }
     
     let mut selected_device_name = "CPU".to_string();
-    if use_gpu {
+    if config.use_gpu {
         #[cfg(feature = "vulkan")]
         {
             let devices = whisper_rs::vulkan::list_devices();
@@ -276,22 +241,68 @@ fn run_stream_pipeline_inner(
     }
     println!("[Rust] Hardware device for Whisper: {}", selected_device_name);
 
-    let ctx = get_or_create_context(&model_path, use_gpu, ctx_params)
+    let ctx = get_or_create_context(&config.model_path, config.use_gpu, ctx_params)
         .map_err(|e| anyhow!("Failed to load Whisper model: {}", e))?;
-    
-    let mut whisper_state = ctx.create_state()
-        .map_err(|e| anyhow!("Failed to create Whisper state: {}", e))?;
 
-    // 5. 启动 FFmpeg 流提取进程
+    // 3. 创建流式管道 (容量均为 10)
+    let (tx_raw_48k, rx_raw_48k) = sync_channel::<Vec<f32>>(10);
+    let (tx_clean_48k, rx_clean_48k) = sync_channel::<Vec<f32>>(10);
+    let (tx_whisper_task, rx_whisper_task) = sync_channel::<WhisperTask>(10);
+
+    // 4. 启动各个独立的工作节点
+    let ffmpeg_handle = spawn_ffmpeg_pump(&config, tx_raw_48k)?;
+    let dfn_handle = spawn_dfn_worker(&config, rx_raw_48k, tx_clean_48k);
+    let vad_handle = spawn_vad_worker(&config, rx_clean_48k, tx_whisper_task);
+    let whisper_handle = spawn_whisper_worker(ctx, &config, total_duration, rx_whisper_task, sink);
+
+    // 5. 等待收尾
+    ffmpeg_handle.join()?;
+    dfn_handle.join().map_err(|_| anyhow!("DFN3 thread panicked"))??;
+    vad_handle.join().map_err(|_| anyhow!("VAD thread panicked"))??;
+    whisper_handle.join().map_err(|_| anyhow!("Failed to join Whisper GPU thread"))??;
+
+    Ok(())
+}
+
+// ==== 工作线程结构体与辅助函数 ====
+
+struct WhisperTask {
+    samples: Vec<f32>,
+    start_ms: i64,
+    end_ms: i64,
+}
+
+struct FfmpegPumpHandle {
+    pump_thread: thread::JoinHandle<Result<()>>,
+    child: std::process::Child,
+    stderr_thread: thread::JoinHandle<String>,
+}
+
+impl FfmpegPumpHandle {
+    fn join(mut self) -> Result<()> {
+        let _ = self.pump_thread.join();
+        let ffmpeg_status = self.child.wait().unwrap();
+        let stderr_logs = self.stderr_thread.join().unwrap();
+        if !ffmpeg_status.success() {
+            return Err(anyhow!("FFmpeg exited with error: {:?}\nStderr logs:\n{}", ffmpeg_status.code(), stderr_logs));
+        }
+        Ok(())
+    }
+}
+
+fn spawn_ffmpeg_pump(
+    config: &PipelineConfig,
+    tx_raw_48k: std::sync::mpsc::SyncSender<Vec<f32>>,
+) -> Result<FfmpegPumpHandle> {
     println!("[Rust] Starting FFmpeg audio pump process...");
     
     // 动态探测音频流数量
-    let mut probe_cmd = Command::new(&ffmpeg_path);
-    probe_cmd.arg("-i").arg(&input_path);
+    let mut probe_cmd = Command::new(&config.ffmpeg_path);
+    probe_cmd.arg("-i").arg(&config.input_path);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        probe_cmd.creation_flags(0x08000000); // 隐藏窗口
+        probe_cmd.creation_flags(0x08000000);
     }
 
     let audio_stream_count = if let Ok(output) = probe_cmd.output() {
@@ -306,26 +317,23 @@ fn run_stream_pipeline_inner(
     } else {
         1
     };
-    println!("[Rust] transcribe_stream 检测到音频流数量: {}，文件: {}", audio_stream_count, input_path);
+    println!("[Rust] transcribe_stream 检测到音频流数量: {}，文件: {}", audio_stream_count, config.input_path);
 
-    let mut cmd = Command::new(&ffmpeg_path);
+    let mut cmd = Command::new(&config.ffmpeg_path);
     cmd.arg("-y")
        .arg("-i")
-       .arg(&input_path)
+       .arg(&config.input_path)
        .arg("-vn")
        .arg("-sn")
        .arg("-dn");
 
-    // 如果检测到多音轨，不要混音！明确只提取第一条音频流（Index 为 0）
-    // 避免中英双语同时播放导致 Whisper 识别崩溃
     if audio_stream_count > 1 {
         println!("[Rust] 检测到多音轨，放弃混音，默认提取第一条音轨 (0:a:0)");
         cmd.arg("-map")
            .arg("0:a:0"); 
     } else {
-        // 如果只有一个音轨，或者没检测出音轨，让 FFmpeg 自动决定默认流
         cmd.arg("-map")
-           .arg("0:a?"); // 0:a? 表示尝试映射音频，如果没有也不会报错退出
+           .arg("0:a?");
     }
 
     cmd.arg("-f")
@@ -339,7 +347,7 @@ fn run_stream_pipeline_inner(
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd.creation_flags(0x08000000);
     }
 
     cmd.stdout(Stdio::piped())
@@ -363,9 +371,6 @@ fn run_stream_pipeline_inner(
         last_lines.into_iter().collect::<Vec<String>>().join("\n")
     });
 
-    // 6. 建立带背压的通信通道 (最多缓冲 10 个数据块，即 10 秒音频)
-    let (tx, rx) = sync_channel::<Vec<f32>>(10);
-
     let pump_thread = thread::spawn(move || -> Result<()> {
         let mut temp_buf = [0u8; 4096];
         loop {
@@ -374,7 +379,7 @@ fn run_stream_pipeline_inner(
             while chunk_bytes.len() < 192000 {
                 let to_read = std::cmp::min(temp_buf.len(), 192000 - chunk_bytes.len());
                 match stdout.read(&mut temp_buf[..to_read]) {
-                    Ok(0) => break, // EOF
+                    Ok(0) => break,
                     Ok(n) => {
                         chunk_bytes.extend_from_slice(&temp_buf[..n]);
                     }
@@ -397,150 +402,54 @@ fn run_stream_pipeline_inner(
             let _audio_dur_sec = samples.len() as f64 / 48000.0;
             log_perf!("FFmpeg", _elapsed_ms, _audio_dur_sec);
 
-            if tx.send(samples).is_err() {
+            if tx_raw_48k.send(samples).is_err() {
                 break;
             }
         }
         Ok(())
     });
 
-    // 7. 解耦 CPU(降噪)、CPU(重采样与 VAD) 与 GPU(推理) 为三级并行流水线
-    
-    // 定义在 GPU 线程中执行的推理任务
-    struct WhisperTask {
-        samples: Vec<f32>,
-        start_ms: i64,
-        end_ms: i64,
-    }
+    Ok(FfmpegPumpHandle {
+        pump_thread,
+        child,
+        stderr_thread,
+    })
+}
 
-    // 管道 2: DFN3 降噪完毕 (48kHz) -> 重采样器 (容量10)
-    let (tx_clean_48k, rx_clean_48k) = sync_channel::<Vec<f32>>(10);
-    
-    // 管道 3: VAD 切割完毕 (16kHz完整句子) -> Whisper GPU (容量10)
-    let (whisper_tx, whisper_rx) = sync_channel::<WhisperTask>(10);
-    let sink_for_whisper = sink.clone();
+fn spawn_dfn_worker(
+    config: &PipelineConfig,
+    rx_raw_48k: std::sync::mpsc::Receiver<Vec<f32>>,
+    tx_clean_48k: std::sync::mpsc::SyncSender<Vec<f32>>,
+) -> thread::JoinHandle<Result<()>> {
+    let enable_denoise = config.enable_denoise;
+    let df_model_path = config.df_model_path.clone();
 
-    // ==== 线程 C: Whisper 纯 GPU 推理线程 ====
-    let whisper_thread = thread::spawn(move || -> Result<()> {
-        #[cfg(target_os = "windows")]
-        register_thread_as_pro_audio();
-
-        let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
-        
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        let n_threads = threads.unwrap_or(4);
-        params.set_n_threads(n_threads);
-        params.set_translate(translate);
-        if let Some(ref lang) = language {
-            if lang != "auto" && !lang.is_empty() { params.set_language(Some(lang.as_str())); } 
-            else { params.set_language(None); params.set_detect_language(false); }
-        } else {
-            params.set_language(None); params.set_detect_language(false);
-        }
-        params.set_temperature(0.0);
-        params.set_temperature_inc(0.2);
-        params.set_entropy_thold(2.4);
-        params.set_logprob_thold(-1.0);
-        params.set_no_speech_thold(0.6);
-        params.set_single_segment(false);
-
-        while let Ok(task) = whisper_rx.recv() {
-            let WhisperTask { samples: mut samples_16k, start_ms, end_ms } = task;
-            
-            if !samples_16k.is_empty() {
-                // 强行对超短音频使用静音填充以保护 DTW 机制
-                const MIN_SAMPLES_FOR_DTW: usize = 8000; // 0.5s
-                if samples_16k.len() < MIN_SAMPLES_FOR_DTW {
-                    samples_16k.resize(MIN_SAMPLES_FOR_DTW, 0.0);
-                }
-
-                let mut current_params = params.clone();
-
-                current_params.set_no_context(no_context);
-                // 允许引擎自动切分短句，解决 30 秒不间断字幕的问题
-                current_params.set_single_segment(false); 
-                // 原生抑制无声空白
-                current_params.set_suppress_blank(true);
-
-                let start_time = std::time::Instant::now();
-                let full_res = whisper_state.full(current_params, &samples_16k);
-                let _elapsed_ms = start_time.elapsed().as_millis() as u64;
-                let _audio_dur_sec = samples_16k.len() as f64 / 16000.0;
-                log_perf!("Whisper", _elapsed_ms, _audio_dur_sec);
-
-                full_res.map_err(|e| anyhow!("Whisper inference error: {:?}", e))?;
-
-                let n_segments = whisper_state.full_n_segments();
-                for i in 0..n_segments {
-                    if let Some(segment) = whisper_state.get_segment(i) {
-                        let text = segment.to_str_lossy().unwrap_or_default().into_owned();
-                        
-                        // 滤除音乐和叹气符号
-                        let mut final_text = text.replace("♪", "")
-                                                 .replace("[音乐]", "")
-                                                 .replace("(音乐)", "")
-                                                 .replace("[Music]", "")
-                                                 .replace("(Music)", "");
-                        final_text = final_text.trim().to_string();
-
-                        if final_text.is_empty() {
-                            continue;
-                        }
-
-                        let sub_start_ms = start_ms + segment.start_timestamp() * 10;
-                        let sub_end_ms = start_ms + segment.end_timestamp() * 10;
-
-                        if to_simplified {
-                            final_text = convert_chinese(final_text, true);
-                        }
-
-                        let new_seg = TranscriptionSegment {
-                            start_ms: sub_start_ms,
-                            end_ms: sub_end_ms,
-                            text: final_text,
-                        };
-                        all_segments.push(new_seg.clone());
-                        let _ = sink_for_whisper.add(TranscriptionEvent::Segment(new_seg));
-                    }
-                }
-            }
-
-            // 无论是否跳过推理，都必须推进进度条，让 UI 保持流畅响应！
-            let progress = ((end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
-            let _ = sink_for_whisper.add(TranscriptionEvent::Progress(progress.clamp(0, 100)));
-            let _ = sink_for_whisper.add(TranscriptionEvent::ProgressDetail {
-                processed_ms: end_ms,
-                total_ms: (total_duration * 1000.0) as i64,
-            });
-        }
-        
-        let _ = sink_for_whisper.add(TranscriptionEvent::Success(all_segments));
-        Ok(())
-    });
-
-    // ==== 核心线程 1: DFN3 专属降噪线程 ====
-    let extracted_dir_clone = extracted_dir.clone();
-    let dfn_thread = thread::spawn(move || -> Result<()> {
+    thread::spawn(move || -> Result<()> {
         if !enable_denoise {
             println!("[Rust] DeepFilterNet3 降噪已禁用，音频流直通处理。");
             let tx_clean_48k_clone = tx_clean_48k.clone();
-            let mut buffer = Vec::with_capacity(chunk_size_48k);
-            while let Ok(raw_chunk_48k) = rx.recv() {
+            let mut buffer = Vec::with_capacity(48000);
+            while let Ok(raw_chunk_48k) = rx_raw_48k.recv() {
                 buffer.extend_from_slice(&raw_chunk_48k);
-                while buffer.len() >= chunk_size_48k {
-                    let chunk: Vec<f32> = buffer.drain(..chunk_size_48k).collect();
+                while buffer.len() >= 48000 {
+                    let chunk: Vec<f32> = buffer.drain(..48000).collect();
                     if tx_clean_48k_clone.send(chunk).is_err() {
                         return Ok(());
                     }
                 }
             }
             if !buffer.is_empty() {
-                buffer.resize(chunk_size_48k, 0.0);
+                buffer.resize(48000, 0.0);
                 let _ = tx_clean_48k_clone.send(buffer);
             }
             drop(tx_clean_48k_clone);
             return Ok(());
         }
+
+        // ✅ 在工作线程内部延迟解压 DeepFilterNet 模型
+        println!("[Rust] Preparing DeepFilterNet3 models from tar.gz...");
+        let extracted_dir = extract_tar_gz_if_needed(Path::new(&df_model_path))?;
+        println!("[Rust] DeepFilterStream prepared at: {:?}", extracted_dir);
 
         struct DfnTask {
             seq_id: usize,
@@ -553,19 +462,14 @@ fn run_stream_pipeline_inner(
             cleaned_samples: Vec<f32>,
         }
 
-        // 用 crossbeam_channel 来实现多生产者多消费者的高效通道
         let (task_tx, task_rx) = crossbeam_channel::bounded::<DfnTask>(16);
         let (result_tx, result_rx) = crossbeam_channel::unbounded::<DfnResult>();
 
         let num_workers = 4;
         let mut worker_handles = Vec::with_capacity(num_workers);
-
-        // 使用 Arc 来让所有工作线程免拷贝共享模型目录
-        let model_dir_arc = Arc::new(extracted_dir_clone);
-
+        let model_dir_arc = Arc::new(extracted_dir);
         let p_core_mask = get_physical_pcore_mask();
 
-        // 启动并发工作池线程
         for worker_id in 0..num_workers {
             let rx = task_rx.clone();
             let tx = result_tx.clone();
@@ -575,25 +479,15 @@ fn run_stream_pipeline_inner(
             let handle = thread::spawn(move || -> Result<()> {
                 println!("[Rust] Worker {} starting thread...", worker_id);
                 #[cfg(target_os = "windows")]
-                {
-                    set_thread_affinity_mask(mask);
-                    register_thread_as_pro_audio();
-                }
+                set_thread_affinity_mask(mask);
+                register_thread_as_pro_audio();
 
-                // 独占一个模型推理流，配置 1 线程以达到极佳流式推理速度
                 println!("[Rust] Worker {} loading DeepFilterStream from {:?}", worker_id, model_dir);
-                let mut stream = match DeepFilterStream::with_threads(&model_dir, 1) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        println!("[Rust] Worker {} failed to create DeepFilterStream: {:?}", worker_id, e);
-                        return Err(anyhow!("Worker {} failed to create DeepFilterStream: {:?}", worker_id, e));
-                    }
-                };
+                let mut stream = DeepFilterStream::with_threads(&model_dir, 1)
+                    .map_err(|e| anyhow!("Worker {} failed to create DeepFilterStream: {:?}", worker_id, e))?;
                 println!("[Rust] Worker {} warming up DeepFilterStream...", worker_id);
-                if let Err(e) = stream.warmup() {
-                    println!("[Rust] Worker {} failed to warmup: {:?}", worker_id, e);
-                    return Err(anyhow!("Worker {} failed to warmup: {:?}", worker_id, e));
-                }
+                stream.warmup()
+                    .map_err(|e| anyhow!("Worker {} failed to warmup: {:?}", worker_id, e))?;
                 println!("[Rust] Worker {} warmup complete and ready!", worker_id);
 
                 while let Ok(task) = rx.recv() {
@@ -633,10 +527,8 @@ fn run_stream_pipeline_inner(
             worker_handles.push(handle);
         }
 
-        // 把 result_tx 丢掉，这样在所有 worker 退出后，result_rx.recv() 能自动返回 EOF
         drop(result_tx);
 
-        // 启动汇总重排线程 (Reorder Buffer)
         let tx_clean_48k_clone = tx_clean_48k.clone();
         let collector_thread = thread::spawn(move || {
             let mut reorder_map = BTreeMap::new();
@@ -645,15 +537,14 @@ fn run_stream_pipeline_inner(
             while let Ok(result) = result_rx.recv() {
                 reorder_map.insert(result.seq_id, result.cleaned_samples);
 
-                // 有序释放连续分片数据
                 while let Some(entry) = reorder_map.first_entry() {
                     if *entry.key() == next_expected_id {
                         let samples = entry.remove();
                         let mut failed = false;
-                        for chunk in samples.chunks(chunk_size_48k) {
+                        for chunk in samples.chunks(48000) {
                             let mut chunk_vec = chunk.to_vec();
-                            if chunk_vec.len() < chunk_size_48k {
-                                chunk_vec.resize(chunk_size_48k, 0.0);
+                            if chunk_vec.len() < 48000 {
+                                chunk_vec.resize(48000, 0.0);
                             }
                             if tx_clean_48k_clone.send(chunk_vec).is_err() {
                                 failed = true;
@@ -671,16 +562,14 @@ fn run_stream_pipeline_inner(
             }
         });
 
-        // ======= 主调度器逻辑 (Scheduler) =======
-        // 积攒音频：分块设定为 10 秒（480,000 个采样点）
         let block_size = 480000;
-        let warmup_size = 48000; // 预热长度为 1 秒
+        let warmup_size = 48000;
 
         let mut current_block = Vec::with_capacity(block_size);
         let mut history_1s = Vec::with_capacity(warmup_size);
         let mut seq_id = 0;
 
-        while let Ok(raw_chunk_48k) = rx.recv() {
+        while let Ok(raw_chunk_48k) = rx_raw_48k.recv() {
             current_block.extend_from_slice(&raw_chunk_48k);
 
             while current_block.len() >= block_size {
@@ -692,7 +581,6 @@ fn run_stream_pipeline_inner(
                     history_1s.clone()
                 };
 
-                // 提取本次分片结尾的 1 秒数据，作为下一次分片的预热源
                 let start_idx = real_samples.len().saturating_sub(warmup_size);
                 history_1s = real_samples[start_idx..].to_vec();
 
@@ -709,7 +597,6 @@ fn run_stream_pipeline_inner(
             }
         }
 
-        // 处理 EOF 残留音频数据
         if !current_block.is_empty() {
             let warmup_samples = if seq_id == 0 {
                 Vec::new()
@@ -725,10 +612,8 @@ fn run_stream_pipeline_inner(
             let _ = task_tx.send(task);
         }
 
-        // 分发完所有任务后，主动关闭任务通道以让工作线程读取退出
         drop(task_tx);
 
-        // 等待所有工作线程完成
         for handle in worker_handles {
             match handle.join() {
                 Ok(Err(e)) => println!("[Rust] DFN3 Worker thread returned error: {:?}", e),
@@ -737,17 +622,24 @@ fn run_stream_pipeline_inner(
             }
         }
 
-        // 等待 Collector 重排收集完毕
         let _ = collector_thread.join();
-
         drop(tx_clean_48k);
         Ok(())
-    });
+    })
+}
 
-    // ==== 核心线程 2: 重采样与 VAD 寻峰线程 ====
-    let vad_model_path_clone = vad_model_path.clone();
-    let vad_thread = thread::spawn(move || -> Result<()> {
-        #[cfg(target_os = "windows")]
+fn spawn_vad_worker(
+    config: &PipelineConfig,
+    rx_clean_48k: std::sync::mpsc::Receiver<Vec<f32>>,
+    tx_whisper_task: std::sync::mpsc::SyncSender<WhisperTask>,
+) -> thread::JoinHandle<Result<()>> {
+    let vad_enabled = config.vad_enabled;
+    let vad_model_path = config.vad_model_path.clone();
+    let vad_min_silence_ms = config.vad_min_silence_ms;
+    let vad_min_speech_ms = config.vad_min_speech_ms;
+    let vad_threshold = config.vad_threshold;
+
+    thread::spawn(move || -> Result<()> {
         register_thread_as_pro_audio();
 
         let resampler_params = SincInterpolationParameters {
@@ -761,7 +653,7 @@ fn run_stream_pipeline_inner(
             16000_f64 / 48000_f64,
             2.0,
             resampler_params,
-            chunk_size_48k,
+            48000,
             1,
         ).map_err(|e| anyhow!("Failed to initialize Rubato resampler: {:?}", e))?;
 
@@ -769,9 +661,9 @@ fn run_stream_pipeline_inner(
         let mut current_offset_ms: i64 = 0;
 
         let mut vad = if vad_enabled {
-            println!("[Rust] 正在为流式处理初始化 Silero VAD 模型: {}", vad_model_path_clone);
+            println!("[Rust] 正在为流式处理初始化 Silero VAD 模型: {}", vad_model_path);
             let vad_ctx_params = WhisperVadContextParams::new();
-            match WhisperVadContext::new(&vad_model_path_clone, vad_ctx_params) {
+            match WhisperVadContext::new(&vad_model_path, vad_ctx_params) {
                 Ok(v) => Some(v),
                 Err(e) => {
                     println!("[Rust] 初始化 WhisperVadContext 失败: {:?}", e);
@@ -835,7 +727,6 @@ fn run_stream_pipeline_inner(
 
                                 // 寻找一个"已经结束"的语音段 (后面有 >= 4000 采样点 即 250ms 的静音)
                                 if audio_buffer.len() >= end_idx + 4000 {
-                                    // 预留前后 200ms (3200 samples) 作为平滑过渡
                                     let safe_start = start_idx.saturating_sub(3200); 
                                     let safe_end = (end_idx + 3200).min(audio_buffer.len()); 
                                     
@@ -844,7 +735,7 @@ fn run_stream_pipeline_inner(
                                     let end_ms = current_offset_ms + (safe_end as i64 * 1000 / 16000);
 
                                     if segment_samples.len() > 3200 {
-                                        if whisper_tx.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
+                                        if tx_whisper_task.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
                                             break;
                                         }
                                     }
@@ -863,7 +754,6 @@ fn run_stream_pipeline_inner(
 
                             // 如果 Buffer 满了 30s，触发红线保护
                             if audio_buffer.len() >= 480000 {
-                                // 调用 Vec 的 .last()，确保合法
                                 if let Some(s) = segs_vec.last() {
                                     let start_idx = (s.start as usize * 160).min(audio_buffer.len());
                                     let safe_start = start_idx.saturating_sub(3200);
@@ -871,7 +761,7 @@ fn run_stream_pipeline_inner(
                                     let start_ms = current_offset_ms + (safe_start as i64 * 1000 / 16000);
                                     let end_ms = current_offset_ms + (audio_buffer.len() as i64 * 1000 / 16000);
                                     
-                                    let _ = whisper_tx.send(WhisperTask { samples: segment_samples, start_ms, end_ms });
+                                    let _ = tx_whisper_task.send(WhisperTask { samples: segment_samples, start_ms, end_ms });
                                 } else {
                                     println!("[Rust] VAD 过滤: 成功丢弃 30 秒的非语音/纯音乐数据");
                                 }
@@ -889,7 +779,7 @@ fn run_stream_pipeline_inner(
                         let start_ms = current_offset_ms;
                         let end_ms = current_offset_ms + 10000;
                         current_offset_ms = end_ms;
-                        if whisper_tx.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
+                        if tx_whisper_task.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
                             break;
                         }
                         check_and_cut = true;
@@ -900,35 +790,135 @@ fn run_stream_pipeline_inner(
             let _elapsed_ms = start_time.elapsed().as_millis() as u64;
             log_perf!("SileroVAD", _elapsed_ms, _audio_dur_sec);
         }
-        // 处理 EOF 残余音频
+
         if !audio_buffer.is_empty() {
             let seg_duration_ms = (audio_buffer.len() as f64 / 16000.0 * 1000.0) as i64;
             let start_ms = current_offset_ms;
             let end_ms = current_offset_ms + seg_duration_ms;
-            
-            // 直接发送
-            let _ = whisper_tx.send(WhisperTask { samples: audio_buffer, start_ms, end_ms });
+            let _ = tx_whisper_task.send(WhisperTask { samples: audio_buffer, start_ms, end_ms });
         }
 
-        drop(whisper_tx);
+        drop(tx_whisper_task);
         Ok(())
-    });
-
-    // 9. Shutdown & Wait
-    let _ = pump_thread.join();
-    let ffmpeg_status = child.wait().unwrap();
-    let stderr_logs = stderr_thread.join().unwrap();
-    let _ = dfn_thread.join().map_err(|_| anyhow!("DFN3 thread panicked"))??;
-    let _ = vad_thread.join().map_err(|_| anyhow!("VAD thread panicked"))??;
-    let _ = whisper_thread.join().map_err(|_| anyhow!("Failed to join Whisper GPU thread"))??;
-
-    if !ffmpeg_status.success() {
-        return Err(anyhow!("FFmpeg exited with error: {:?}\nStderr logs:\n{}", ffmpeg_status.code(), stderr_logs));
-    }
-    
-    Ok(())
+    })
 }
 
+fn spawn_whisper_worker(
+    ctx: Arc<whisper_rs::WhisperContext>,
+    config: &PipelineConfig,
+    total_duration: f64,
+    rx_whisper_task: std::sync::mpsc::Receiver<WhisperTask>,
+    sink: Arc<dyn TranscriptionSink>,
+) -> thread::JoinHandle<Result<()>> {
+    let threads = config.threads;
+    let translate = config.translate;
+    let language = config.language.clone();
+    let no_context = config.no_context;
+    let to_simplified = config.to_simplified;
+
+    thread::spawn(move || -> Result<()> {
+        register_thread_as_pro_audio();
+
+        let mut whisper_state = ctx.create_state()
+            .map_err(|e| anyhow!("Failed to create Whisper state: {}", e))?;
+
+        let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
+        
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        let n_threads = threads.unwrap_or(4);
+        params.set_n_threads(n_threads);
+        params.set_translate(translate);
+        if let Some(ref lang) = language {
+            if lang != "auto" && !lang.is_empty() { 
+                params.set_language(Some(lang.as_str())); 
+            } else { 
+                params.set_language(None); 
+                params.set_detect_language(false); 
+            }
+        } else {
+            params.set_language(None); 
+            params.set_detect_language(false);
+        }
+        params.set_temperature(0.0);
+        params.set_temperature_inc(0.2);
+        params.set_entropy_thold(2.4);
+        params.set_logprob_thold(-1.0);
+        params.set_no_speech_thold(0.6);
+        params.set_single_segment(false);
+
+        while let Ok(task) = rx_whisper_task.recv() {
+            let WhisperTask { samples: mut samples_16k, start_ms, end_ms } = task;
+            
+            if !samples_16k.is_empty() {
+                // 强行对超短音频使用静音填充以保护 DTW 机制
+                const MIN_SAMPLES_FOR_DTW: usize = 8000; // 0.5s
+                if samples_16k.len() < MIN_SAMPLES_FOR_DTW {
+                    samples_16k.resize(MIN_SAMPLES_FOR_DTW, 0.0);
+                }
+
+                let mut current_params = params.clone();
+                current_params.set_no_context(no_context);
+                current_params.set_single_segment(false); 
+                current_params.set_suppress_blank(true);
+
+                let start_time = std::time::Instant::now();
+                let full_res = whisper_state.full(current_params, &samples_16k);
+                let _elapsed_ms = start_time.elapsed().as_millis() as u64;
+                let _audio_dur_sec = samples_16k.len() as f64 / 16000.0;
+                log_perf!("Whisper", _elapsed_ms, _audio_dur_sec);
+
+                full_res.map_err(|e| anyhow!("Whisper inference error: {:?}", e))?;
+
+                let n_segments = whisper_state.full_n_segments();
+                for i in 0..n_segments {
+                    if let Some(segment) = whisper_state.get_segment(i) {
+                        let text = segment.to_str_lossy().unwrap_or_default().into_owned();
+                        
+                        // 滤除音乐和叹气符号
+                        let mut final_text = text.replace("♪", "")
+                                                 .replace("[音乐]", "")
+                                                 .replace("(音乐)", "")
+                                                 .replace("[Music]", "")
+                                                 .replace("(Music)", "");
+                        final_text = final_text.trim().to_string();
+
+                        if final_text.is_empty() {
+                            continue;
+                        }
+
+                        let sub_start_ms = start_ms + segment.start_timestamp() * 10;
+                        let sub_end_ms = start_ms + segment.end_timestamp() * 10;
+
+                        if to_simplified {
+                            final_text = convert_chinese(final_text, true);
+                        }
+
+                        let new_seg = TranscriptionSegment {
+                            start_ms: sub_start_ms,
+                            end_ms: sub_end_ms,
+                            text: final_text,
+                        };
+                        all_segments.push(new_seg.clone());
+                        let _ = sink.add(TranscriptionEvent::Segment(new_seg));
+                    }
+                }
+            }
+
+            // 推进进度条
+            let progress = ((end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
+            let _ = sink.add(TranscriptionEvent::Progress(progress.clamp(0, 100)));
+            let _ = sink.add(TranscriptionEvent::ProgressDetail {
+                processed_ms: end_ms,
+                total_ms: (total_duration * 1000.0) as i64,
+            });
+        }
+        
+        let _ = sink.add(TranscriptionEvent::Success(all_segments));
+        Ok(())
+    })
+}
+
+// ==== 现有的辅助函数 ====
 
 fn extract_tar_gz_if_needed(tar_gz_path: &Path) -> Result<std::path::PathBuf> {
     let parent = tar_gz_path.parent().ok_or_else(|| anyhow!("No parent dir"))?;
@@ -988,35 +978,11 @@ fn extract_tar_gz_if_needed(tar_gz_path: &Path) -> Result<std::path::PathBuf> {
 fn lock_high_priority() {
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, HIGH_PRIORITY_CLASS};
     unsafe {
-        // 强制锁定进程为“高优先级”
-        // 哪怕软件最小化到系统托盘，Windows 也绝不敢把这些线程扔进 E-Core
         SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
     }
-    // println!("[Rust] Process priority locked to HIGH_PRIORITY_CLASS.");
 }
 
-#[cfg(target_os = "windows")]
-fn register_thread_as_pro_audio() {
-    use windows_sys::Win32::System::Threading::AvSetMmThreadCharacteristicsW;
-    use windows_sys::core::PCWSTR;
 
-    unsafe {
-        // 告诉 Windows 应当用最高调度质量
-        let task_name: Vec<u16> = "Pro Audio\0".encode_utf16().collect();
-        let mut task_index = 0;
-        
-        let handle = AvSetMmThreadCharacteristicsW(
-            task_name.as_ptr() as PCWSTR, 
-            &mut task_index
-        );
-
-        if handle.is_null() {
-            // println!("[Rust] MMCSS 注册失败，退回普通调度");
-        } else {
-            // println!("[Rust] 线程成功接入 MMCSS 绿色通道！");
-        }
-    }
-}
 
 #[cfg(target_os = "windows")]
 fn disable_power_throttling() {
@@ -1028,9 +994,9 @@ fn disable_power_throttling() {
 
     unsafe {
         let mut state = PROCESS_POWER_THROTTLING_STATE {
-            Version: 1, // PROCESS_POWER_THROTTLING_CURRENT_VERSION
+            Version: 1,
             ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
-            StateMask: 0, // 0 代表关闭节流 (如果是执行速度控制的话)
+            StateMask: 0,
         };
 
         SetProcessInformation(
@@ -1039,7 +1005,6 @@ fn disable_power_throttling() {
             &mut state as *mut _ as *mut _,
             size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
         );
-        // println!("[Rust] Windows 11 电源节流 (EcoQoS) 已被禁用，后台满血运行。");
     }
 }
 
@@ -1048,7 +1013,6 @@ fn get_physical_pcore_mask() -> usize {
     let mut mask = 0_usize;
     for core in core_ids {
         if core.id % 2 == 0 {
-            // 使用 checked_shl 防止在 64+ 核 CPU 上位移溢出崩溃
             mask |= 1_usize.checked_shl(core.id as u32).unwrap_or(0);
         }
     }
@@ -1069,59 +1033,6 @@ fn set_thread_affinity_mask(mask: usize) {
 
 
 
-fn calculate_dtw_mem_size(num_samples: usize) -> usize {
-    const FRAME_SAMPLES: usize = 160;
-    let num_frames = (num_samples + FRAME_SAMPLES - 1) / FRAME_SAMPLES;
-
-    const BYTES_F32: usize = 4;
-    const BYTES_I32: usize = 4;
-    const LANES: usize = 4;
-
-    let band_frames = match num_frames {
-        0..=15_000 => 96,
-        15_001..=45_000 => 128,
-        _ => 160,
-    };
-
-    let dp_bytes = num_frames
-        .saturating_mul(band_frames)
-        .saturating_mul(LANES)
-        .saturating_mul(BYTES_F32);
-
-    let bt_bytes = num_frames
-        .saturating_mul(BYTES_I32);
-
-    const BASELINE_MB: usize = 24;
-    let base_bytes = BASELINE_MB * 1024 * 1024;
-
-    let total = base_bytes
-        .saturating_add(dp_bytes)
-        .saturating_add(bt_bytes);
-
-    let min_bytes = 24 * 1024 * 1024;
-    let max_bytes = 768 * 1024 * 1024;
-    let clamped = total.clamp(min_bytes, max_bytes);
-
-    const ALIGN: usize = 8 * 1024 * 1024;
-    (clamped + (ALIGN - 1)) & !(ALIGN - 1)
-}
-
-fn get_dtw_model_preset(model_path: &str) -> Option<whisper_rs::DtwModelPreset> {
-    let path_lower = model_path.to_lowercase();
-    if path_lower.contains("medium.en") {
-        Some(whisper_rs::DtwModelPreset::MediumEn)
-    } else if path_lower.contains("medium") {
-        Some(whisper_rs::DtwModelPreset::Medium)
-    } else if path_lower.contains("large-v3-turbo") {
-        Some(whisper_rs::DtwModelPreset::LargeV3Turbo)
-    } else if path_lower.contains("large") {
-        Some(whisper_rs::DtwModelPreset::LargeV3)
-    } else {
-        // Disabling DTW for tiny, base, and small models to prevent median filter width ne[2] assertion crash.
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1139,7 +1050,6 @@ mod tests {
     #[test]
     fn test_pipeline_performance() {
         set_rust_perf_logging(true);
-        // Check model file and input file, with fallbacks.
         let movie_file = "C:\\FFOutput\\testmovie.mkv";
         let fallback_audio = "C:\\Projects\\audio2srt\\testaudio.wav";
         let input_path = if std::path::Path::new(movie_file).exists() {
@@ -1157,49 +1067,42 @@ mod tests {
         };
 
         let vad_model_path = "C:\\Users\\Steven\\AppData\\Roaming\\com.audio2srt\\audio2srt\\models\\ggml-silero-v5.1.2.bin".to_string();
-        
-        // DeepFilterNet model directory (normally extracted from DeepFilterNet3_onnx.tar.gz)
-        // Let's pass the tar.gz path directly as it will be prepared
         let df_model_path = "C:\\Users\\Steven\\AppData\\Roaming\\com.audio2srt\\audio2srt\\models\\DeepFilterNet3_onnx.tar.gz".to_string();
 
         println!("Running performance test using input: {}", input_path);
         println!("Model: {}", model_path);
 
-        let ffmpeg_path = "ffmpeg".to_string(); // Assume ffmpeg is in path for tests
+        let ffmpeg_path = "ffmpeg".to_string();
         let sink = Arc::new(MockSink) as Arc<dyn TranscriptionSink>;
 
         let sink_clone = sink.clone();
-        let input_path_clone = input_path.clone();
-        let model_path_clone = model_path.clone();
-        let vad_model_path_clone = vad_model_path.clone();
-        let df_model_path_clone = df_model_path.clone();
+        
+        let config = PipelineConfig {
+            ffmpeg_path,
+            input_path,
+            model_path,
+            vad_model_path,
+            df_model_path,
+            language: Some("zh".to_string()),
+            translate: false,
+            threads: Some(4),
+            use_gpu: true,
+            to_simplified: true,
+            enable_denoise: true,
+            vad_enabled: true,
+            vad_threshold: 0.5,
+            vad_min_speech_ms: 300,
+            vad_min_silence_ms: 400,
+            no_context: true,
+            no_state_history: true,
+        };
 
         let handle = thread::spawn(move || {
-            let res = run_stream_pipeline_inner(
-                sink_clone,
-                ffmpeg_path,
-                input_path_clone,
-                model_path_clone,
-                vad_model_path_clone,
-                df_model_path_clone,
-                Some("zh".to_string()),
-                false, // translate
-                Some(4), // threads
-                true, // use_gpu
-                true, // to_simplified
-                true, // enable_denoise
-                true, // vad_enabled
-                0.5, // vad_threshold
-                300, // vad_min_speech_ms
-                400, // vad_min_silence_ms
-                true, // no_context
-                true, // no_state_history
-            );
+            let res = run_stream_pipeline_inner(sink_clone, config);
             println!("Pipeline run result: {:?}", res);
         });
 
-        // Run for 60 seconds, then exit test. Because writing is appended in real-time, 
-        // we'll have cached the performance data.
+        // 运行 60 秒后退出测试。因为性能记录是实时追加写入的，所以退出前已经缓存好了性能数据。
         thread::sleep(std::time::Duration::from_secs(60));
         println!("Test timed out after 60s, exiting to terminate background threads.");
     }

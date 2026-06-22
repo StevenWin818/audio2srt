@@ -46,6 +46,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int dco_decode_box_autoadd_i_32(dynamic raw);
 
   @protected
+  PipelineConfig dco_decode_box_autoadd_pipeline_config(dynamic raw);
+
+  @protected
   TranscriptionEvent dco_decode_box_autoadd_transcription_event(dynamic raw);
 
   @protected
@@ -90,6 +93,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int? dco_decode_opt_box_autoadd_i_32(dynamic raw);
 
   @protected
+  PipelineConfig dco_decode_pipeline_config(dynamic raw);
+
+  @protected
   TranscriptionEvent dco_decode_transcription_event(dynamic raw);
 
   @protected
@@ -127,6 +133,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   int sse_decode_box_autoadd_i_32(SseDeserializer deserializer);
+
+  @protected
+  PipelineConfig sse_decode_box_autoadd_pipeline_config(
+    SseDeserializer deserializer,
+  );
 
   @protected
   TranscriptionEvent sse_decode_box_autoadd_transcription_event(
@@ -181,6 +192,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int? sse_decode_opt_box_autoadd_i_32(SseDeserializer deserializer);
 
   @protected
+  PipelineConfig sse_decode_pipeline_config(SseDeserializer deserializer);
+
+  @protected
   TranscriptionEvent sse_decode_transcription_event(
     SseDeserializer deserializer,
   );
@@ -228,6 +242,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_box_autoadd_i_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_pipeline_config(
+    PipelineConfig self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_box_autoadd_transcription_event(
@@ -288,6 +308,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_opt_box_autoadd_i_32(int? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_pipeline_config(
+    PipelineConfig self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_transcription_event(
