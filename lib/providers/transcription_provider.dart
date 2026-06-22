@@ -86,6 +86,36 @@ class TranscriptionProvider with ChangeNotifier {
   File? _inputMediaFile;
   File? get inputMediaFile => _inputMediaFile;
 
+  // 音轨选择状态
+  List<rust_ffmpeg.AudioTrackInfo> _availableTracks = [];
+  List<rust_ffmpeg.AudioTrackInfo> get availableTracks => _availableTracks;
+
+  rust_ffmpeg.AudioTrackInfo? _selectedTrack;
+  rust_ffmpeg.AudioTrackInfo? get selectedTrack => _selectedTrack;
+
+  void setSelectedTrack(rust_ffmpeg.AudioTrackInfo track) {
+    _selectedTrack = track;
+    _safeNotifyListeners();
+  }
+
+  Future<void> _probeAudioTracks(File file) async {
+    try {
+      final tracks = await rust_ffmpeg.probeAudioTracks(
+        ffmpegPath: _ffmpegService.ffmpegPath,
+        filePath: file.path,
+      );
+      _availableTracks = tracks;
+      if (_availableTracks.isNotEmpty) {
+        _selectedTrack = _availableTracks.first;
+      } else {
+        _selectedTrack = null;
+      }
+      _safeNotifyListeners();
+    } catch (e) {
+      debugPrint('[TranscriptionProvider] 探测音轨失败: $e');
+    }
+  }
+
   String? _selectedModel;
   String? get selectedModel => _selectedModel;
 
@@ -326,6 +356,12 @@ class TranscriptionProvider with ChangeNotifier {
     _progress = 0;
     _subtitles = const [];
     _statusMessage = '已导入文件: ${p.basename(file.path)}';
+    
+    // 清空旧音轨状态并触发异步探测
+    _availableTracks = [];
+    _selectedTrack = null;
+    _probeAudioTracks(file);
+
     _syncHighFreqNotifiers();
     _safeNotifyListeners();
   }
@@ -485,6 +521,7 @@ class TranscriptionProvider with ChangeNotifier {
           vadMinSilenceMs: _vadMinSilenceMs,
           noContext: _noContext,
           noStateHistory: _noStateHistory,
+          selectedAudioTrack: _selectedTrack?.index,
         ),
       );
 

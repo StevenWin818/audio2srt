@@ -6,8 +6,9 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `format_path_for_filter`, `parse_time_to_secs`, `run_ffmpeg_with_progress`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`
+// These functions are ignored because they are not marked as `pub`: `format_path_for_filter`, `get_ffprobe_path`, `parse_time_to_secs`, `probe_audio_tracks_fallback`, `run_ffmpeg_with_progress`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ProbeOutput`, `ProbeStream`, `ProbeTags`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`
 
 /// 提取音视频文件中的音频并重采样为 16kHz 单声道 PCM WAV 格式
 Stream<FfmpegEvent> extractAudioFromMedia({
@@ -34,6 +35,46 @@ Stream<FfmpegEvent> muxSrtToVideo({
   outputPath: outputPath,
   hardBurn: hardBurn,
 );
+
+Future<List<AudioTrackInfo>> probeAudioTracks({
+  required String ffmpegPath,
+  required String filePath,
+}) => RustLib.instance.api.crateApiFfmpegProbeAudioTracks(
+  ffmpegPath: ffmpegPath,
+  filePath: filePath,
+);
+
+/// 将 ISO 639-2 (三字母) 转换为 (ISO 639-1 二字母, 语言中文名称)
+Future<(String, String)> convertIso6392({required String code}) =>
+    RustLib.instance.api.crateApiFfmpegConvertIso6392(code: code);
+
+class AudioTrackInfo {
+  final BigInt index;
+  final String codecName;
+  final String? language;
+  final String? title;
+
+  const AudioTrackInfo({
+    required this.index,
+    required this.codecName,
+    this.language,
+    this.title,
+  });
+
+  @override
+  int get hashCode =>
+      index.hashCode ^ codecName.hashCode ^ language.hashCode ^ title.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AudioTrackInfo &&
+          runtimeType == other.runtimeType &&
+          index == other.index &&
+          codecName == other.codecName &&
+          language == other.language &&
+          title == other.title;
+}
 
 class FfmpegEvent {
   final int? progress;

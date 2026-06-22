@@ -151,6 +151,8 @@ pub struct PipelineConfig {
     pub vad_threshold: f64,
     pub vad_min_speech_ms: i32,
     pub vad_min_silence_ms: i32,
+    // 音轨选择（从0开始的相对音轨索引）
+    pub selected_audio_track: Option<usize>,
 }
 
 pub fn transcribe_stream(
@@ -327,8 +329,11 @@ fn spawn_ffmpeg_pump(
        .arg("-sn")
        .arg("-dn");
 
-    if audio_stream_count > 1 {
-        println!("[Rust] 检测到多音轨，放弃混音，默认提取第一条音轨 (0:a:0)");
+    if let Some(track_idx) = config.selected_audio_track {
+        cmd.arg("-map")
+           .arg(format!("0:a:{}", track_idx));
+    } else if audio_stream_count > 1 {
+        println!("[Rust] 未指定音轨，检测到多音轨，默认提取第一条音轨 (0:a:0)");
         cmd.arg("-map")
            .arg("0:a:0"); 
     } else {
@@ -1095,6 +1100,7 @@ mod tests {
             vad_min_silence_ms: 400,
             no_context: true,
             no_state_history: true,
+            selected_audio_track: None,
         };
 
         let handle = thread::spawn(move || {

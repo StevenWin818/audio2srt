@@ -6,6 +6,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:path/path.dart' as p;
 import '../providers/transcription_provider.dart';
 import '../services/model_service.dart';
+import '../src/rust/api/ffmpeg.dart' as rust_ffmpeg;
 
 class DashboardView extends StatelessWidget {
   const DashboardView({super.key});
@@ -162,6 +163,8 @@ class DashboardView extends StatelessWidget {
     final enableDenoise = context.select<TranscriptionProvider, bool>((p) => p.enableDenoise);
     final selectedLanguage = context.select<TranscriptionProvider, String>((p) => p.selectedLanguage);
     final translateToEnglish = context.select<TranscriptionProvider, bool>((p) => p.translateToEnglish);
+    final availableTracks = context.select<TranscriptionProvider, List<rust_ffmpeg.AudioTrackInfo>>((p) => p.availableTracks);
+    final selectedTrack = context.select<TranscriptionProvider, rust_ffmpeg.AudioTrackInfo?>((p) => p.selectedTrack);
 
     return Container(
       padding: const EdgeInsets.all(24),
@@ -280,6 +283,42 @@ class DashboardView extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 20),
+
+          // 音轨选择 (仅当检测到多音轨时动态滑出显示)
+          if (availableTracks.length > 1) ...[
+            const Text('选择提取音轨', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: const Color(0x08FFFFFF),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0x1FFFFFFF)),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<rust_ffmpeg.AudioTrackInfo>(
+                  isExpanded: true,
+                  value: selectedTrack,
+                  dropdownColor: const Color(0xFF1E1E2C),
+                  items: availableTracks.map((track) {
+                    final lang = track.language ?? '未知语言';
+                    final codec = track.codecName;
+                    final title = track.title != null ? ' - ${track.title}' : '';
+                    return DropdownMenuItem<rust_ffmpeg.AudioTrackInfo>(
+                      value: track,
+                      child: Text('[音轨 ${track.index.toInt() + 1}] $lang ($codec)$title'),
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      provider.setSelectedTrack(val);
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
 
           // 神经网络降噪
           Row(

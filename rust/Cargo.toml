@@ -23,6 +23,8 @@ tract-onnx = "=0.21.4"
 crossbeam-channel = "0.5"
 core_affinity = "0.8"
 windows-sys = { version = "0.61.2", features = ["Win32_System_Threading", "Win32_System_LibraryLoader"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 
 [features]

@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'whisper.dart';
 
-// These functions are ignored because they are not marked as `pub`: `add_perf_record`, `calculate_dtw_mem_size`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_dtw_model_preset`, `get_media_duration_secs`, `get_physical_pcore_mask`, `join`, `lock_high_priority`, `parse_duration_str`, `register_thread_as_pro_audio`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_vad_worker`, `spawn_whisper_worker`
+// These functions are ignored because they are not marked as `pub`: `add_perf_record`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_media_duration_secs`, `get_physical_pcore_mask`, `join`, `lock_high_priority`, `parse_duration_str`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_vad_worker`, `spawn_whisper_worker`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FfmpegPumpHandle`, `WhisperTask`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
 // These functions are ignored (category: IgnoreBecauseNotAllowedOwner): `add`
@@ -40,6 +40,7 @@ class PipelineConfig {
   final double vadThreshold;
   final int vadMinSpeechMs;
   final int vadMinSilenceMs;
+  final BigInt? selectedAudioTrack;
 
   const PipelineConfig({
     required this.ffmpegPath,
@@ -59,6 +60,7 @@ class PipelineConfig {
     required this.vadThreshold,
     required this.vadMinSpeechMs,
     required this.vadMinSilenceMs,
+    this.selectedAudioTrack,
   });
 
   @override
@@ -79,7 +81,8 @@ class PipelineConfig {
       vadEnabled.hashCode ^
       vadThreshold.hashCode ^
       vadMinSpeechMs.hashCode ^
-      vadMinSilenceMs.hashCode;
+      vadMinSilenceMs.hashCode ^
+      selectedAudioTrack.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -102,5 +105,6 @@ class PipelineConfig {
           vadEnabled == other.vadEnabled &&
           vadThreshold == other.vadThreshold &&
           vadMinSpeechMs == other.vadMinSpeechMs &&
-          vadMinSilenceMs == other.vadMinSilenceMs;
+          vadMinSilenceMs == other.vadMinSilenceMs &&
+          selectedAudioTrack == other.selectedAudioTrack;
 }
