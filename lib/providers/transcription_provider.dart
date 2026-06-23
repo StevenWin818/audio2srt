@@ -1,13 +1,24 @@
 import 'dart:async';
+import 'dart:ffi';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:local_notifier/local_notifier.dart';
+import 'package:ffi/ffi.dart';
+import 'package:window_manager/window_manager.dart';
 import '../src/rust/api/ffmpeg.dart' as rust_ffmpeg;
 import '../src/rust/api/whisper.dart' as rust_whisper;
 import '../src/rust/api/stream_pipeline.dart' as rust_stream;
 import '../services/ffmpeg_service.dart';
 import '../services/model_service.dart';
+
+// Windows FFI functions to flash taskbar icon
+typedef _FindWindowWFunc = Int32 Function(Pointer<Utf16> lpClassName, Pointer<Utf16> lpWindowName);
+typedef _FindWindowW = int Function(Pointer<Utf16> lpClassName, Pointer<Utf16> lpWindowName);
+
+typedef _FlashWindowFunc = Int32 Function(Int32 hWnd, Int32 bInvert);
+typedef _FlashWindow = int Function(int hWnd, int bInvert);
 
 enum TranscriptionStatus {
   idle,
@@ -239,6 +250,20 @@ class TranscriptionProvider with ChangeNotifier {
   List<SubtitleItem> _subtitles = [];
   List<SubtitleItem> get subtitles => _subtitles;
 
+  bool _isExported = false;
+  bool get isExported => _isExported;
+
+  bool get needsCloseConfirmation {
+    if (_status == TranscriptionStatus.extractingAudio || 
+        _status == TranscriptionStatus.transcribing) {
+      return true;
+    }
+    if (_subtitles.isNotEmpty && !_isExported) {
+      return true;
+    }
+    return false;
+  }
+
   // 全局模型下载状态
   String? _downloadingModelFile;
   String? get downloadingModelFile => _downloadingModelFile;
@@ -375,6 +400,7 @@ class TranscriptionProvider with ChangeNotifier {
     _status = TranscriptionStatus.idle;
     _progress = 0;
     _subtitles = const [];
+    _isExported = false;
     _statusMessage = '已导入文件: ${p.basename(file.path)}';
     _thumbnailPath = null;
     _totalMs = 0;
@@ -564,7 +590,15 @@ class TranscriptionProvider with ChangeNotifier {
       _transcribeStartTime = DateTime.now();
       _subtitles = const [];
       _status = TranscriptionStatus.transcribing;
+      _isExported = false;
       _syncHighFreqNotifiers();
+
+      // 在推理（转写）开始时，初始化任务栏进度条为 0%
+      try {
+        windowManager.setProgressBar(0.0);
+      } catch (e) {
+        debugPrint('Failed to set taskbar progress: $e');
+      }
       
       String dfModelPath = "";
       if (_enableDenoise) {
@@ -620,8 +654,15 @@ class TranscriptionProvider with ChangeNotifier {
           event.when(
             progress: (val) {
               _progress = val;
-              _statusMessage = '正在流式转写中 ($progressText)...';
+              _statusMessage = '正在生成字幕...';
               _syncHighFreqNotifiers();
+
+              // 在推理过程中实时更新状态栏进度条
+              try {
+                windowManager.setProgressBar(val / 100.0);
+              } catch (e) {
+                debugPrint('Failed to set taskbar progress: $e');
+              }
             },
             progressDetail: (processedMs, totalMs) {
               _processedMs = processedMs.toInt();
@@ -637,7 +678,7 @@ class TranscriptionProvider with ChangeNotifier {
                   _etaSeconds = 0.0;
                 }
               }
-              _statusMessage = '正在流式转写中 ($progressText)...';
+              _statusMessage = '正在生成字幕...';
               _syncHighFreqNotifiers();
             },
             segment: (seg) {
@@ -663,9 +704,69 @@ class TranscriptionProvider with ChangeNotifier {
               _statusMessage = '语音转字幕完成！共生成 ${_subtitles.length} 条字幕';
               _syncHighFreqNotifiers();
               _safeNotifyListeners();
+
+              // 清除状态栏进度条
+              try {
+                windowManager.setProgressBar(-1.0);
+              } catch (e) {
+                debugPrint('Failed to clear taskbar progress: $e');
+              }
+
+              // 推理结束时状态栏图标闪烁提醒用户
+              _flashTaskbarIcon();
+
+              // 推理成功发送本地通知
+              try {
+                final filename = _inputMediaFile != null ? p.basename(_inputMediaFile!.path) : '音视频文件';
+                final notification = LocalNotification(
+                  title: '语音识别已完成',
+                  body: '文件: $filename\n成功生成 ${_subtitles.length} 条字幕。',
+                );
+                notification.onClick = () async {
+                  try {
+                    await windowManager.show();
+                    await windowManager.focus();
+                  } catch (e) {
+                    debugPrint('Failed to show window on notification click: $e');
+                  }
+                };
+                notification.show();
+              } catch (e) {
+                debugPrint('[TranscriptionProvider] 发送成功通知异常: $e');
+              }
             },
             failure: (err) {
               _setError('转写失败: $err');
+
+              // 清除状态栏进度条
+              try {
+                windowManager.setProgressBar(-1.0);
+              } catch (e) {
+                debugPrint('Failed to clear taskbar progress: $e');
+              }
+
+              // 推理出错也闪烁提醒用户
+              _flashTaskbarIcon();
+
+              // 推理失败发送本地通知
+              try {
+                final filename = _inputMediaFile != null ? p.basename(_inputMediaFile!.path) : '音视频文件';
+                final notification = LocalNotification(
+                  title: '语音识别失败',
+                  body: '文件: $filename\n错误信息: $err',
+                );
+                notification.onClick = () async {
+                  try {
+                    await windowManager.show();
+                    await windowManager.focus();
+                  } catch (e) {
+                    debugPrint('Failed to show window on notification click: $e');
+                  }
+                };
+                notification.show();
+              } catch (e) {
+                debugPrint('[TranscriptionProvider] 发送失败通知异常: $e');
+              }
             },
           );
         },
@@ -729,6 +830,8 @@ class TranscriptionProvider with ChangeNotifier {
     final file = File(filePath);
     final content = isVtt ? generateVtt(_subtitles) : generateSrt(_subtitles);
     await file.writeAsString(content);
+    _isExported = true;
+    _safeNotifyListeners();
   }
 
   /// 压制/封装字幕到视频
@@ -819,6 +922,41 @@ class TranscriptionProvider with ChangeNotifier {
     _statusMessage = '转写任务已手动停止';
     _syncHighFreqNotifiers();
     _safeNotifyListeners();
+
+    // 手动取消也清除状态栏进度条
+    try {
+      windowManager.setProgressBar(-1.0);
+    } catch (e) {
+      debugPrint('Failed to clear taskbar progress: $e');
+    }
+  }
+
+  // Windows FFI 动态查找并闪烁状态栏/任务栏图标
+  void _flashTaskbarIcon() {
+    if (!Platform.isWindows) return;
+    try {
+      final user32 = DynamicLibrary.open('user32.dll');
+      final findWindow = user32.lookupFunction<_FindWindowWFunc, _FindWindowW>('FindWindowW');
+      final flashWindow = user32.lookupFunction<_FlashWindowFunc, _FlashWindow>('FlashWindow');
+
+      final className = 'FLUTTER_RUNNER_WIN32_WINDOW'.toNativeUtf16();
+      final hwnd = findWindow(className, nullptr);
+      calloc.free(className);
+
+      if (hwnd != 0) {
+        int count = 0;
+        Timer.periodic(const Duration(milliseconds: 500), (timer) {
+          if (count >= 6) {
+            timer.cancel();
+          } else {
+            flashWindow(hwnd, 1);
+            count++;
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('[TranscriptionProvider] _flashTaskbarIcon error: $e');
+    }
   }
 
   @override

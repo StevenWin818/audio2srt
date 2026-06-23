@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:local_notifier/local_notifier.dart';
+import 'package:tray_manager/tray_manager.dart';
 
 import 'src/rust/frb_generated.dart';
 import 'providers/transcription_provider.dart';
@@ -31,9 +33,20 @@ Future<void> main() async {
     windowManager.waitUntilReadyToShow(windowOptions, () async {
       await windowManager.show();
       await windowManager.focus();
+      await windowManager.setPreventClose(true);
     });
   } catch (e) {
     debugPrint('window_manager initialization failed: $e');
+  }
+
+  // 初始化 local_notifier 本地通知
+  try {
+    await localNotifier.setup(
+      appName: 'Audio2Srt',
+      shortcutPolicy: ShortcutPolicy.requireCreate,
+    );
+  } catch (e) {
+    debugPrint('local_notifier initialization failed: $e');
   }
   
   bool isRustInitialized = false;
@@ -105,16 +118,193 @@ class Audio2SrtApp extends StatelessWidget {
   }
 }
 
-class MainShell extends StatelessWidget {
+class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
+  @override
+  State<MainShell> createState() => _MainShellState();
+}
 
+class _MainShellState extends State<MainShell> with WindowListener, TrayListener {
   List<SidebarItem> get sidebarItems => [
     SidebarItem(icon: Icons.dashboard_outlined, label: '首页'),
     SidebarItem(icon: Icons.edit_note_outlined, label: '字幕编辑器'),
     SidebarItem(icon: Icons.layers_outlined, label: '模型管理'),
     SidebarItem(icon: Icons.settings_outlined, label: '系统设置'),
   ];
+
+  bool _isTrayInitialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    windowManager.addListener(this);
+    trayManager.addListener(this);
+    
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        final provider = Provider.of<TranscriptionProvider>(context, listen: false);
+        provider.addListener(_onProviderChanged);
+        _onProviderChanged(); // initial check
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    windowManager.removeListener(this);
+    trayManager.removeListener(this);
+    try {
+      final provider = Provider.of<TranscriptionProvider>(context, listen: false);
+      provider.removeListener(_onProviderChanged);
+    } catch (_) {}
+    _destroyTray();
+    super.dispose();
+  }
+
+  void _onProviderChanged() {
+    if (!mounted) return;
+    final provider = Provider.of<TranscriptionProvider>(context, listen: false);
+    if (provider.needsCloseConfirmation) {
+      _initTray();
+    } else {
+      _destroyTray();
+    }
+  }
+
+  Future<void> _initTray() async {
+    if (_isTrayInitialized) return;
+    try {
+      await trayManager.setIcon(
+        Platform.isWindows ? 'assets/app_icon.ico' : 'assets/app_icon.png',
+      );
+      await trayManager.setToolTip('Audio2Srt');
+      
+      final menu = Menu(
+        items: [
+          MenuItem(key: 'show_window', label: '显示主窗口'),
+          MenuItem.separator(),
+          MenuItem(key: 'exit_app', label: '退出程序'),
+        ],
+      );
+      await trayManager.setContextMenu(menu);
+      _isTrayInitialized = true;
+    } catch (e) {
+      debugPrint('Failed to initialize tray: $e');
+    }
+  }
+
+  Future<void> _destroyTray() async {
+    if (!_isTrayInitialized) return;
+    try {
+      await trayManager.destroy();
+      _isTrayInitialized = false;
+    } catch (e) {
+      debugPrint('Failed to destroy tray: $e');
+    }
+  }
+
+  @override
+  void onWindowClose() async {
+    final provider = Provider.of<TranscriptionProvider>(context, listen: false);
+    if (provider.needsCloseConfirmation) {
+      _showCloseConfirmationDialog();
+    } else {
+      await _destroyTray();
+      await windowManager.destroy();
+    }
+  }
+
+  // Tray listener overrides
+  @override
+  void onTrayIconMouseDown() async {
+    await windowManager.show();
+    await windowManager.focus();
+  }
+
+  @override
+  void onTrayIconMouseUp() {}
+
+  @override
+  void onTrayIconRightMouseDown() {
+    trayManager.popUpContextMenu();
+  }
+
+  @override
+  void onTrayIconRightMouseUp() {}
+
+  @override
+  void onTrayMenuItemClick(MenuItem menuItem) async {
+    if (menuItem.key == 'show_window') {
+      await windowManager.show();
+      await windowManager.focus();
+    } else if (menuItem.key == 'exit_app') {
+      await _destroyTray();
+      await windowManager.destroy();
+    }
+  }
+
+  void _showCloseConfirmationDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF131324), // matching the dark surface color
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0x1FFFFFFF), width: 1),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Color(0xFFEF4444)),
+              SizedBox(width: 8),
+              Text('确认关闭？', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: const Text(
+            '当前任务正在运行中，或者生成的字幕尚未导出。\n直接关闭窗口可能会丢失所有未保存的内容。',
+            style: TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+          actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          actions: [
+            // 取消
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消', style: TextStyle(color: Colors.grey)),
+            ),
+            
+            // 直接关闭
+            TextButton(
+              onPressed: () async {
+                Navigator.of(dialogContext).pop();
+                await _destroyTray();
+                await windowManager.destroy();
+              },
+              child: const Text('直接关闭', style: TextStyle(color: Color(0xFFEF4444))),
+            ),
+            
+            // 最小化挂机
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF8B5CF6),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              onPressed: () async {
+                Navigator.of(dialogContext).pop();
+                await _initTray(); // Ensure tray is initialized
+                await windowManager.hide(); // Hides window from taskbar and shows only in tray
+              },
+              child: const Text('托盘最小化'),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {

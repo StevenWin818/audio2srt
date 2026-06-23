@@ -226,7 +226,7 @@ struct ProbeOutput {
 
 #[derive(serde::Deserialize, Debug, Clone)]
 struct ProbeStream {
-    index: usize,
+    // index: usize,
     codec_name: Option<String>,
     tags: Option<ProbeTags>,
 }

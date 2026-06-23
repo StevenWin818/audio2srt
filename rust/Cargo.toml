@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib"]
 
 [dependencies]
 flutter_rust_bridge = "=2.11.1"
@@ -13,13 +13,11 @@ hound = "3.5.1"
 anyhow = "1.0"
 zhconv = "0.4.1"
 rubato = "0.15"
-deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", package = "deep_filter", features = ["tract"] }
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", package = "deep_filter", default-features = false }
 deepfilter-rt = { path = "third_party/deepfilter-rt" }
-ort = { version = "=2.0.0-rc.11", features = ["ndarray"] }
+ort = { version = "=2.0.0-rc.11", default-features = false, features = ["load-dynamic", "ndarray"] }
 flate2 = "1.0"
 tar = "0.4"
-tract-core = "=0.21.4"
-tract-onnx = "=0.21.4"
 crossbeam-channel = "0.5"
 core_affinity = "0.8"
 windows-sys = { version = "0.61.2", features = ["Win32_System_Threading", "Win32_System_LibraryLoader"] }
@@ -38,9 +36,12 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
 debug-assertions = false
 
 [profile.release]
-opt-level = 3
+opt-level = "z"
 lto = "fat"
 codegen-units = 1
-# panic = "abort"
-# strip = true
+debug = 0
+panic = "abort"
+strip = true
+
+
 

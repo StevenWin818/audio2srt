@@ -31,9 +31,7 @@ class Sidebar extends StatelessWidget {
       width: isExpanded ? 240 : 72,
       decoration: const BoxDecoration(
         color: Color(0xFF131324),
-        border: Border(
-          right: BorderSide(color: Color(0x1FFFFFFF), width: 1),
-        ),
+        border: Border(right: BorderSide(color: Color(0x1FFFFFFF), width: 1)),
       ),
       child: ClipRect(
         child: Column(
@@ -46,7 +44,7 @@ class Sidebar extends StatelessWidget {
                 itemBuilder: (context, index) {
                   final item = items[index];
                   final isActive = index == selectedIndex;
-    
+
                   return Padding(
                     padding: EdgeInsets.symmetric(
                       horizontal: isExpanded ? 16.0 : 8.0,
@@ -62,10 +60,14 @@ class Sidebar extends StatelessWidget {
                           vertical: 12,
                         ),
                         decoration: BoxDecoration(
-                          color: isActive ? const Color(0x1F8B5CF6) : Colors.transparent,
+                          color: isActive
+                              ? const Color(0x1F8B5CF6)
+                              : Colors.transparent,
                           borderRadius: BorderRadius.circular(10),
                           border: Border.all(
-                            color: isActive ? const Color(0x408B5CF6) : Colors.transparent,
+                            color: isActive
+                                ? const Color(0x408B5CF6)
+                                : Colors.transparent,
                           ),
                         ),
                         child: isExpanded
@@ -79,7 +81,9 @@ class Sidebar extends StatelessWidget {
                                   children: [
                                     Icon(
                                       item.icon,
-                                      color: isActive ? const Color(0xFF8B5CF6) : Colors.grey[400],
+                                      color: isActive
+                                          ? const Color(0xFF8B5CF6)
+                                          : Colors.grey[400],
                                       size: 20,
                                     ),
                                     const SizedBox(width: 16),
@@ -90,8 +94,12 @@ class Sidebar extends StatelessWidget {
                                         overflow: TextOverflow.clip,
                                         style: TextStyle(
                                           fontSize: 14,
-                                          fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
-                                          color: isActive ? Colors.white : Colors.grey[400],
+                                          fontWeight: isActive
+                                              ? FontWeight.bold
+                                              : FontWeight.w500,
+                                          color: isActive
+                                              ? Colors.white
+                                              : Colors.grey[400],
                                         ),
                                       ),
                                     ),
@@ -101,7 +109,9 @@ class Sidebar extends StatelessWidget {
                             : Center(
                                 child: Icon(
                                   item.icon,
-                                  color: isActive ? const Color(0xFF8B5CF6) : Colors.grey[400],
+                                  color: isActive
+                                      ? const Color(0xFF8B5CF6)
+                                      : Colors.grey[400],
                                   size: 20,
                                 ),
                               ),
@@ -142,22 +152,7 @@ class Sidebar extends StatelessWidget {
         height: 88,
         padding: const EdgeInsets.only(top: 40),
         child: Center(
-          child: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF8B5CF6), Color(0xFF06B6D4)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(
-              Icons.multitrack_audio,
-              color: Colors.white,
-              size: 24,
-            ),
-          ),
+          child: Image.asset('assets/app_icon.png', width: 48, height: 48),
         ),
       );
     }
@@ -173,22 +168,7 @@ class Sidebar extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: Row(
           children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF8B5CF6), Color(0xFF06B6D4)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(
-                Icons.multitrack_audio,
-                color: Colors.white,
-                size: 24,
-              ),
-            ),
+            Image.asset('assets/app_icon.png', width: 48, height: 48),
             const SizedBox(width: 16),
             const Expanded(
               child: Column(
@@ -209,10 +189,7 @@ class Sidebar extends StatelessWidget {
                     '本地智能字幕生成',
                     maxLines: 1,
                     overflow: TextOverflow.clip,
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: Colors.grey,
-                    ),
+                    style: TextStyle(fontSize: 10, color: Colors.grey),
                   ),
                 ],
               ),
