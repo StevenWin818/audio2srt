@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'src/rust/frb_generated.dart';
 import 'providers/transcription_provider.dart';
@@ -15,6 +16,25 @@ import 'ui/settings_view.dart';
 Future<void> main() async {
   // 必须初始化 Rust 绑定库
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // 初始化 window_manager 实现顶部沉浸
+  try {
+    await windowManager.ensureInitialized();
+    WindowOptions windowOptions = const WindowOptions(
+      size: Size(1200, 800),
+      minimumSize: Size(950, 650),
+      center: true,
+      backgroundColor: Colors.transparent,
+      skipTaskbar: false,
+      titleBarStyle: TitleBarStyle.hidden,
+    );
+    windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.show();
+      await windowManager.focus();
+    });
+  } catch (e) {
+    debugPrint('window_manager initialization failed: $e');
+  }
   
   bool isRustInitialized = false;
   String initError = '';
@@ -75,7 +95,7 @@ class Audio2SrtApp extends StatelessWidget {
             ],
           ),
           appBarTheme: const AppBarTheme(
-            backgroundColor: Color(0xFF07070F),
+            backgroundColor: Color.fromARGB(255, 20, 20, 44),
             elevation: 0,
           ),
         ),
@@ -88,8 +108,6 @@ class Audio2SrtApp extends StatelessWidget {
 class MainShell extends StatelessWidget {
   const MainShell({super.key});
 
-  final List<SidebarItem> _sidebarItems = const [
-  ];
 
   List<SidebarItem> get sidebarItems => [
     SidebarItem(icon: Icons.dashboard_outlined, label: '首页'),
@@ -114,12 +132,25 @@ class MainShell extends StatelessWidget {
             items: sidebarItems,
           ),
           Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 200),
-              transitionBuilder: (child, animation) {
-                return FadeTransition(opacity: animation, child: child);
-              },
-              child: _buildCurrentView(currentIndex),
+            child: Column(
+              children: [
+                const SizedBox(
+                  height: kWindowCaptionHeight,
+                  child: WindowCaption(
+                    brightness: Brightness.dark,
+                    backgroundColor: Colors.transparent,
+                  ),
+                ),
+                Expanded(
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    transitionBuilder: (child, animation) {
+                      return FadeTransition(opacity: animation, child: child);
+                    },
+                    child: _buildCurrentView(currentIndex),
+                  ),
+                ),
+              ],
             ),
           ),
         ],

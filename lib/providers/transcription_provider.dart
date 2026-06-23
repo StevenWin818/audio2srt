@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import '../src/rust/api/ffmpeg.dart' as rust_ffmpeg;
 import '../src/rust/api/whisper.dart' as rust_whisper;
 import '../src/rust/api/stream_pipeline.dart' as rust_stream;
@@ -82,6 +83,25 @@ class TranscriptionProvider with ChangeNotifier {
   // 状态属性
   int _currentTab = 0;
   int get currentTab => _currentTab;
+
+  bool _isSidebarExpanded = true;
+  bool get isSidebarExpanded => _isSidebarExpanded;
+
+  void setSidebarExpanded(bool value) {
+    _isSidebarExpanded = value;
+    _safeNotifyListeners();
+  }
+
+  bool _showInterruptConfirm = false;
+  bool get showInterruptConfirm => _showInterruptConfirm;
+
+  void setShowInterruptConfirm(bool value) {
+    _showInterruptConfirm = value;
+    _safeNotifyListeners();
+  }
+
+  String? _thumbnailPath;
+  String? get thumbnailPath => _thumbnailPath;
 
   File? _inputMediaFile;
   File? get inputMediaFile => _inputMediaFile;
@@ -356,14 +376,83 @@ class TranscriptionProvider with ChangeNotifier {
     _progress = 0;
     _subtitles = const [];
     _statusMessage = '已导入文件: ${p.basename(file.path)}';
+    _thumbnailPath = null;
+    _totalMs = 0;
+    _processedMs = 0;
+    _showInterruptConfirm = false;
     
     // 清空旧音轨状态并触发异步探测
     _availableTracks = [];
     _selectedTrack = null;
     _probeAudioTracks(file);
+    _probeMediaDuration(file);
+    _extractThumbnail(file);
 
     _syncHighFreqNotifiers();
     _safeNotifyListeners();
+  }
+
+  Future<void> _extractThumbnail(File file) async {
+    final ext = p.extension(file.path).toLowerCase();
+    final isVideoExt = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm'].contains(ext);
+    if (!isVideoExt) {
+      _thumbnailPath = null;
+      _safeNotifyListeners();
+      return;
+    }
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final thumbName = 'thumb_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final thumbPath = p.join(tempDir.path, thumbName);
+      
+      final result = await Process.run(
+        _ffmpegService.ffmpegPath,
+        [
+          '-y',
+          '-ss', '00:00:01',
+          '-i', file.path,
+          '-vframes', '1',
+          '-f', 'image2',
+          thumbPath,
+        ],
+      );
+      if (result.exitCode == 0 && await File(thumbPath).exists()) {
+        _thumbnailPath = thumbPath;
+        _safeNotifyListeners();
+      } else {
+        _thumbnailPath = null;
+        _safeNotifyListeners();
+      }
+    } catch (e) {
+      debugPrint('[TranscriptionProvider] Extract thumbnail failed: $e');
+      _thumbnailPath = null;
+      _safeNotifyListeners();
+    }
+  }
+
+  Future<void> _probeMediaDuration(File file) async {
+    try {
+      final result = await Process.run(
+        _ffmpegService.ffmpegPath,
+        ['-i', file.path],
+      );
+      final output = result.stderr.toString();
+      final durationRegex = RegExp(r'Duration:\s*(\d+):(\d+):(\d+\.\d+)');
+      final match = durationRegex.firstMatch(output);
+      if (match != null) {
+        final hours = int.parse(match.group(1)!);
+        final minutes = int.parse(match.group(2)!);
+        final seconds = double.parse(match.group(3)!);
+        final totalSeconds = hours * 3600 + minutes * 60 + seconds;
+        _totalMs = (totalSeconds * 1000).toInt();
+        _processedMs = 0;
+        _syncHighFreqNotifiers();
+        _safeNotifyListeners();
+      }
+    } catch (e) {
+      debugPrint('[TranscriptionProvider] Probe duration failed: $e');
+    }
   }
 
   void setSelectedModel(String filename) {
@@ -723,6 +812,7 @@ class TranscriptionProvider with ChangeNotifier {
   }
 
   Future<void> cancelTranscription() async {
+    rust_stream.cancelTranscriptionBackend();
     await _transcriptionSub?.cancel();
     _transcriptionSub = null;
     _status = TranscriptionStatus.idle;

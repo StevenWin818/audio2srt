@@ -15,6 +15,9 @@ import 'whisper.dart';
 void setRustPerfLogging({required bool enable}) => RustLib.instance.api
     .crateApiStreamPipelineSetRustPerfLogging(enable: enable);
 
+void cancelTranscriptionBackend() =>
+    RustLib.instance.api.crateApiStreamPipelineCancelTranscriptionBackend();
+
 Stream<TranscriptionEvent> transcribeStream({required PipelineConfig config}) =>
     RustLib.instance.api.crateApiStreamPipelineTranscribeStream(config: config);
 

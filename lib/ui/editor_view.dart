@@ -21,6 +21,7 @@ class _EditorViewState extends State<EditorView> {
 
   bool _isMuxing = false;
   String _muxStatus = '';
+  bool _showInterruptConfirm = false;
 
   @override
   void dispose() {
@@ -71,6 +72,7 @@ class _EditorViewState extends State<EditorView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _buildProgressPanel(context),
               _buildHeader(provider, subs, selectedLanguage, hasInputFile),
               const SizedBox(height: 24),
               _buildSearchAndToolbar(provider, subs),
@@ -112,39 +114,52 @@ class _EditorViewState extends State<EditorView> {
         const Spacer(),
         if (subs.isNotEmpty) ...[
           if (selectedLanguage == 'zh' || selectedLanguage == 'auto') ...[
-            PopupMenuButton<bool>(
-              tooltip: '简繁转换',
-              position: PopupMenuPosition.under,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  border: Border.all(color: const Color(0xFF8B5CF6)),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  children: const [
-                    Icon(Icons.g_translate, color: Color(0xFF8B5CF6), size: 18),
-                    SizedBox(width: 8),
-                    Text('简繁转换', style: TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.w500)),
-                  ],
-                ),
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0x0CFFFFFF),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0x1F8B5CF6)),
               ),
-              onSelected: (toSimplified) {
-                provider.convertSubtitlesToChinese(toSimplified);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(toSimplified ? '已转换为简体中文' : '已转换为繁体中文')),
-                );
-              },
-              itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: true,
-                  child: Text('转换为简体中文 (Simplified)'),
-                ),
-                const PopupMenuItem(
-                  value: false,
-                  child: Text('转换为繁体中文 (Traditional)'),
-                ),
-              ],
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Tooltip(
+                    message: '转换为简体中文',
+                    child: TextButton(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: () {
+                        provider.convertSubtitlesToChinese(true);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('已转换为简体中文')),
+                        );
+                      },
+                      child: const Text('简', style: TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold, fontSize: 13)),
+                    ),
+                  ),
+                  Container(width: 1, height: 16, color: const Color(0x1FFFFFFF)),
+                  Tooltip(
+                    message: '转换为繁体中文',
+                    child: TextButton(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: () {
+                        provider.convertSubtitlesToChinese(false);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('已转换为繁体中文')),
+                        );
+                      },
+                      child: const Text('繁', style: TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold, fontSize: 13)),
+                    ),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(width: 12),
           ],
@@ -233,6 +248,7 @@ class _EditorViewState extends State<EditorView> {
   Widget _buildSubtitlesList(
       List<MapEntry<int, SubtitleItem>> items, TranscriptionProvider provider) {
     return ListView.builder(
+      key: const PageStorageKey('editor_subtitle_list'),
       itemCount: items.length,
       itemBuilder: (context, index) {
         final globalIndex = items[index].key;
@@ -483,7 +499,7 @@ class _EditorViewState extends State<EditorView> {
                   child: const Text('取消'),
                 ),
                 ElevatedButton(
-                  onPressed: _isMuxing
+                  onPressed: _isMuxing                
                       ? null
                       : () async {
                           setDialogState(() {
@@ -540,7 +556,7 @@ class _EditorViewState extends State<EditorView> {
                             Navigator.pop(context);
                           }
                         },
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF8B5CF6)),
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0x1F8B5CF6)),
                   child: const Text('开始合成'),
                 )
               ],
@@ -548,6 +564,173 @@ class _EditorViewState extends State<EditorView> {
           },
         );
       },
+    );
+  }
+
+  Widget _buildProgressPanel(BuildContext context) {
+    final provider = Provider.of<TranscriptionProvider>(context);
+    return ValueListenableBuilder<TranscriptionStatus>(
+      valueListenable: provider.statusNotifier,
+      builder: (context, status, child) {
+        if (status == TranscriptionStatus.idle ||
+            status == TranscriptionStatus.completed ||
+            status == TranscriptionStatus.failed) {
+          return const SizedBox.shrink();
+        }
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 24),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0x0CFFFFFF),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0x1F8B5CF6)),
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black26,
+                blurRadius: 10,
+                offset: Offset(0, 4),
+              )
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Color(0xFF8B5CF6),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ValueListenableBuilder<String>(
+                      valueListenable: provider.statusMessageNotifier,
+                      builder: (context, statusMsg, child) {
+                        return Text(
+                          statusMsg.isEmpty ? '正在提取并转写中...' : statusMsg,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  _buildEditorInterruptButton(context, provider),
+                ],
+              ),
+              const SizedBox(height: 12),
+              ValueListenableBuilder<int>(
+                valueListenable: provider.progressNotifier,
+                builder: (context, progress, child) {
+                  return Column(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: status == TranscriptionStatus.transcribing ? progress / 100 : null,
+                          backgroundColor: const Color(0x1FFFFFFF),
+                          color: const Color(0xFF8B5CF6),
+                          minHeight: 6,
+                        ),
+                      ),
+                      if (status == TranscriptionStatus.transcribing) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            ValueListenableBuilder<String>(
+                              valueListenable: provider.progressDetailNotifier,
+                              builder: (context, detail, child) {
+                                return Text(
+                                  detail,
+                                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                                );
+                              },
+                            ),
+                            ValueListenableBuilder<String>(
+                              valueListenable: provider.etaNotifier,
+                              builder: (context, eta, child) {
+                                return Text(
+                                  '预计剩余时间: $eta',
+                                  style: const TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.bold),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildEditorInterruptButton(BuildContext context, TranscriptionProvider provider) {
+    if (_showInterruptConfirm) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.check, color: Colors.green, size: 18),
+            tooltip: '确认打断',
+            onPressed: () {
+              provider.cancelTranscription();
+              setState(() {
+                _showInterruptConfirm = false;
+              });
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, color: Colors.redAccent, size: 18),
+            tooltip: '取消',
+            onPressed: () {
+              setState(() {
+                _showInterruptConfirm = false;
+              });
+            },
+          ),
+        ],
+      );
+    }
+
+    return Tooltip(
+      message: '打断识别',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () {
+          setState(() {
+            _showInterruptConfirm = true;
+          });
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0x1AEF4444),
+            border: Border.all(color: const Color(0x3FEF4444)),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.stop_circle_outlined, color: Color(0xFFEF4444), size: 16),
+              SizedBox(width: 4),
+              Text('终止', style: TextStyle(color: Color(0xFFEF4444), fontSize: 12, fontWeight: FontWeight.bold)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

@@ -6,6 +6,7 @@ use std::path::Path;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use anyhow::{Result, Context, anyhow};
 use flate2::read::GzDecoder;
 use tar::Archive;
@@ -24,6 +25,20 @@ static PERF_LOG_ENABLED: AtomicBool = AtomicBool::new(false);
 #[flutter_rust_bridge::frb(sync)]
 pub fn set_rust_perf_logging(enable: bool) {
     PERF_LOG_ENABLED.store(enable, Ordering::Relaxed);
+}
+
+static SHOULD_CANCEL: AtomicBool = AtomicBool::new(false);
+static ACTIVE_FFMPEG_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn cancel_transcription_backend() {
+    SHOULD_CANCEL.store(true, Ordering::SeqCst);
+    if let Ok(mut lock) = ACTIVE_FFMPEG_CHILD.lock() {
+        if let Some(mut child) = lock.take() {
+            println!("[Rust] cancel_transcription_backend: Killing active FFmpeg child process.");
+            let _ = child.kill();
+        }
+    }
 }
 
 fn add_perf_record(stage: &str, elapsed_ms: u64, audio_duration_sec: f64) {
@@ -175,6 +190,8 @@ fn run_stream_pipeline_inner(
     sink: Arc<dyn TranscriptionSink>,
     config: PipelineConfig,
 ) -> Result<()> {
+    SHOULD_CANCEL.store(false, Ordering::SeqCst);
+
     #[cfg(target_os = "windows")]
     {
         lock_high_priority();
@@ -276,17 +293,25 @@ struct WhisperTask {
 
 struct FfmpegPumpHandle {
     pump_thread: thread::JoinHandle<Result<()>>,
-    child: std::process::Child,
     stderr_thread: thread::JoinHandle<String>,
 }
 
 impl FfmpegPumpHandle {
-    fn join(mut self) -> Result<()> {
+    fn join(self) -> Result<()> {
         let _ = self.pump_thread.join();
-        let ffmpeg_status = self.child.wait().unwrap();
+        let mut child_opt = None;
+        if let Ok(mut lock) = ACTIVE_FFMPEG_CHILD.lock() {
+            child_opt = lock.take();
+        }
         let stderr_logs = self.stderr_thread.join().unwrap();
-        if !ffmpeg_status.success() {
-            return Err(anyhow!("FFmpeg exited with error: {:?}\nStderr logs:\n{}", ffmpeg_status.code(), stderr_logs));
+        if let Some(mut child) = child_opt {
+            let ffmpeg_status = child.wait().unwrap();
+            if SHOULD_CANCEL.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            if !ffmpeg_status.success() {
+                return Err(anyhow!("FFmpeg exited with error: {:?}\nStderr logs:\n{}", ffmpeg_status.code(), stderr_logs));
+            }
         }
         Ok(())
     }
@@ -358,9 +383,31 @@ fn spawn_ffmpeg_pump(
     cmd.stdout(Stdio::piped())
        .stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| anyhow!("Failed to start FFmpeg: {}", e))?;
-    let mut stdout = child.stdout.take().context("Failed to take FFmpeg stdout")?;
-    let stderr = child.stderr.take().context("Failed to take FFmpeg stderr")?;
+    let child = cmd.spawn().map_err(|e| anyhow!("Failed to start FFmpeg: {}", e))?;
+    if let Ok(mut lock) = ACTIVE_FFMPEG_CHILD.lock() {
+        *lock = Some(child);
+    }
+
+    let mut stdout = {
+        // We need to access child's stdout. We lock to get it.
+        let mut stdout_taken = None;
+        if let Ok(mut lock) = ACTIVE_FFMPEG_CHILD.lock() {
+            if let Some(ref mut c) = *lock {
+                stdout_taken = c.stdout.take();
+            }
+        }
+        stdout_taken.context("Failed to take FFmpeg stdout")?
+    };
+
+    let stderr = {
+        let mut stderr_taken = None;
+        if let Ok(mut lock) = ACTIVE_FFMPEG_CHILD.lock() {
+            if let Some(ref mut c) = *lock {
+                stderr_taken = c.stderr.take();
+            }
+        }
+        stderr_taken.context("Failed to take FFmpeg stderr")?
+    };
 
     let stderr_thread = thread::spawn(move || {
         let reader = BufReader::new(stderr);
@@ -379,9 +426,15 @@ fn spawn_ffmpeg_pump(
     let pump_thread = thread::spawn(move || -> Result<()> {
         let mut temp_buf = [0u8; 4096];
         loop {
+            if SHOULD_CANCEL.load(Ordering::SeqCst) {
+                break;
+            }
             let start_time = std::time::Instant::now();
             let mut chunk_bytes = Vec::with_capacity(192000);
             while chunk_bytes.len() < 192000 {
+                if SHOULD_CANCEL.load(Ordering::SeqCst) {
+                    break;
+                }
                 let to_read = std::cmp::min(temp_buf.len(), 192000 - chunk_bytes.len());
                 match stdout.read(&mut temp_buf[..to_read]) {
                     Ok(0) => break,
@@ -391,6 +444,10 @@ fn spawn_ffmpeg_pump(
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(e) => return Err(e.into()),
                 }
+            }
+
+            if SHOULD_CANCEL.load(Ordering::SeqCst) {
+                break;
             }
 
             if chunk_bytes.is_empty() {
@@ -416,7 +473,6 @@ fn spawn_ffmpeg_pump(
 
     Ok(FfmpegPumpHandle {
         pump_thread,
-        child,
         stderr_thread,
     })
 }
@@ -575,6 +631,9 @@ fn spawn_dfn_worker(
         let mut seq_id = 0;
 
         while let Ok(raw_chunk_48k) = rx_raw_48k.recv() {
+            if SHOULD_CANCEL.load(Ordering::SeqCst) {
+                break;
+            }
             current_block.extend_from_slice(&raw_chunk_48k);
 
             while current_block.len() >= block_size {
@@ -686,6 +745,9 @@ fn spawn_vad_worker(
         vad_params.set_threshold(prob_threshold);
 
         while let Ok(mut clean_48k_batch) = rx_clean_48k.recv() {
+            if SHOULD_CANCEL.load(Ordering::SeqCst) {
+                break;
+            }
             let start_time = std::time::Instant::now();
             let mut audio_to_process = Vec::new();
             
@@ -852,6 +914,9 @@ fn spawn_whisper_worker(
         params.set_single_segment(false);
 
         while let Ok(task) = rx_whisper_task.recv() {
+            if SHOULD_CANCEL.load(Ordering::SeqCst) {
+                break;
+            }
             let WhisperTask { samples: mut samples_16k, start_ms, end_ms } = task;
             
             if !samples_16k.is_empty() {
@@ -904,18 +969,27 @@ fn spawn_whisper_worker(
                             text: final_text,
                         };
                         all_segments.push(new_seg.clone());
-                        let _ = sink.add(TranscriptionEvent::Segment(new_seg));
+                        if sink.add(TranscriptionEvent::Segment(new_seg)).is_err() {
+                            println!("[Rust] Sink is closed. Aborting whisper loop.");
+                            return Ok(());
+                        }
                     }
                 }
             }
 
             // 推进进度条
             let progress = ((end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
-            let _ = sink.add(TranscriptionEvent::Progress(progress.clamp(0, 100)));
-            let _ = sink.add(TranscriptionEvent::ProgressDetail {
+            if sink.add(TranscriptionEvent::Progress(progress.clamp(0, 100))).is_err() {
+                println!("[Rust] Sink is closed. Aborting whisper loop.");
+                return Ok(());
+            }
+            if sink.add(TranscriptionEvent::ProgressDetail {
                 processed_ms: end_ms,
                 total_ms: (total_duration * 1000.0) as i64,
-            });
+            }).is_err() {
+                println!("[Rust] Sink is closed. Aborting whisper loop.");
+                return Ok(());
+            }
         }
         
         let _ = sink.add(TranscriptionEvent::Success(all_segments));

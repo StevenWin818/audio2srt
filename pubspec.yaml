@@ -51,6 +51,7 @@ dependencies:
   google_fonts: ^8.1.0
   ffi: ^2.2.0
   archive: ^4.0.9
+  window_manager: ^0.5.1
 
 dev_dependencies:
   flutter_test:

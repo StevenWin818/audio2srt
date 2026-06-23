@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/transcription_provider.dart';
 
 class SidebarItem {
   final IconData icon;
@@ -21,75 +23,126 @@ class Sidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 240,
+    final provider = Provider.of<TranscriptionProvider>(context);
+    final isExpanded = provider.isSidebarExpanded;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      width: isExpanded ? 240 : 72,
       decoration: const BoxDecoration(
-        color: Color(0xFF0F0F1A),
+        color: Color(0xFF131324),
         border: Border(
           right: BorderSide(color: Color(0x1FFFFFFF), width: 1),
         ),
       ),
-      child: Column(
-        children: [
-          _buildLogo(),
-          const SizedBox(height: 32),
-          Expanded(
-            child: ListView.builder(
-              itemCount: items.length,
-              itemBuilder: (context, index) {
-                final item = items[index];
-                final isActive = index == selectedIndex;
-
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
-                  child: InkWell(
-                    onTap: () => onSelected(index),
-                    borderRadius: BorderRadius.circular(10),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: isActive ? const Color(0x1F8B5CF6) : Colors.transparent,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: isActive ? const Color(0x408B5CF6) : Colors.transparent,
+      child: ClipRect(
+        child: Column(
+          children: [
+            _buildLogo(isExpanded),
+            const SizedBox(height: 32),
+            Expanded(
+              child: ListView.builder(
+                itemCount: items.length,
+                itemBuilder: (context, index) {
+                  final item = items[index];
+                  final isActive = index == selectedIndex;
+    
+                  return Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isExpanded ? 16.0 : 8.0,
+                      vertical: 4.0,
+                    ),
+                    child: InkWell(
+                      onTap: () => onSelected(index),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        height: 48,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isExpanded ? 16 : 0,
+                          vertical: 12,
                         ),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            item.icon,
-                            color: isActive ? const Color(0xFF8B5CF6) : Colors.grey[400],
-                            size: 20,
+                        decoration: BoxDecoration(
+                          color: isActive ? const Color(0x1F8B5CF6) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: isActive ? const Color(0x408B5CF6) : Colors.transparent,
                           ),
-                          const SizedBox(width: 16),
-                          Text(
-                            item.label,
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
-                              color: isActive ? Colors.white : Colors.grey[400],
-                            ),
-                          ),
-                        ],
+                        ),
+                        child: isExpanded
+                            ? OverflowBox(
+                                minWidth: 176,
+                                maxWidth: 176,
+                                minHeight: 24,
+                                maxHeight: 24,
+                                alignment: Alignment.centerLeft,
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      item.icon,
+                                      color: isActive ? const Color(0xFF8B5CF6) : Colors.grey[400],
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 16),
+                                    Expanded(
+                                      child: Text(
+                                        item.label,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.clip,
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
+                                          color: isActive ? Colors.white : Colors.grey[400],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            : Center(
+                                child: Icon(
+                                  item.icon,
+                                  color: isActive ? const Color(0xFF8B5CF6) : Colors.grey[400],
+                                  size: 20,
+                                ),
+                              ),
                       ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
-          ),
-          _buildFooter(),
-        ],
+            _buildToggleBtn(provider),
+            _buildFooter(isExpanded),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildLogo() {
-    return Container(
-      padding: const EdgeInsets.only(top: 40, left: 24, right: 24),
-      child: Row(
-        children: [
-          Container(
+  Widget _buildToggleBtn(TranscriptionProvider provider) {
+    final isExpanded = provider.isSidebarExpanded;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: IconButton(
+        tooltip: isExpanded ? '收起边栏' : '展开边栏',
+        icon: Icon(
+          isExpanded ? Icons.chevron_left : Icons.chevron_right,
+          color: Colors.grey[400],
+        ),
+        onPressed: () {
+          provider.setSidebarExpanded(!isExpanded);
+        },
+      ),
+    );
+  }
+
+  Widget _buildLogo(bool isExpanded) {
+    if (!isExpanded) {
+      return Container(
+        height: 88,
+        padding: const EdgeInsets.only(top: 40),
+        child: Center(
+          child: Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
@@ -105,45 +158,104 @@ class Sidebar extends StatelessWidget {
               size: 24,
             ),
           ),
-          const SizedBox(width: 16),
-          const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Audio2Srt',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.5,
+        ),
+      );
+    }
+
+    return Container(
+      height: 88,
+      padding: const EdgeInsets.only(top: 40, left: 24, right: 24),
+      child: OverflowBox(
+        minWidth: 192,
+        maxWidth: 192,
+        minHeight: 48,
+        maxHeight: 48,
+        alignment: Alignment.centerLeft,
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF8B5CF6), Color(0xFF06B6D4)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
+                borderRadius: BorderRadius.circular(12),
               ),
-              Text(
-                '本地智能字幕生成',
-                style: TextStyle(
-                  fontSize: 10,
-                  color: Colors.grey,
-                ),
+              child: const Icon(
+                Icons.multitrack_audio,
+                color: Colors.white,
+                size: 24,
               ),
-            ],
-          ),
-        ],
+            ),
+            const SizedBox(width: 16),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Audio2Srt',
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  Text(
+                    '本地智能字幕生成',
+                    maxLines: 1,
+                    overflow: TextOverflow.clip,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Colors.grey,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildFooter() {
+  Widget _buildFooter(bool isExpanded) {
+    if (!isExpanded) {
+      return Container(
+        height: 72,
+        padding: const EdgeInsets.only(bottom: 24),
+        child: const Icon(Icons.security, size: 14, color: Colors.grey),
+      );
+    }
+
     return Container(
+      height: 72,
       padding: const EdgeInsets.all(24),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.security, size: 14, color: Colors.grey),
-          const SizedBox(width: 8),
-          Text(
-            '100% 本地离线处理',
-            style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-          ),
-        ],
+      child: OverflowBox(
+        minWidth: 192,
+        maxWidth: 192,
+        minHeight: 24,
+        maxHeight: 24,
+        alignment: Alignment.centerLeft,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.security, size: 14, color: Colors.grey),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '100% 本地离线处理',
+                maxLines: 1,
+                overflow: TextOverflow.clip,
+                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
