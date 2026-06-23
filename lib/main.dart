@@ -210,6 +210,7 @@ class _MainShellState extends State<MainShell> with WindowListener, TrayListener
     if (provider.needsCloseConfirmation) {
       _showCloseConfirmationDialog();
     } else {
+      await windowManager.hide();
       await _destroyTray();
       await windowManager.destroy();
     }
@@ -239,6 +240,7 @@ class _MainShellState extends State<MainShell> with WindowListener, TrayListener
       await windowManager.show();
       await windowManager.focus();
     } else if (menuItem.key == 'exit_app') {
+      await windowManager.hide();
       await _destroyTray();
       await windowManager.destroy();
     }
@@ -278,6 +280,7 @@ class _MainShellState extends State<MainShell> with WindowListener, TrayListener
             TextButton(
               onPressed: () async {
                 Navigator.of(dialogContext).pop();
+                await windowManager.hide();
                 await _destroyTray();
                 await windowManager.destroy();
               },

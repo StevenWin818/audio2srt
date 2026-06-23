@@ -475,6 +475,7 @@ class TranscriptionProvider with ChangeNotifier {
         _processedMs = 0;
         _syncHighFreqNotifiers();
         _safeNotifyListeners();
+        _preloadWhisperContext();
       }
     } catch (e) {
       debugPrint('[TranscriptionProvider] Probe duration failed: $e');
@@ -484,6 +485,7 @@ class TranscriptionProvider with ChangeNotifier {
   void setSelectedModel(String filename) {
     _selectedModel = filename;
     _safeNotifyListeners();
+    _preloadWhisperContext();
   }
 
   void setSelectedLanguage(String langCode) {
@@ -499,6 +501,30 @@ class TranscriptionProvider with ChangeNotifier {
   void setUseGpu(bool value) {
     _useGpu = value;
     _safeNotifyListeners();
+    _preloadWhisperContext();
+  }
+
+  Timer? _preloadTimer;
+
+  Future<void> _preloadWhisperContext() async {
+    _preloadTimer?.cancel();
+    _preloadTimer = Timer(const Duration(milliseconds: 800), () async {
+      if (_selectedModel == null) return;
+      try {
+        final modelExists = await _modelService.isModelDownloaded(_selectedModel!);
+        if (!modelExists) return;
+        final modelPath = await _modelService.getModelPath(_selectedModel!);
+        final durationSecs = _totalMs > 0 ? (_totalMs.toDouble() / 1000.0) : 300.0;
+        debugPrint('[TranscriptionProvider] Preloading Whisper context (debounced): model=$modelPath, gpu=$_useGpu, duration=$durationSecs');
+        await rust_whisper.warmupWhisperContext(
+          modelPath: modelPath,
+          useGpu: _useGpu,
+          totalDuration: durationSecs,
+        );
+      } catch (e) {
+        debugPrint('Failed to preload Whisper context: $e');
+      }
+    });
   }
 
   void setVadEnabled(bool value) {
@@ -617,9 +643,7 @@ class TranscriptionProvider with ChangeNotifier {
         vadModelPath = await _modelService.prepareVADModel();
       }
 
-      _statusMessage = _enableDenoise
-          ? '正在进行实时语音流提取、降噪与转写...'
-          : '正在进行实时语音流提取与转写...';
+      _statusMessage = '正在准备语音识别模型 (大型模型首次加载可能需要数秒)...';
       _syncHighFreqNotifiers();
       _safeNotifyListeners();
 
@@ -962,6 +986,7 @@ class TranscriptionProvider with ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _preloadTimer?.cancel();
     _transcriptionSub?.cancel();
     _progressNotifier.dispose();
     _statusMessageNotifier.dispose();

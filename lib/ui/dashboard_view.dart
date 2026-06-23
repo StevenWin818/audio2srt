@@ -19,6 +19,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   late AnimationController _flipController;
   late Animation<double> _flipAnimation;
   bool _isFlipped = false;
+  bool _isFlipping = false;
   bool _localShowInterruptConfirm = false;
   TranscriptionProvider? _provider;
 
@@ -55,6 +56,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
 
   void _onProviderChange() {
     if (_provider == null) return;
+    if (_isFlipping) return;
     final status = _provider!.status;
     final isTranscribing = status == TranscriptionStatus.transcribing ||
         status == TranscriptionStatus.extractingAudio;
@@ -569,6 +571,22 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     );
   }
 
+  void _handleStartTranscription(TranscriptionProvider provider) {
+    if (_isFlipping || _isFlipped) return;
+    setState(() {
+      _isFlipping = true;
+      _isFlipped = true;
+    });
+    _flipController.forward().then((_) {
+      if (mounted) {
+        setState(() {
+          _isFlipping = false;
+        });
+        provider.startTranscription();
+      }
+    });
+  }
+
   Widget _buildStartButton(TranscriptionProvider provider) {
     final hasFile = provider.inputMediaFile != null;
 
@@ -576,7 +594,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       width: double.infinity,
       height: 48,
       child: ElevatedButton(
-        onPressed: !hasFile ? null : () => provider.startTranscription(),
+        onPressed: !hasFile ? null : () => _handleStartTranscription(provider),
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFF8B5CF6),
           foregroundColor: Colors.white,

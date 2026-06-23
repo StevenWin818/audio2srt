@@ -71,6 +71,16 @@ Stream<TranscriptionEvent> transcribe({
   noStateHistory: noStateHistory,
 );
 
+Future<void> warmupWhisperContext({
+  required String modelPath,
+  required bool useGpu,
+  required double totalDuration,
+}) => RustLib.instance.api.crateApiWhisperWarmupWhisperContext(
+  modelPath: modelPath,
+  useGpu: useGpu,
+  totalDuration: totalDuration,
+);
+
 class HardwareAccelerationInfo {
   final bool isVulkanAvailable;
   final List<VulkanDeviceInfo> devices;

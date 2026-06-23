@@ -733,3 +733,64 @@ pub(crate) fn register_thread_as_pro_audio() {
 pub(crate) fn register_thread_as_pro_audio() {
     // 非 Windows 平台下为空实现
 }
+
+pub fn warmup_whisper_context(model_path: String, use_gpu: bool, total_duration: f64) {
+    std::thread::spawn(move || {
+        #[cfg(target_os = "windows")]
+        {
+            use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST};
+            unsafe {
+                let thread = GetCurrentThread();
+                SetThreadPriority(thread, THREAD_PRIORITY_LOWEST);
+            }
+        }
+        
+        println!("[Rust] Preloading/warming up Whisper context in background for model: {} (use_gpu={})", model_path, use_gpu);
+        let mut ctx_params = WhisperContextParameters::default();
+        
+        let dtw_preset = get_dtw_model_preset(&model_path);
+        if let Some(preset) = dtw_preset {
+            let num_samples = (total_duration * 16000.0) as usize;
+            let mem_size = calculate_dtw_mem_size(num_samples);
+            ctx_params.dtw_parameters(DtwParameters {
+                mode: DtwMode::ModelPreset { model_preset: preset },
+                dtw_mem_size: mem_size,
+            });
+        } else {
+            ctx_params.dtw_parameters(DtwParameters {
+                mode: DtwMode::None,
+                dtw_mem_size: 0,
+            });
+        }
+        
+        if use_gpu {
+            #[cfg(feature = "vulkan")]
+            {
+                let devices = whisper_rs::vulkan::list_devices();
+                if !devices.is_empty() {
+                    let dgpu = devices.iter().find(|d| {
+                        let name_lower = d.name.to_lowercase();
+                        let is_igpu = name_lower.contains("integrated")
+                            || name_lower.contains("uhd")
+                            || name_lower.contains("iris")
+                            || name_lower.contains("vega")
+                            || (name_lower.contains("intel") && !name_lower.contains("arc"))
+                            || name_lower.contains("radeon(tm)");
+                        !is_igpu
+                    });
+                    let selected = if let Some(d) = dgpu {
+                        Some(d)
+                    } else {
+                        devices.first()
+                    };
+                    if let Some(device) = selected {
+                        ctx_params.use_gpu = true;
+                        ctx_params.gpu_device = device.id;
+                    }
+                }
+            }
+        }
+        
+        let _ = get_or_create_context(&model_path, use_gpu, ctx_params);
+    });
+}

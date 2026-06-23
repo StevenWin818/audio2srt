@@ -69,7 +69,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1187370722;
+  int get rustContentHash => 1759704528;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -152,6 +152,12 @@ abstract class RustLibApi extends BaseApi {
   Future<TranscriptionSegment> crateApiWhisperTranscriptionSegmentDefault();
 
   Future<VulkanDeviceInfo> crateApiWhisperVulkanDeviceInfoDefault();
+
+  Future<void> crateApiWhisperWarmupWhisperContext({
+    required String modelPath,
+    required bool useGpu,
+    required double totalDuration,
+  });
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -770,6 +776,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(
         debugName: "vulkan_device_info_default",
         argNames: [],
+      );
+
+  @override
+  Future<void> crateApiWhisperWarmupWhisperContext({
+    required String modelPath,
+    required bool useGpu,
+    required double totalDuration,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(modelPath, serializer);
+          sse_encode_bool(useGpu, serializer);
+          sse_encode_f_64(totalDuration, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 18,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiWhisperWarmupWhisperContextConstMeta,
+        argValues: [modelPath, useGpu, totalDuration],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWhisperWarmupWhisperContextConstMeta =>
+      const TaskConstMeta(
+        debugName: "warmup_whisper_context",
+        argNames: ["modelPath", "useGpu", "totalDuration"],
       );
 
   @protected
