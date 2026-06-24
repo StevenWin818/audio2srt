@@ -2,6 +2,11 @@
 jobs = 8
 target-dir = "C:/t"
 
+[env]
+# 强制 cmake 使用 Ninja 生成器，绕过 MSBuild FileTracker 长路径 bug (FTK1011)
+# Ninja 不使用 FileTracker，不受 260 字符路径限制
+CMAKE_GENERATOR = "Ninja"
+
 [target.x86_64-pc-windows-msvc]
 rustflags = [
   "-C", "target-cpu=x86-64-v3",
