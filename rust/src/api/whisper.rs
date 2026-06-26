@@ -206,6 +206,30 @@ struct ProgressContext<'a> {
     total_segments: usize,
 }
 
+/// RAII 守卫：持有 ProgressContext 的裸指针，在任意退出路径（正常返回、? 错误传播）
+/// 都会自动执行 drop(Box::from_raw(...))，彻底杜绝内存泄漏。
+struct ProgressContextGuard<'a> {
+    ptr: *mut ProgressContext<'a>,
+}
+
+impl<'a> ProgressContextGuard<'a> {
+    fn new(ctx: Box<ProgressContext<'a>>) -> Self {
+        Self { ptr: Box::into_raw(ctx) }
+    }
+
+    /// 获取裸指针以传递给 C 回调，指针生命周期由 guard 保证。
+    fn as_ptr(&self) -> *mut ProgressContext<'a> {
+        self.ptr
+    }
+}
+
+impl<'a> Drop for ProgressContextGuard<'a> {
+    fn drop(&mut self) {
+        // 安全性：ptr 由 Box::into_raw 产生，此处是唯一回收点。
+        unsafe { drop(Box::from_raw(self.ptr)); }
+    }
+}
+
 // 原始 C++ 风格的进度回调函数（避免闭包的堆内存泄漏以及二次转写端口死锁/卡死问题）
 unsafe extern "C" fn progress_callback_trampoline(
     _ctx: *mut WhisperSysContext,
@@ -509,16 +533,18 @@ pub(crate) fn run_transcription_inner(
             return Ok(());
         }
 
-        let progress_ctx = ProgressContext {
+        // RAII guard：无论 for 循环内 ? 提前返回还是正常结束，都自动回收堆内存
+        let _progress_guard = ProgressContextGuard::new(Box::new(ProgressContext {
             callback,
             current_segment: 0,
             total_segments: speech_segments.len(),
-        };
+        }));
+        let progress_ctx_ptr = _progress_guard.as_ptr();
 
-        // 设置进度回调
+        // 设置进度回调（传裸指针，guard 保证其在整个 if 块作用域内有效）
         unsafe {
             params.set_progress_callback(Some(progress_callback_trampoline));
-            params.set_progress_callback_user_data(&progress_ctx as *const ProgressContext as *mut std::ffi::c_void);
+            params.set_progress_callback_user_data(progress_ctx_ptr as *mut std::ffi::c_void);
         }
 
         for (idx, &(start_sample, end_sample)) in speech_segments.iter().enumerate() {
@@ -598,18 +624,22 @@ pub(crate) fn run_transcription_inner(
                 }
             }
         }
+
+        // _progress_guard 在此作用域结束时自动 drop，无需手动回收
     } else {
         // VAD 未启用：对完整音频进行单次推理
-        let progress_ctx = ProgressContext {
+        // RAII guard：推理报错时 ? 提前返回，guard 的 Drop 自动回收堆内存
+        let _progress_guard = ProgressContextGuard::new(Box::new(ProgressContext {
             callback,
             current_segment: 0,
             total_segments: 1,
-        };
+        }));
+        let progress_ctx_ptr = _progress_guard.as_ptr();
 
-        // 设置进度回调
+        // 设置进度回调（传裸指针，guard 保证其在整个 else 块作用域内有效）
         unsafe {
             params.set_progress_callback(Some(progress_callback_trampoline));
-            params.set_progress_callback_user_data(&progress_ctx as *const ProgressContext as *mut std::ffi::c_void);
+            params.set_progress_callback_user_data(progress_ctx_ptr as *mut std::ffi::c_void);
         }
 
         println!("[Rust] VAD disabled. Running transcription on full audio...");
@@ -618,6 +648,7 @@ pub(crate) fn run_transcription_inner(
             println!("[Rust] {}", err_msg);
             err_msg
         })?;
+        // _progress_guard 在此作用域结束时自动 drop，无需手动回收
 
         let num_segments = state.full_n_segments();
         for i in 0..num_segments {
