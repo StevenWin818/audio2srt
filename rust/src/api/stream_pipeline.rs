@@ -255,6 +255,18 @@ fn run_stream_pipeline_inner(
                 }
             }
         }
+        #[cfg(feature = "cuda")]
+        {
+            println!("[Rust] CUDA feature compiled. Enabling CUDA GPU acceleration.");
+            ctx_params.use_gpu = true;
+            ctx_params.gpu_device = 0; // default device ID
+            selected_device_name = "CUDA GPU".to_string();
+        }
+        #[cfg(not(any(feature = "vulkan", feature = "cuda")))]
+        {
+            println!("[Rust] Neither Vulkan nor CUDA feature compiled, falling back to CPU.");
+            ctx_params.use_gpu = false;
+        }
     } else {
         ctx_params.use_gpu = false;
     }

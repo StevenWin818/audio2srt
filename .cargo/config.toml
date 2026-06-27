@@ -11,7 +11,6 @@ CMAKE_GENERATOR = "Ninja"
 rustflags = [
   "-C", "target-cpu=x86-64-v3",
   "-C", "link-arg=/DEBUG:NONE",
-  
   "-C", "link-arg=/OPT:REF",
   "-C", "link-arg=/OPT:ICF",
 

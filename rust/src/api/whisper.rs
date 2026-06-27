@@ -190,9 +190,21 @@ pub fn get_hardware_acceleration_info() -> HardwareAccelerationInfo {
             }
         }
     }
-    #[cfg(not(feature = "vulkan"))]
+    #[cfg(feature = "cuda")]
     {
-        println!("[Rust] Vulkan feature disabled/not compiled.");
+        println!("[Rust] CUDA feature enabled. Reporting active CUDA GPU device.");
+        HardwareAccelerationInfo {
+            is_vulkan_available: true,
+            devices: vec![VulkanDeviceInfo {
+                id: 0,
+                name: "NVIDIA CUDA GPU".to_string(),
+                total_vram_bytes: 0,
+            }],
+        }
+    }
+    #[cfg(not(any(feature = "vulkan", feature = "cuda")))]
+    {
+        println!("[Rust] Neither Vulkan nor CUDA feature compiled.");
         HardwareAccelerationInfo {
             is_vulkan_available: false,
             devices: vec![],
@@ -441,9 +453,16 @@ pub(crate) fn run_transcription_inner(
                 ctx_params.use_gpu = false;
             }
         }
-        #[cfg(not(feature = "vulkan"))]
+        #[cfg(feature = "cuda")]
         {
-            println!("[Rust] Vulkan feature not compiled, falling back to CPU.");
+            println!("[Rust] CUDA feature compiled. Enabling CUDA GPU acceleration.");
+            ctx_params.use_gpu = true;
+            ctx_params.gpu_device = 0; // default device ID
+            selected_device_name = "CUDA GPU".to_string();
+        }
+        #[cfg(not(any(feature = "vulkan", feature = "cuda")))]
+        {
+            println!("[Rust] Neither Vulkan nor CUDA feature compiled, falling back to CPU.");
             ctx_params.use_gpu = false;
         }
     } else {
@@ -819,6 +838,11 @@ pub fn warmup_whisper_context(model_path: String, use_gpu: bool, total_duration:
                         ctx_params.gpu_device = device.id;
                     }
                 }
+            }
+            #[cfg(feature = "cuda")]
+            {
+                ctx_params.use_gpu = true;
+                ctx_params.gpu_device = 0;
             }
         }
         
