@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:file_picker/file_picker.dart';
 import '../providers/transcription_provider.dart';
 import '../services/model_service.dart';
 
@@ -10,7 +11,7 @@ class ModelsView extends StatelessWidget {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('删除模型文件'),
+        title: const Text('删除模型'),
         content: Text('确定要删除模型 $filename 吗？这将释放磁盘空间，之后如果需要需重新下载。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
@@ -33,6 +34,20 @@ class ModelsView extends StatelessWidget {
     }
   }
 
+  Future<void> _pickCustomModelDir(BuildContext context, TranscriptionProvider provider) async {
+    final selectedDir = await FilePicker.getDirectoryPath(
+      dialogTitle: '选择模型存储目录',
+    );
+    if (selectedDir != null && selectedDir.isNotEmpty) {
+      await provider.setCustomModelDir(selectedDir);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('模型存储目录已更改为: $selectedDir')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<TranscriptionProvider>(context);
@@ -43,7 +58,9 @@ class ModelsView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildHeader(),
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
+          _buildModelDirCard(context, provider),
+          const SizedBox(height: 20),
           Expanded(
             child: _buildModelsGrid(context, provider),
           ),
@@ -62,10 +79,79 @@ class ModelsView extends StatelessWidget {
         ),
         SizedBox(height: 4),
         Text(
-          '下载并管理用于离线语音识别的 Whisper (GGML 格式) 模型',
+          '下载并管理用于离线语音识别的 Whisper (CTranslate2 格式) 模型',
           style: TextStyle(fontSize: 14, color: Colors.grey),
         ),
       ],
+    );
+  }
+
+  Widget _buildModelDirCard(BuildContext context, TranscriptionProvider provider) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0x0CFFFFFF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0x1FFFFFFF)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.folder_open, color: Color(0xFF8B5CF6), size: 20),
+          const SizedBox(width: 10),
+          const Text(
+            '模型存储目录: ',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+          ),
+          Expanded(
+            child: FutureBuilder<String>(
+              future: provider.getEffectiveModelDir(),
+              builder: (context, snapshot) {
+                final dirPath = snapshot.data ?? '加载中...';
+                return Text(
+                  dirPath,
+                  style: TextStyle(fontSize: 12, color: Colors.grey[300]),
+                  overflow: TextOverflow.ellipsis,
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 12),
+          OutlinedButton.icon(
+            onPressed: () => _pickCustomModelDir(context, provider),
+            icon: const Icon(Icons.edit, size: 14),
+            label: const Text('更改目录', style: TextStyle(fontSize: 12)),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white,
+              side: const BorderSide(color: Color(0x3FFFFFFF)),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              minimumSize: Size.zero,
+            ),
+          ),
+          const SizedBox(width: 8),
+          FutureBuilder<String?>(
+            future: provider.getCustomModelDir(),
+            builder: (context, snapshot) {
+              if (snapshot.data == null) return const SizedBox.shrink();
+              return TextButton(
+                onPressed: () async {
+                  await provider.resetModelDir();
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('已重置模型存储目录为默认路径')),
+                    );
+                  }
+                },
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('重置为默认', style: TextStyle(fontSize: 12, color: Colors.grey)),
+              );
+            },
+          ),
+        ],
+      ),
     );
   }
 
@@ -104,11 +190,14 @@ class ModelsView extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Text(
-                      model.name.split(' (').first,
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    Expanded(
+                      child: Text(
+                        model.name.split(' (').first,
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                    const Spacer(),
+                    const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
@@ -128,8 +217,9 @@ class ModelsView extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '文件名: ${model.filename}',
+                  '模型 ID: ${model.repoId}',
                   style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  overflow: TextOverflow.ellipsis,
                 ),
                 Text(
                   '文件大小: ${model.size}',

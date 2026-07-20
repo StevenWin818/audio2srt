@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:file_picker/file_picker.dart';
 import '../providers/transcription_provider.dart';
 
 class SettingsView extends StatefulWidget {
@@ -72,11 +73,123 @@ class _SettingsViewState extends State<SettingsView> {
           const SizedBox(height: 24),
           _buildFFmpegConfigCard(provider),
           const SizedBox(height: 24),
+          _buildModelDirConfigCard(provider),
+          const SizedBox(height: 24),
           _buildHardwareConfigCard(provider),
           const SizedBox(height: 24),
           _buildRepetitionControlCard(provider),
           const SizedBox(height: 24),
           _buildSystemInfoCard(),
+        ],
+      ),
+    );
+  }
+
+  // 模型存储目录配置
+  Widget _buildModelDirConfigCard(TranscriptionProvider provider) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: const Color(0x0CFFFFFF),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0x1FFFFFFF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '模型存储目录配置',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '设置下载和读取 Whisper 模型文件的自定义文件夹路径。',
+            style: TextStyle(fontSize: 13, color: Colors.grey[400]),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: FutureBuilder<String>(
+                  future: provider.getEffectiveModelDir(),
+                  builder: (context, snapshot) {
+                    final currentPath = snapshot.data ?? '加载中...';
+                    return TextField(
+                      readOnly: true,
+                      controller: TextEditingController(text: currentPath),
+                      style: const TextStyle(fontSize: 13),
+                      decoration: InputDecoration(
+                        labelText: '当前模型存储路径',
+                        labelStyle: TextStyle(color: Colors.grey[400]),
+                        filled: true,
+                        fillColor: const Color(0x05FFFFFF),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: Color(0x1FFFFFFF)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: const BorderSide(color: Color(0xFF8B5CF6)),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton.icon(
+                onPressed: () async {
+                  final selectedDir = await FilePicker.getDirectoryPath(
+                    dialogTitle: '选择模型存储目录',
+                  );
+                  if (selectedDir != null && selectedDir.isNotEmpty) {
+                    await provider.setCustomModelDir(selectedDir);
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('模型存储目录已更改为: $selectedDir')),
+                      );
+                    }
+                  }
+                },
+                icon: const Icon(Icons.folder_open, size: 18),
+                label: const Text('浏览选择'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF8B5CF6),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FutureBuilder<String?>(
+                future: provider.getCustomModelDir(),
+                builder: (context, snapshot) {
+                  if (snapshot.data == null) return const SizedBox.shrink();
+                  return OutlinedButton(
+                    onPressed: () async {
+                      await provider.resetModelDir();
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('已恢复为系统默认存储路径')),
+                        );
+                      }
+                    },
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.grey[400],
+                      side: const BorderSide(color: Color(0x2FFFFFFF)),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: const Text('重置路径'),
+                  );
+                },
+              ),
+            ],
+          ),
         ],
       ),
     );

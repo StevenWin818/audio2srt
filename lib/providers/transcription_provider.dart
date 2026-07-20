@@ -276,14 +276,35 @@ class TranscriptionProvider with ChangeNotifier {
   List<String> _downloadedModels = [];
   List<String> get downloadedModels => _downloadedModels;
 
+  Future<String?> getCustomModelDir() => _modelService.getCustomModelDir();
+
+  Future<String> getEffectiveModelDir() async {
+    final dir = await _modelService.getModelDir();
+    return dir.path;
+  }
+
+  Future<void> setCustomModelDir(String? path) async {
+    await _modelService.setCustomModelDir(path);
+    _downloadedModels = await _modelService.getDownloadedModels();
+    if (_downloadedModels.isNotEmpty && (_selectedModel == null || !_downloadedModels.contains(_selectedModel))) {
+      _selectedModel = _downloadedModels.first;
+    }
+    notifyListeners();
+  }
+
+  Future<void> resetModelDir() async {
+    await setCustomModelDir(null);
+  }
+
   StreamSubscription? _transcriptionSub;
 
   Future<void> init() async {
     // 搜索系统 FFmpeg
     await _ffmpegService.findSystemFFmpeg();
 
+    // 初始化模型服务配置
+    await _modelService.init();
 
-    
     // 加载已下载模型
     _downloadedModels = await _modelService.getDownloadedModels();
     
