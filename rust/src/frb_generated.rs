@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -604225;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -987296420;
 
 // Section: executor
 
@@ -323,44 +323,6 @@ fn wire__crate__api__ffmpeg__convert_iso639_2_impl(
         },
     )
 }
-fn wire__crate__api__whisper__decode_tokens_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "decode_tokens",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_tokens = <Vec<String>>::sse_decode(&mut deserializer);
-            let api_unicode_to_bytes =
-                <std::collections::HashMap<char, u8>>::sse_decode(&mut deserializer);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok(crate::api::whisper::decode_tokens(
-                        &api_tokens,
-                        &api_unicode_to_bytes,
-                    ))?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
 fn wire__crate__api__ffmpeg__extract_audio_from_media_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -399,113 +361,6 @@ fn wire__crate__api__ffmpeg__extract_audio_from_media_impl(
                         api_input_path,
                         api_output_path,
                     )?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
-fn wire__crate__api__whisper__get_num_mel_bins_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "get_num_mel_bins",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_model_path = <String>::sse_decode(&mut deserializer);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok(crate::api::whisper::get_num_mel_bins(
-                        &api_model_path,
-                    ))?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
-fn wire__crate__api__whisper__get_prompt_tokens_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "get_prompt_tokens",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_vocab = <Vec<String>>::sse_decode(&mut deserializer);
-            let api_language = <Option<String>>::sse_decode(&mut deserializer);
-            let api_translate = <bool>::sse_decode(&mut deserializer);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok(crate::api::whisper::get_prompt_tokens(
-                        &api_vocab,
-                        &api_language,
-                        api_translate,
-                    ))?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
-fn wire__crate__api__whisper__get_unicode_to_bytes_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "get_unicode_to_bytes",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, ()>((move || {
-                    let output_ok =
-                        Result::<_, ()>::Ok(crate::api::whisper::get_unicode_to_bytes())?;
                     Ok(output_ok)
                 })())
             }
@@ -576,39 +431,6 @@ fn wire__crate__api__simple__init_app_impl(
         },
     )
 }
-fn wire__crate__api__whisper__load_vocabulary_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "load_vocabulary",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_model_path = <String>::sse_decode(&mut deserializer);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::whisper::load_vocabulary(&api_model_path)?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
 fn wire__crate__api__ffmpeg__mux_srt_to_video_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -657,51 +479,6 @@ fn wire__crate__api__ffmpeg__mux_srt_to_video_impl(
         },
     )
 }
-fn wire__crate__api__whisper__parse_tokens_to_segments_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "parse_tokens_to_segments",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_token_ids = <Vec<usize>>::sse_decode(&mut deserializer);
-            let api_vocab = <Vec<String>>::sse_decode(&mut deserializer);
-            let api_unicode_to_bytes =
-                <std::collections::HashMap<char, u8>>::sse_decode(&mut deserializer);
-            let api_global_offset_ms = <i64>::sse_decode(&mut deserializer);
-            let api_segment_duration_ms = <i64>::sse_decode(&mut deserializer);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, ()>((move || {
-                    let output_ok =
-                        Result::<_, ()>::Ok(crate::api::whisper::parse_tokens_to_segments(
-                            &api_token_ids,
-                            &api_vocab,
-                            &api_unicode_to_bytes,
-                            api_global_offset_ms,
-                            api_segment_duration_ms,
-                        ))?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
 fn wire__crate__api__ffmpeg__probe_audio_tracks_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -733,49 +510,6 @@ fn wire__crate__api__ffmpeg__probe_audio_tracks_impl(
                         api_ffmpeg_path,
                         api_file_path,
                     ))?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
-fn wire__crate__api__whisper__run_ort_vad_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "run_ort_vad",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_model_path = <String>::sse_decode(&mut deserializer);
-            let api_samples = <Vec<f32>>::sse_decode(&mut deserializer);
-            let api_threshold = <f32>::sse_decode(&mut deserializer);
-            let api_min_speech_ms = <i32>::sse_decode(&mut deserializer);
-            let api_min_silence_ms = <i32>::sse_decode(&mut deserializer);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::whisper::run_ort_vad(
-                        &api_model_path,
-                        &api_samples,
-                        api_threshold,
-                        api_min_speech_ms,
-                        api_min_silence_ms,
-                    )?;
                     Ok(output_ok)
                 })())
             }
@@ -1031,22 +765,6 @@ impl SseDecode for VadSessionState {
     }
 }
 
-impl SseDecode for char {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut inner = <String>::sse_decode(deserializer);
-        return inner.chars().next().unwrap();
-    }
-}
-
-impl SseDecode for std::collections::HashMap<char, u8> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut inner = <Vec<(char, u8)>>::sse_decode(deserializer);
-        return inner.into_iter().collect();
-    }
-}
-
 impl SseDecode
     for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<VadSessionState>>
 {
@@ -1179,18 +897,6 @@ impl SseDecode for Vec<crate::api::ffmpeg::AudioTrackInfo> {
     }
 }
 
-impl SseDecode for Vec<f32> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut len_ = <i32>::sse_decode(deserializer);
-        let mut ans_ = vec![];
-        for idx_ in 0..len_ {
-            ans_.push(<f32>::sse_decode(deserializer));
-        }
-        return ans_;
-    }
-}
-
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1198,42 +904,6 @@ impl SseDecode for Vec<u8> {
         let mut ans_ = vec![];
         for idx_ in 0..len_ {
             ans_.push(<u8>::sse_decode(deserializer));
-        }
-        return ans_;
-    }
-}
-
-impl SseDecode for Vec<usize> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut len_ = <i32>::sse_decode(deserializer);
-        let mut ans_ = vec![];
-        for idx_ in 0..len_ {
-            ans_.push(<usize>::sse_decode(deserializer));
-        }
-        return ans_;
-    }
-}
-
-impl SseDecode for Vec<(char, u8)> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut len_ = <i32>::sse_decode(deserializer);
-        let mut ans_ = vec![];
-        for idx_ in 0..len_ {
-            ans_.push(<(char, u8)>::sse_decode(deserializer));
-        }
-        return ans_;
-    }
-}
-
-impl SseDecode for Vec<(usize, usize)> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut len_ = <i32>::sse_decode(deserializer);
-        let mut ans_ = vec![];
-        for idx_ in 0..len_ {
-            ans_.push(<(usize, usize)>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -1330,29 +1000,11 @@ impl SseDecode for crate::api::stream_pipeline::PipelineConfig {
     }
 }
 
-impl SseDecode for (char, u8) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut var_field0 = <char>::sse_decode(deserializer);
-        let mut var_field1 = <u8>::sse_decode(deserializer);
-        return (var_field0, var_field1);
-    }
-}
-
 impl SseDecode for (String, String) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_field0 = <String>::sse_decode(deserializer);
         let mut var_field1 = <String>::sse_decode(deserializer);
-        return (var_field0, var_field1);
-    }
-}
-
-impl SseDecode for (usize, usize) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut var_field0 = <usize>::sse_decode(deserializer);
-        let mut var_field1 = <usize>::sse_decode(deserializer);
         return (var_field0, var_field1);
     }
 }
@@ -1449,43 +1101,29 @@ fn pde_ffi_dispatcher_primary_impl(
             wire__crate__api__whisper__convert_chinese_list_impl(port, ptr, rust_vec_len, data_len)
         }
         8 => wire__crate__api__ffmpeg__convert_iso639_2_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__whisper__decode_tokens_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__ffmpeg__extract_audio_from_media_impl(
+        9 => wire__crate__api__ffmpeg__extract_audio_from_media_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        11 => wire__crate__api__whisper__get_num_mel_bins_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__whisper__get_prompt_tokens_impl(port, ptr, rust_vec_len, data_len),
-        13 => {
-            wire__crate__api__whisper__get_unicode_to_bytes_impl(port, ptr, rust_vec_len, data_len)
-        }
-        15 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__whisper__load_vocabulary_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__ffmpeg__mux_srt_to_video_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__whisper__parse_tokens_to_segments_impl(
+        11 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__ffmpeg__mux_srt_to_video_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__ffmpeg__probe_audio_tracks_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__whisper__transcribe_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__stream_pipeline__transcribe_stream_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        19 => wire__crate__api__ffmpeg__probe_audio_tracks_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__whisper__run_ort_vad_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__whisper__transcribe_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__stream_pipeline__transcribe_stream_impl(
+        17 => wire__crate__api__whisper__transcription_segment_default_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        24 => wire__crate__api__whisper__transcription_segment_default_impl(
-            port,
-            ptr,
-            rust_vec_len,
-            data_len,
-        ),
-        25 => wire__crate__api__whisper__warmup_whisper_context_impl(
+        18 => wire__crate__api__whisper__warmup_whisper_context_impl(
             port,
             ptr,
             rust_vec_len,
@@ -1508,8 +1146,8 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        14 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__stream_pipeline__set_rust_perf_logging_impl(
+        10 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__stream_pipeline__set_rust_perf_logging_impl(
             ptr,
             rust_vec_len,
             data_len,
@@ -1696,20 +1334,6 @@ impl SseEncode for VadSessionState {
     }
 }
 
-impl SseEncode for char {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <String>::sse_encode(self.to_string(), serializer);
-    }
-}
-
-impl SseEncode for std::collections::HashMap<char, u8> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <Vec<(char, u8)>>::sse_encode(self.into_iter().collect(), serializer);
-    }
-}
-
 impl SseEncode
     for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<VadSessionState>>
 {
@@ -1823,52 +1447,12 @@ impl SseEncode for Vec<crate::api::ffmpeg::AudioTrackInfo> {
     }
 }
 
-impl SseEncode for Vec<f32> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <i32>::sse_encode(self.len() as _, serializer);
-        for item in self {
-            <f32>::sse_encode(item, serializer);
-        }
-    }
-}
-
 impl SseEncode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <u8>::sse_encode(item, serializer);
-        }
-    }
-}
-
-impl SseEncode for Vec<usize> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <i32>::sse_encode(self.len() as _, serializer);
-        for item in self {
-            <usize>::sse_encode(item, serializer);
-        }
-    }
-}
-
-impl SseEncode for Vec<(char, u8)> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <i32>::sse_encode(self.len() as _, serializer);
-        for item in self {
-            <(char, u8)>::sse_encode(item, serializer);
-        }
-    }
-}
-
-impl SseEncode for Vec<(usize, usize)> {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <i32>::sse_encode(self.len() as _, serializer);
-        for item in self {
-            <(usize, usize)>::sse_encode(item, serializer);
         }
     }
 }
@@ -1937,27 +1521,11 @@ impl SseEncode for crate::api::stream_pipeline::PipelineConfig {
     }
 }
 
-impl SseEncode for (char, u8) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <char>::sse_encode(self.0, serializer);
-        <u8>::sse_encode(self.1, serializer);
-    }
-}
-
 impl SseEncode for (String, String) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.0, serializer);
         <String>::sse_encode(self.1, serializer);
-    }
-}
-
-impl SseEncode for (usize, usize) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <usize>::sse_encode(self.0, serializer);
-        <usize>::sse_encode(self.1, serializer);
     }
 }
 

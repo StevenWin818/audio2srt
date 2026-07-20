@@ -43,12 +43,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  String dco_decode_Char(dynamic raw);
-
-  @protected
-  Map<String, int> dco_decode_Map_Char_u_8_None(dynamic raw);
-
-  @protected
   VadSessionState
   dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
     dynamic raw,
@@ -114,22 +108,7 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<AudioTrackInfo> dco_decode_list_audio_track_info(dynamic raw);
 
   @protected
-  List<double> dco_decode_list_prim_f_32_loose(dynamic raw);
-
-  @protected
-  Float32List dco_decode_list_prim_f_32_strict(dynamic raw);
-
-  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
-
-  @protected
-  Uint64List dco_decode_list_prim_usize_strict(dynamic raw);
-
-  @protected
-  List<(String, int)> dco_decode_list_record_char_u_8(dynamic raw);
-
-  @protected
-  List<(BigInt, BigInt)> dco_decode_list_record_usize_usize(dynamic raw);
 
   @protected
   List<TranscriptionSegment> dco_decode_list_transcription_segment(dynamic raw);
@@ -147,13 +126,7 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PipelineConfig dco_decode_pipeline_config(dynamic raw);
 
   @protected
-  (String, int) dco_decode_record_char_u_8(dynamic raw);
-
-  @protected
   (String, String) dco_decode_record_string_string(dynamic raw);
-
-  @protected
-  (BigInt, BigInt) dco_decode_record_usize_usize(dynamic raw);
 
   @protected
   TranscriptionEvent dco_decode_transcription_event(dynamic raw);
@@ -184,12 +157,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
     SseDeserializer deserializer,
   );
-
-  @protected
-  String sse_decode_Char(SseDeserializer deserializer);
-
-  @protected
-  Map<String, int> sse_decode_Map_Char_u_8_None(SseDeserializer deserializer);
 
   @protected
   VadSessionState
@@ -260,26 +227,7 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  List<double> sse_decode_list_prim_f_32_loose(SseDeserializer deserializer);
-
-  @protected
-  Float32List sse_decode_list_prim_f_32_strict(SseDeserializer deserializer);
-
-  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
-
-  @protected
-  Uint64List sse_decode_list_prim_usize_strict(SseDeserializer deserializer);
-
-  @protected
-  List<(String, int)> sse_decode_list_record_char_u_8(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  List<(BigInt, BigInt)> sse_decode_list_record_usize_usize(
-    SseDeserializer deserializer,
-  );
 
   @protected
   List<TranscriptionSegment> sse_decode_list_transcription_segment(
@@ -299,15 +247,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PipelineConfig sse_decode_pipeline_config(SseDeserializer deserializer);
 
   @protected
-  (String, int) sse_decode_record_char_u_8(SseDeserializer deserializer);
-
-  @protected
   (String, String) sse_decode_record_string_string(
     SseDeserializer deserializer,
   );
-
-  @protected
-  (BigInt, BigInt) sse_decode_record_usize_usize(SseDeserializer deserializer);
 
   @protected
   TranscriptionEvent sse_decode_transcription_event(
@@ -345,15 +287,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void
   sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
     VadSessionState self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_Char(String self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_Map_Char_u_8_None(
-    Map<String, int> self,
     SseSerializer serializer,
   );
 
@@ -437,38 +370,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_list_prim_f_32_loose(
-    List<double> self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_prim_f_32_strict(
-    Float32List self,
-    SseSerializer serializer,
-  );
-
-  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_prim_usize_strict(
-    Uint64List self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_record_char_u_8(
-    List<(String, int)> self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_record_usize_usize(
-    List<(BigInt, BigInt)> self,
     SseSerializer serializer,
   );
 
@@ -494,17 +397,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_record_char_u_8((String, int) self, SseSerializer serializer);
-
-  @protected
   void sse_encode_record_string_string(
     (String, String) self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_record_usize_usize(
-    (BigInt, BigInt) self,
     SseSerializer serializer,
   );
 

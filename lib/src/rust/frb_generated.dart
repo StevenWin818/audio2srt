@@ -69,7 +69,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -604225;
+  int get rustContentHash => -987296420;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -105,34 +105,15 @@ abstract class RustLibApi extends BaseApi {
 
   Future<(String, String)> crateApiFfmpegConvertIso6392({required String code});
 
-  Future<String> crateApiWhisperDecodeTokens({
-    required List<String> tokens,
-    required Map<String, int> unicodeToBytes,
-  });
-
   Stream<FfmpegEvent> crateApiFfmpegExtractAudioFromMedia({
     required String ffmpegPath,
     required String inputPath,
     required String outputPath,
   });
 
-  Future<BigInt?> crateApiWhisperGetNumMelBins({required String modelPath});
-
-  Future<Uint64List> crateApiWhisperGetPromptTokens({
-    required List<String> vocab,
-    String? language,
-    required bool translate,
-  });
-
-  Future<Map<String, int>> crateApiWhisperGetUnicodeToBytes();
-
   String crateApiSimpleGreet({required String name});
 
   Future<void> crateApiSimpleInitApp();
-
-  Future<List<String>> crateApiWhisperLoadVocabulary({
-    required String modelPath,
-  });
 
   Stream<FfmpegEvent> crateApiFfmpegMuxSrtToVideo({
     required String ffmpegPath,
@@ -142,25 +123,9 @@ abstract class RustLibApi extends BaseApi {
     required bool hardBurn,
   });
 
-  Future<List<TranscriptionSegment>> crateApiWhisperParseTokensToSegments({
-    required Uint64List tokenIds,
-    required List<String> vocab,
-    required Map<String, int> unicodeToBytes,
-    required PlatformInt64 globalOffsetMs,
-    required PlatformInt64 segmentDurationMs,
-  });
-
   Future<List<AudioTrackInfo>> crateApiFfmpegProbeAudioTracks({
     required String ffmpegPath,
     required String filePath,
-  });
-
-  Future<List<(BigInt, BigInt)>> crateApiWhisperRunOrtVad({
-    required String modelPath,
-    required List<double> samples,
-    required double threshold,
-    required int minSpeechMs,
-    required int minSilenceMs,
   });
 
   void crateApiStreamPipelineSetRustPerfLogging({required bool enable});
@@ -445,41 +410,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "convert_iso639_2", argNames: ["code"]);
 
   @override
-  Future<String> crateApiWhisperDecodeTokens({
-    required List<String> tokens,
-    required Map<String, int> unicodeToBytes,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_list_String(tokens, serializer);
-          sse_encode_Map_Char_u_8_None(unicodeToBytes, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 9,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_String,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiWhisperDecodeTokensConstMeta,
-        argValues: [tokens, unicodeToBytes],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiWhisperDecodeTokensConstMeta =>
-      const TaskConstMeta(
-        debugName: "decode_tokens",
-        argNames: ["tokens", "unicodeToBytes"],
-      );
-
-  @override
   Stream<FfmpegEvent> crateApiFfmpegExtractAudioFromMedia({
     required String ffmpegPath,
     required String inputPath,
@@ -498,7 +428,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 10,
+              funcId: 9,
               port: port_,
             );
           },
@@ -522,108 +452,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<BigInt?> crateApiWhisperGetNumMelBins({required String modelPath}) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(modelPath, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 11,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_opt_box_autoadd_usize,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiWhisperGetNumMelBinsConstMeta,
-        argValues: [modelPath],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiWhisperGetNumMelBinsConstMeta =>
-      const TaskConstMeta(
-        debugName: "get_num_mel_bins",
-        argNames: ["modelPath"],
-      );
-
-  @override
-  Future<Uint64List> crateApiWhisperGetPromptTokens({
-    required List<String> vocab,
-    String? language,
-    required bool translate,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_list_String(vocab, serializer);
-          sse_encode_opt_String(language, serializer);
-          sse_encode_bool(translate, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 12,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_prim_usize_strict,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiWhisperGetPromptTokensConstMeta,
-        argValues: [vocab, language, translate],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiWhisperGetPromptTokensConstMeta =>
-      const TaskConstMeta(
-        debugName: "get_prompt_tokens",
-        argNames: ["vocab", "language", "translate"],
-      );
-
-  @override
-  Future<Map<String, int>> crateApiWhisperGetUnicodeToBytes() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 13,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_Map_Char_u_8_None,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiWhisperGetUnicodeToBytesConstMeta,
-        argValues: [],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiWhisperGetUnicodeToBytesConstMeta =>
-      const TaskConstMeta(debugName: "get_unicode_to_bytes", argNames: []);
-
-  @override
   String crateApiSimpleGreet({required String name}) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -648,7 +483,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 11,
             port: port_,
           );
         },
@@ -665,39 +500,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiSimpleInitAppConstMeta =>
       const TaskConstMeta(debugName: "init_app", argNames: []);
-
-  @override
-  Future<List<String>> crateApiWhisperLoadVocabulary({
-    required String modelPath,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(modelPath, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 16,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_String,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiWhisperLoadVocabularyConstMeta,
-        argValues: [modelPath],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiWhisperLoadVocabularyConstMeta =>
-      const TaskConstMeta(
-        debugName: "load_vocabulary",
-        argNames: ["modelPath"],
-      );
 
   @override
   Stream<FfmpegEvent> crateApiFfmpegMuxSrtToVideo({
@@ -722,7 +524,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 17,
+              funcId: 12,
               port: port_,
             );
           },
@@ -760,59 +562,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<List<TranscriptionSegment>> crateApiWhisperParseTokensToSegments({
-    required Uint64List tokenIds,
-    required List<String> vocab,
-    required Map<String, int> unicodeToBytes,
-    required PlatformInt64 globalOffsetMs,
-    required PlatformInt64 segmentDurationMs,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_list_prim_usize_strict(tokenIds, serializer);
-          sse_encode_list_String(vocab, serializer);
-          sse_encode_Map_Char_u_8_None(unicodeToBytes, serializer);
-          sse_encode_i_64(globalOffsetMs, serializer);
-          sse_encode_i_64(segmentDurationMs, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 18,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_transcription_segment,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiWhisperParseTokensToSegmentsConstMeta,
-        argValues: [
-          tokenIds,
-          vocab,
-          unicodeToBytes,
-          globalOffsetMs,
-          segmentDurationMs,
-        ],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiWhisperParseTokensToSegmentsConstMeta =>
-      const TaskConstMeta(
-        debugName: "parse_tokens_to_segments",
-        argNames: [
-          "tokenIds",
-          "vocab",
-          "unicodeToBytes",
-          "globalOffsetMs",
-          "segmentDurationMs",
-        ],
-      );
-
-  @override
   Future<List<AudioTrackInfo>> crateApiFfmpegProbeAudioTracks({
     required String ffmpegPath,
     required String filePath,
@@ -826,7 +575,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 13,
             port: port_,
           );
         },
@@ -848,59 +597,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<List<(BigInt, BigInt)>> crateApiWhisperRunOrtVad({
-    required String modelPath,
-    required List<double> samples,
-    required double threshold,
-    required int minSpeechMs,
-    required int minSilenceMs,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(modelPath, serializer);
-          sse_encode_list_prim_f_32_loose(samples, serializer);
-          sse_encode_f_32(threshold, serializer);
-          sse_encode_i_32(minSpeechMs, serializer);
-          sse_encode_i_32(minSilenceMs, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 20,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_record_usize_usize,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiWhisperRunOrtVadConstMeta,
-        argValues: [modelPath, samples, threshold, minSpeechMs, minSilenceMs],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiWhisperRunOrtVadConstMeta => const TaskConstMeta(
-    debugName: "run_ort_vad",
-    argNames: [
-      "modelPath",
-      "samples",
-      "threshold",
-      "minSpeechMs",
-      "minSilenceMs",
-    ],
-  );
-
-  @override
   void crateApiStreamPipelineSetRustPerfLogging({required bool enable}) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_bool(enable, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -968,7 +671,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 22,
+              funcId: 15,
               port: port_,
             );
           },
@@ -1045,7 +748,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 23,
+              funcId: 16,
               port: port_,
             );
           },
@@ -1077,7 +780,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 17,
             port: port_,
           );
         },
@@ -1114,7 +817,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 18,
             port: port_,
           );
         },
@@ -1165,20 +868,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return VadSessionStateImpl.frbInternalDcoDecode(raw as List<dynamic>);
-  }
-
-  @protected
-  String dco_decode_Char(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return String.fromCharCode(raw);
-  }
-
-  @protected
-  Map<String, int> dco_decode_Map_Char_u_8_None(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return Map.fromEntries(
-      dco_decode_list_record_char_u_8(raw).map((e) => MapEntry(e.$1, e.$2)),
-    );
   }
 
   @protected
@@ -1319,39 +1008,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<double> dco_decode_list_prim_f_32_loose(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw as List<double>;
-  }
-
-  @protected
-  Float32List dco_decode_list_prim_f_32_strict(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw as Float32List;
-  }
-
-  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
-  }
-
-  @protected
-  Uint64List dco_decode_list_prim_usize_strict(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw as Uint64List;
-  }
-
-  @protected
-  List<(String, int)> dco_decode_list_record_char_u_8(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>).map(dco_decode_record_char_u_8).toList();
-  }
-
-  @protected
-  List<(BigInt, BigInt)> dco_decode_list_record_usize_usize(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>).map(dco_decode_record_usize_usize).toList();
   }
 
   @protected
@@ -1411,16 +1070,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  (String, int) dco_decode_record_char_u_8(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    final arr = raw as List<dynamic>;
-    if (arr.length != 2) {
-      throw Exception('Expected 2 elements, got ${arr.length}');
-    }
-    return (dco_decode_Char(arr[0]), dco_decode_u_8(arr[1]));
-  }
-
-  @protected
   (String, String) dco_decode_record_string_string(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -1428,16 +1077,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       throw Exception('Expected 2 elements, got ${arr.length}');
     }
     return (dco_decode_String(arr[0]), dco_decode_String(arr[1]));
-  }
-
-  @protected
-  (BigInt, BigInt) dco_decode_record_usize_usize(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    final arr = raw as List<dynamic>;
-    if (arr.length != 2) {
-      throw Exception('Expected 2 elements, got ${arr.length}');
-    }
-    return (dco_decode_usize(arr[0]), dco_decode_usize(arr[1]));
   }
 
   @protected
@@ -1526,20 +1165,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
-  }
-
-  @protected
-  String sse_decode_Char(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var inner = sse_decode_String(deserializer);
-    return inner;
-  }
-
-  @protected
-  Map<String, int> sse_decode_Map_Char_u_8_None(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var inner = sse_decode_list_record_char_u_8(deserializer);
-    return Map.fromEntries(inner.map((e) => MapEntry(e.$1, e.$2)));
   }
 
   @protected
@@ -1697,59 +1322,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<double> sse_decode_list_prim_f_32_loose(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var len_ = sse_decode_i_32(deserializer);
-    return deserializer.buffer.getFloat32List(len_);
-  }
-
-  @protected
-  Float32List sse_decode_list_prim_f_32_strict(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var len_ = sse_decode_i_32(deserializer);
-    return deserializer.buffer.getFloat32List(len_);
-  }
-
-  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
-  }
-
-  @protected
-  Uint64List sse_decode_list_prim_usize_strict(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var len_ = sse_decode_i_32(deserializer);
-    return deserializer.buffer.getUint64List(len_);
-  }
-
-  @protected
-  List<(String, int)> sse_decode_list_record_char_u_8(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-
-    var len_ = sse_decode_i_32(deserializer);
-    var ans_ = <(String, int)>[];
-    for (var idx_ = 0; idx_ < len_; ++idx_) {
-      ans_.add(sse_decode_record_char_u_8(deserializer));
-    }
-    return ans_;
-  }
-
-  @protected
-  List<(BigInt, BigInt)> sse_decode_list_record_usize_usize(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-
-    var len_ = sse_decode_i_32(deserializer);
-    var ans_ = <(BigInt, BigInt)>[];
-    for (var idx_ = 0; idx_ < len_; ++idx_) {
-      ans_.add(sse_decode_record_usize_usize(deserializer));
-    }
-    return ans_;
   }
 
   @protected
@@ -1843,28 +1419,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  (String, int) sse_decode_record_char_u_8(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_field0 = sse_decode_Char(deserializer);
-    var var_field1 = sse_decode_u_8(deserializer);
-    return (var_field0, var_field1);
-  }
-
-  @protected
   (String, String) sse_decode_record_string_string(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_field0 = sse_decode_String(deserializer);
     var var_field1 = sse_decode_String(deserializer);
-    return (var_field0, var_field1);
-  }
-
-  @protected
-  (BigInt, BigInt) sse_decode_record_usize_usize(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_field0 = sse_decode_usize(deserializer);
-    var var_field1 = sse_decode_usize(deserializer);
     return (var_field0, var_field1);
   }
 
@@ -1965,24 +1525,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
       (self as VadSessionStateImpl).frbInternalSseEncode(move: false),
-      serializer,
-    );
-  }
-
-  @protected
-  void sse_encode_Char(String self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_String(self, serializer);
-  }
-
-  @protected
-  void sse_encode_Map_Char_u_8_None(
-    Map<String, int> self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_list_record_char_u_8(
-      self.entries.map((e) => (e.key, e.value)).toList(),
       serializer,
     );
   }
@@ -2151,28 +1693,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_list_prim_f_32_loose(
-    List<double> self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.length, serializer);
-    serializer.buffer.putFloat32List(
-      self is Float32List ? self : Float32List.fromList(self),
-    );
-  }
-
-  @protected
-  void sse_encode_list_prim_f_32_strict(
-    Float32List self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.length, serializer);
-    serializer.buffer.putFloat32List(self);
-  }
-
-  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
     SseSerializer serializer,
@@ -2180,40 +1700,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
-  }
-
-  @protected
-  void sse_encode_list_prim_usize_strict(
-    Uint64List self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.length, serializer);
-    serializer.buffer.putUint64List(self);
-  }
-
-  @protected
-  void sse_encode_list_record_char_u_8(
-    List<(String, int)> self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.length, serializer);
-    for (final item in self) {
-      sse_encode_record_char_u_8(item, serializer);
-    }
-  }
-
-  @protected
-  void sse_encode_list_record_usize_usize(
-    List<(BigInt, BigInt)> self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.length, serializer);
-    for (final item in self) {
-      sse_encode_record_usize_usize(item, serializer);
-    }
   }
 
   @protected
@@ -2288,16 +1774,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_record_char_u_8(
-    (String, int) self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_Char(self.$1, serializer);
-    sse_encode_u_8(self.$2, serializer);
-  }
-
-  @protected
   void sse_encode_record_string_string(
     (String, String) self,
     SseSerializer serializer,
@@ -2305,16 +1781,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.$1, serializer);
     sse_encode_String(self.$2, serializer);
-  }
-
-  @protected
-  void sse_encode_record_usize_usize(
-    (BigInt, BigInt) self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_usize(self.$1, serializer);
-    sse_encode_usize(self.$2, serializer);
   }
 
   @protected

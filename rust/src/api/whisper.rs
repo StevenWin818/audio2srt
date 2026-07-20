@@ -462,7 +462,7 @@ fn payout_or_default(patience: f32) -> f32 {
     if patience <= 0.0 { 1.0 } else { patience }
 }
 
-pub fn get_unicode_to_bytes() -> HashMap<char, u8> {
+pub(crate) fn get_unicode_to_bytes() -> HashMap<char, u8> {
     let mut bs: Vec<u8> = Vec::new();
     bs.extend(b'!'..=b'~');
     bs.extend(0xA1..=0xAC);
@@ -481,7 +481,7 @@ pub fn get_unicode_to_bytes() -> HashMap<char, u8> {
     bs.iter().zip(cs.iter()).map(|(&b, &c)| (std::char::from_u32(c).unwrap(), b)).collect()
 }
 
-pub fn decode_tokens(tokens: &[String], unicode_to_bytes: &HashMap<char, u8>) -> String {
+pub(crate) fn decode_tokens(tokens: &[String], unicode_to_bytes: &HashMap<char, u8>) -> String {
     let mut bytes = Vec::new();
     for token in tokens {
         for c in token.chars() {
@@ -495,7 +495,7 @@ pub fn decode_tokens(tokens: &[String], unicode_to_bytes: &HashMap<char, u8>) ->
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-pub fn parse_tokens_to_segments(
+pub(crate) fn parse_tokens_to_segments(
     token_ids: &[usize],
     vocab: &[String],
     unicode_to_bytes: &HashMap<char, u8>,
@@ -547,7 +547,7 @@ pub fn parse_tokens_to_segments(
     segments
 }
 
-pub fn get_prompt_tokens(
+pub(crate) fn get_prompt_tokens(
     vocab: &[String],
     language: &Option<String>,
     translate: bool,
@@ -610,7 +610,7 @@ fn parse_json_vocabulary(content: &str) -> Option<Vec<String>> {
     None
 }
 
-pub fn load_vocabulary(model_path: &str) -> Result<Vec<String>, String> {
+pub(crate) fn load_vocabulary(model_path: &str) -> Result<Vec<String>, String> {
     let path_txt = std::path::Path::new(model_path).join("vocabulary.txt");
     let path_json = std::path::Path::new(model_path).join("vocabulary.json");
     let path_vocab_json = std::path::Path::new(model_path).join("vocab.json");
@@ -635,7 +635,7 @@ pub fn load_vocabulary(model_path: &str) -> Result<Vec<String>, String> {
     Err(format!("Vocabulary file not found in {:?}", model_path))
 }
 
-pub fn get_num_mel_bins(model_path: &str) -> Option<usize> {
+pub(crate) fn get_num_mel_bins(model_path: &str) -> Option<usize> {
     // 1. Try preprocessor_config.json -> feature_size
     let prep_path = std::path::Path::new(model_path).join("preprocessor_config.json");
     if prep_path.exists() {
@@ -672,7 +672,7 @@ pub fn get_num_mel_bins(model_path: &str) -> Option<usize> {
     None
 }
 
-pub fn run_ort_vad(
+pub(crate) fn run_ort_vad(
     model_path: &str,
     samples: &[f32],
     threshold: f32,
