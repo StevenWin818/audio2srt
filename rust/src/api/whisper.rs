@@ -1,5 +1,5 @@
 use crate::frb_generated::StreamSink;
-use crate::api::ctranslate2_bridge::ffi::{WhisperWrapper, create_whisper_model};
+use crate::ctranslate2_bridge::ffi::{WhisperWrapper, create_whisper_model};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 
@@ -10,7 +10,7 @@ struct CachedContext {
 }
 
 pub struct WhisperModel {
-    pub inner: cxx::UniquePtr<WhisperWrapper>,
+    pub(crate) inner: cxx::UniquePtr<WhisperWrapper>,
 }
 unsafe impl Send for WhisperModel {}
 unsafe impl Sync for WhisperModel {}
@@ -122,27 +122,7 @@ pub enum TranscriptionEvent {
     Segment(TranscriptionSegment),
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct VulkanDeviceInfo {
-    pub id: i32,
-    pub name: String,
-    pub total_vram_bytes: u64,
-}
 
-#[derive(Clone, Debug, Default)]
-pub struct HardwareAccelerationInfo {
-    pub is_vulkan_available: bool,
-    pub devices: Vec<VulkanDeviceInfo>,
-}
-
-pub fn get_hardware_acceleration_info() -> HardwareAccelerationInfo {
-    // CTranslate2 doesn't use Vulkan, it uses CUDA.
-    // For simplicity, we just return empty Vulkan device list.
-    HardwareAccelerationInfo {
-        is_vulkan_available: false,
-        devices: vec![],
-    }
-}
 
 pub fn convert_chinese(text: String, to_simplified: bool) -> String {
     let target = if to_simplified { zhconv::Variant::ZhCN } else { zhconv::Variant::ZhTW };
@@ -706,16 +686,16 @@ pub fn run_ort_vad(
     run_ort_vad_with_session(&mut session, samples, threshold, min_speech_ms, min_silence_ms)
 }
 
-pub struct VadSessionState {
-    pub state_v5: ndarray::Array3<f32>,
-    pub h_v4: ndarray::Array3<f32>,
-    pub c_v4: ndarray::Array3<f32>,
-    pub context: Vec<f32>,
-    pub detected_segments: Vec<(usize, usize)>,
-    pub triggered: bool,
-    pub speech_start: usize,
-    pub temp_end: usize,
-    pub processed_samples: usize,
+pub(crate) struct VadSessionState {
+    pub(crate) state_v5: ndarray::Array3<f32>,
+    pub(crate) h_v4: ndarray::Array3<f32>,
+    pub(crate) c_v4: ndarray::Array3<f32>,
+    pub(crate) context: Vec<f32>,
+    pub(crate) detected_segments: Vec<(usize, usize)>,
+    pub(crate) triggered: bool,
+    pub(crate) speech_start: usize,
+    pub(crate) temp_end: usize,
+    pub(crate) processed_samples: usize,
 }
 
 impl VadSessionState {
@@ -758,7 +738,7 @@ impl VadSessionState {
     }
 }
 
-pub fn run_ort_vad_with_state(
+pub(crate) fn run_ort_vad_with_state(
     session: &mut ort::session::Session,
     samples: &[f32],
     state: &mut VadSessionState,
@@ -916,7 +896,7 @@ pub fn run_ort_vad_with_state(
     Ok(state.detected_segments.clone())
 }
 
-pub fn run_ort_vad_with_session(
+pub(crate) fn run_ort_vad_with_session(
     session: &mut ort::session::Session,
     samples: &[f32],
     threshold: f32,

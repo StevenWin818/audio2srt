@@ -4,7 +4,7 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rerun-if-changed=src/api/ct2_wrapper.cc");
     println!("cargo:rerun-if-changed=src/api/ct2_wrapper.h");
-    println!("cargo:rerun-if-changed=src/api/ctranslate2_bridge.rs");
+    println!("cargo:rerun-if-changed=src/ctranslate2_bridge.rs");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let ct2_dir = manifest_dir.join("third_party").join("ctranslate2");
@@ -13,7 +13,7 @@ fn main() {
     let lib_dir = ct2_dir.join("lib");
 
     // Configure cxx
-    cxx_build::bridge("src/api/ctranslate2_bridge.rs")
+    cxx_build::bridge("src/ctranslate2_bridge.rs")
         .file("src/api/ct2_wrapper.cc")
         .include("src/api")
         .include(&include_dir)

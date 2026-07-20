@@ -34,7 +34,6 @@ zip = "0.6"
 
 [features]
 default = []
-vulkan = []
 cuda = []
 
 [lints.rust]

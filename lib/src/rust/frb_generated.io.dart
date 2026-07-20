@@ -21,8 +21,36 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     required super.portManager,
   });
 
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_VadSessionStatePtr => wire
+      ._rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionStatePtr;
+
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw);
+
+  @protected
+  VadSessionState
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
+    dynamic raw,
+  );
+
+  @protected
+  VadSessionState
+  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
+    dynamic raw,
+  );
+
+  @protected
+  String dco_decode_Char(dynamic raw);
+
+  @protected
+  Map<String, int> dco_decode_Map_Char_u_8_None(dynamic raw);
+
+  @protected
+  VadSessionState
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
+    dynamic raw,
+  );
 
   @protected
   RustStreamSink<FfmpegEvent> dco_decode_StreamSink_ffmpeg_event_Sse(
@@ -72,9 +100,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   FfmpegEvent dco_decode_ffmpeg_event(dynamic raw);
 
   @protected
-  HardwareAccelerationInfo dco_decode_hardware_acceleration_info(dynamic raw);
-
-  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
@@ -87,13 +112,25 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<AudioTrackInfo> dco_decode_list_audio_track_info(dynamic raw);
 
   @protected
+  List<double> dco_decode_list_prim_f_32_loose(dynamic raw);
+
+  @protected
+  Float32List dco_decode_list_prim_f_32_strict(dynamic raw);
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
-  List<TranscriptionSegment> dco_decode_list_transcription_segment(dynamic raw);
+  Uint64List dco_decode_list_prim_usize_strict(dynamic raw);
 
   @protected
-  List<VulkanDeviceInfo> dco_decode_list_vulkan_device_info(dynamic raw);
+  List<(String, int)> dco_decode_list_record_char_u_8(dynamic raw);
+
+  @protected
+  List<(BigInt, BigInt)> dco_decode_list_record_usize_usize(dynamic raw);
+
+  @protected
+  List<TranscriptionSegment> dco_decode_list_transcription_segment(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -108,16 +145,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PipelineConfig dco_decode_pipeline_config(dynamic raw);
 
   @protected
+  (String, int) dco_decode_record_char_u_8(dynamic raw);
+
+  @protected
   (String, String) dco_decode_record_string_string(dynamic raw);
+
+  @protected
+  (BigInt, BigInt) dco_decode_record_usize_usize(dynamic raw);
 
   @protected
   TranscriptionEvent dco_decode_transcription_event(dynamic raw);
 
   @protected
   TranscriptionSegment dco_decode_transcription_segment(dynamic raw);
-
-  @protected
-  BigInt dco_decode_u_64(dynamic raw);
 
   @protected
   int dco_decode_u_8(dynamic raw);
@@ -129,10 +169,31 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BigInt dco_decode_usize(dynamic raw);
 
   @protected
-  VulkanDeviceInfo dco_decode_vulkan_device_info(dynamic raw);
+  AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
 
   @protected
-  AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
+  VadSessionState
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  VadSessionState
+  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  String sse_decode_Char(SseDeserializer deserializer);
+
+  @protected
+  Map<String, int> sse_decode_Map_Char_u_8_None(SseDeserializer deserializer);
+
+  @protected
+  VadSessionState
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
+    SseDeserializer deserializer,
+  );
 
   @protected
   RustStreamSink<FfmpegEvent> sse_decode_StreamSink_ffmpeg_event_Sse(
@@ -183,11 +244,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   FfmpegEvent sse_decode_ffmpeg_event(SseDeserializer deserializer);
 
   @protected
-  HardwareAccelerationInfo sse_decode_hardware_acceleration_info(
-    SseDeserializer deserializer,
-  );
-
-  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
@@ -202,15 +258,29 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<double> sse_decode_list_prim_f_32_loose(SseDeserializer deserializer);
+
+  @protected
+  Float32List sse_decode_list_prim_f_32_strict(SseDeserializer deserializer);
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
-  List<TranscriptionSegment> sse_decode_list_transcription_segment(
+  Uint64List sse_decode_list_prim_usize_strict(SseDeserializer deserializer);
+
+  @protected
+  List<(String, int)> sse_decode_list_record_char_u_8(
     SseDeserializer deserializer,
   );
 
   @protected
-  List<VulkanDeviceInfo> sse_decode_list_vulkan_device_info(
+  List<(BigInt, BigInt)> sse_decode_list_record_usize_usize(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<TranscriptionSegment> sse_decode_list_transcription_segment(
     SseDeserializer deserializer,
   );
 
@@ -227,9 +297,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PipelineConfig sse_decode_pipeline_config(SseDeserializer deserializer);
 
   @protected
+  (String, int) sse_decode_record_char_u_8(SseDeserializer deserializer);
+
+  @protected
   (String, String) sse_decode_record_string_string(
     SseDeserializer deserializer,
   );
+
+  @protected
+  (BigInt, BigInt) sse_decode_record_usize_usize(SseDeserializer deserializer);
 
   @protected
   TranscriptionEvent sse_decode_transcription_event(
@@ -242,9 +318,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  BigInt sse_decode_u_64(SseDeserializer deserializer);
-
-  @protected
   int sse_decode_u_8(SseDeserializer deserializer);
 
   @protected
@@ -254,11 +327,38 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BigInt sse_decode_usize(SseDeserializer deserializer);
 
   @protected
-  VulkanDeviceInfo sse_decode_vulkan_device_info(SseDeserializer deserializer);
-
-  @protected
   void sse_encode_AnyhowException(
     AnyhowException self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
+    VadSessionState self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
+    VadSessionState self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_Char(String self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_Map_Char_u_8_None(
+    Map<String, int> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
+    VadSessionState self,
     SseSerializer serializer,
   );
 
@@ -320,12 +420,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_ffmpeg_event(FfmpegEvent self, SseSerializer serializer);
 
   @protected
-  void sse_encode_hardware_acceleration_info(
-    HardwareAccelerationInfo self,
-    SseSerializer serializer,
-  );
-
-  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
@@ -341,20 +435,44 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_prim_f_32_loose(
+    List<double> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_prim_f_32_strict(
+    Float32List self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
     SseSerializer serializer,
   );
 
   @protected
-  void sse_encode_list_transcription_segment(
-    List<TranscriptionSegment> self,
+  void sse_encode_list_prim_usize_strict(
+    Uint64List self,
     SseSerializer serializer,
   );
 
   @protected
-  void sse_encode_list_vulkan_device_info(
-    List<VulkanDeviceInfo> self,
+  void sse_encode_list_record_char_u_8(
+    List<(String, int)> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_record_usize_usize(
+    List<(BigInt, BigInt)> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_transcription_segment(
+    List<TranscriptionSegment> self,
     SseSerializer serializer,
   );
 
@@ -374,8 +492,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_record_char_u_8((String, int) self, SseSerializer serializer);
+
+  @protected
   void sse_encode_record_string_string(
     (String, String) self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_record_usize_usize(
+    (BigInt, BigInt) self,
     SseSerializer serializer,
   );
 
@@ -392,9 +519,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_u_64(BigInt self, SseSerializer serializer);
-
-  @protected
   void sse_encode_u_8(int self, SseSerializer serializer);
 
   @protected
@@ -402,12 +526,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_usize(BigInt self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_vulkan_device_info(
-    VulkanDeviceInfo self,
-    SseSerializer serializer,
-  );
 }
 
 // Section: wire_class
@@ -423,4 +541,38 @@ class RustLibWire implements BaseWire {
   /// The symbols are looked up in [dynamicLibrary].
   RustLibWire(ffi.DynamicLibrary dynamicLibrary)
     : _lookup = dynamicLibrary.lookup;
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
+    ffi.Pointer<ffi.Void> ptr,
+  ) {
+    return _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
+      ptr,
+    );
+  }
+
+  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionStatePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>(
+        'frbgen_audio2srt_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState',
+      );
+  late final _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState =
+      _rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionStatePtr
+          .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
+    ffi.Pointer<ffi.Void> ptr,
+  ) {
+    return _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState(
+      ptr,
+    );
+  }
+
+  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionStatePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Void>)>>(
+        'frbgen_audio2srt_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState',
+      );
+  late final _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionState =
+      _rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerVadSessionStatePtr
+          .asFunction<void Function(ffi.Pointer<ffi.Void>)>();
 }

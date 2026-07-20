@@ -8,12 +8,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'whisper.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `calculate_dtw_mem_size`, `calculate_rms`, `check_vulkan_supported_safely`, `get_dtw_model_preset`, `get_or_create_context`, `progress_callback_trampoline`, `register_thread_as_pro_audio`, `run_transcription_inner`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedContext`, `DISPLAY_DEVICEA`, `ProgressContext`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`
-
-Future<HardwareAccelerationInfo> getHardwareAccelerationInfo() =>
-    RustLib.instance.api.crateApiWhisperGetHardwareAccelerationInfo();
+// These functions are ignored because they are not marked as `pub`: `calculate_rms`, `get_or_create_context`, `parse_json_vocabulary`, `payout_or_default`, `register_thread_as_pro_audio`, `run_ort_vad_with_session`, `run_ort_vad_with_state`, `run_transcription_inner`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedContext`, `WhisperModel`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `fmt`, `fmt`
 
 Future<String> convertChinese({
   required String text,
@@ -71,6 +68,61 @@ Stream<TranscriptionEvent> transcribe({
   noStateHistory: noStateHistory,
 );
 
+Future<Map<String, int>> getUnicodeToBytes() =>
+    RustLib.instance.api.crateApiWhisperGetUnicodeToBytes();
+
+Future<String> decodeTokens({
+  required List<String> tokens,
+  required Map<String, int> unicodeToBytes,
+}) => RustLib.instance.api.crateApiWhisperDecodeTokens(
+  tokens: tokens,
+  unicodeToBytes: unicodeToBytes,
+);
+
+Future<List<TranscriptionSegment>> parseTokensToSegments({
+  required Uint64List tokenIds,
+  required List<String> vocab,
+  required Map<String, int> unicodeToBytes,
+  required PlatformInt64 globalOffsetMs,
+  required PlatformInt64 segmentDurationMs,
+}) => RustLib.instance.api.crateApiWhisperParseTokensToSegments(
+  tokenIds: tokenIds,
+  vocab: vocab,
+  unicodeToBytes: unicodeToBytes,
+  globalOffsetMs: globalOffsetMs,
+  segmentDurationMs: segmentDurationMs,
+);
+
+Future<Uint64List> getPromptTokens({
+  required List<String> vocab,
+  String? language,
+  required bool translate,
+}) => RustLib.instance.api.crateApiWhisperGetPromptTokens(
+  vocab: vocab,
+  language: language,
+  translate: translate,
+);
+
+Future<List<String>> loadVocabulary({required String modelPath}) =>
+    RustLib.instance.api.crateApiWhisperLoadVocabulary(modelPath: modelPath);
+
+Future<BigInt?> getNumMelBins({required String modelPath}) =>
+    RustLib.instance.api.crateApiWhisperGetNumMelBins(modelPath: modelPath);
+
+Future<List<(BigInt, BigInt)>> runOrtVad({
+  required String modelPath,
+  required List<double> samples,
+  required double threshold,
+  required int minSpeechMs,
+  required int minSilenceMs,
+}) => RustLib.instance.api.crateApiWhisperRunOrtVad(
+  modelPath: modelPath,
+  samples: samples,
+  threshold: threshold,
+  minSpeechMs: minSpeechMs,
+  minSilenceMs: minSilenceMs,
+);
+
 Future<void> warmupWhisperContext({
   required String modelPath,
   required bool useGpu,
@@ -81,28 +133,15 @@ Future<void> warmupWhisperContext({
   totalDuration: totalDuration,
 );
 
-class HardwareAccelerationInfo {
-  final bool isVulkanAvailable;
-  final List<VulkanDeviceInfo> devices;
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<VadSessionState>>
+abstract class VadSessionState implements RustOpaqueInterface {
+  // HINT: Make it `#[frb(sync)]` to let it become the default constructor of Dart class.
+  static Future<VadSessionState> newInstance() =>
+      RustLib.instance.api.crateApiWhisperVadSessionStateNew();
 
-  const HardwareAccelerationInfo({
-    required this.isVulkanAvailable,
-    required this.devices,
-  });
+  Future<void> reset();
 
-  static Future<HardwareAccelerationInfo> default_() =>
-      RustLib.instance.api.crateApiWhisperHardwareAccelerationInfoDefault();
-
-  @override
-  int get hashCode => isVulkanAvailable.hashCode ^ devices.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is HardwareAccelerationInfo &&
-          runtimeType == other.runtimeType &&
-          isVulkanAvailable == other.isVulkanAvailable &&
-          devices == other.devices;
+  Future<void> shift({required BigInt offset});
 }
 
 @freezed
@@ -148,31 +187,4 @@ class TranscriptionSegment {
           startMs == other.startMs &&
           endMs == other.endMs &&
           text == other.text;
-}
-
-class VulkanDeviceInfo {
-  final int id;
-  final String name;
-  final BigInt totalVramBytes;
-
-  const VulkanDeviceInfo({
-    required this.id,
-    required this.name,
-    required this.totalVramBytes,
-  });
-
-  static Future<VulkanDeviceInfo> default_() =>
-      RustLib.instance.api.crateApiWhisperVulkanDeviceInfoDefault();
-
-  @override
-  int get hashCode => id.hashCode ^ name.hashCode ^ totalVramBytes.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is VulkanDeviceInfo &&
-          runtimeType == other.runtimeType &&
-          id == other.id &&
-          name == other.name &&
-          totalVramBytes == other.totalVramBytes;
 }

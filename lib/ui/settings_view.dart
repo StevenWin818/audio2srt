@@ -84,7 +84,7 @@ class _SettingsViewState extends State<SettingsView> {
 
   // 硬件加速配置
   Widget _buildHardwareConfigCard(TranscriptionProvider provider) {
-    final hasGpuActive = provider.useGpu && provider.vulkanDevices.isNotEmpty;
+    final hasGpuActive = provider.useGpu;
 
     return Container(
       padding: const EdgeInsets.all(24),
@@ -109,12 +109,12 @@ class _SettingsViewState extends State<SettingsView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'GPU 硬件加速 (Vulkan)',
+                      'GPU 硬件加速 (NVIDIA CUDA)',
                       style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '使用 Vulkan 后端加速模型推理，建议开启。如果您的设备支持 Vulkan，能大幅加快推理速度，否则会自动安全回退至 CPU 推理。',
+                      '使用 NVIDIA CUDA 加速模型推理，建议开启。如果您的设备支持 CUDA，能大幅加快推理速度，否则会自动安全回退至 CPU 推理。',
                       style: TextStyle(fontSize: 12, color: Colors.grey[400]),
                     ),
                   ],

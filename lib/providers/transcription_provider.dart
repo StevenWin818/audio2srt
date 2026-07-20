@@ -170,8 +170,7 @@ class TranscriptionProvider with ChangeNotifier {
   bool _isGpuAvailable = false;
   bool get isGpuAvailable => _isGpuAvailable;
 
-  List<rust_whisper.VulkanDeviceInfo> _vulkanDevices = [];
-  List<rust_whisper.VulkanDeviceInfo> get vulkanDevices => _vulkanDevices;
+
 
   // VAD 配置
   bool _vadEnabled = true;
@@ -283,15 +282,7 @@ class TranscriptionProvider with ChangeNotifier {
     // 搜索系统 FFmpeg
     await _ffmpegService.findSystemFFmpeg();
 
-    // 查询 Vulkan 设备列表
-    try {
-      final info = await rust_whisper.getHardwareAccelerationInfo();
-      _isGpuAvailable = info.isVulkanAvailable;
-      _vulkanDevices = info.devices;
-      debugPrint('[TranscriptionProvider] Loaded Vulkan hardware info: isAvailable=$_isGpuAvailable, devices=${_vulkanDevices.map((d) => d.name).toList()}');
-    } catch (e) {
-      debugPrint('[TranscriptionProvider] Failed to load Vulkan hardware info: $e');
-    }
+
     
     // 加载已下载模型
     _downloadedModels = await _modelService.getDownloadedModels();
@@ -310,33 +301,10 @@ class TranscriptionProvider with ChangeNotifier {
     if (!_useGpu) {
       return 'CPU';
     }
-    if (Platform.isWindows) {
-      return 'GPU (NVIDIA CUDA)';
-    }
-    if (_vulkanDevices.isEmpty) {
-      return 'CPU (安全回退 - 未检测到加速显卡)';
-    }
-
-    // 独立显卡 (dGPU) -> 集成显卡 (iGPU) 优先寻址
-    rust_whisper.VulkanDeviceInfo? selectedDevice;
-    for (final dev in _vulkanDevices) {
-      final nameLower = dev.name.toLowerCase();
-      final isIgpu = nameLower.contains('integrated') ||
-          nameLower.contains('uhd') ||
-          nameLower.contains('iris') ||
-          nameLower.contains('vega') ||
-          (nameLower.contains('intel') && !nameLower.contains('arc')) ||
-          nameLower.contains('radeon(tm)');
-      if (!isIgpu) {
-        selectedDevice = dev;
-        break;
-      }
-    }
-    selectedDevice ??= _vulkanDevices.first;
-    return 'GPU: ${selectedDevice.name}';
+    return 'GPU (NVIDIA CUDA)';
   }
 
-  /// 智能低算力预警：未开启加速或开启但没有硬件加速显卡，且模型大小大于 400MB
+  /// 智能低算力预警：未开启加速，且模型大小大于 400MB
   bool get showLowPowerWarning {
     if (_selectedModel == null) return false;
     final modelInfo = ModelService.availableModels.firstWhere(
@@ -344,8 +312,7 @@ class TranscriptionProvider with ChangeNotifier {
       orElse: () => ModelService.availableModels.first,
     );
 
-    final isGpuActive = _useGpu && (_vulkanDevices.isNotEmpty || Platform.isWindows);
-    return !isGpuActive && modelInfo.sizeMB > 400.0;
+    return !_useGpu && modelInfo.sizeMB > 400.0;
   }
 
   void setCurrentTab(int index) {
