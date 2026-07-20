@@ -35,6 +35,7 @@ class PipelineConfig {
   final bool translate;
   final int? threads;
   final bool useGpu;
+  final String? computeType;
   final bool toSimplified;
   final bool noContext;
   final bool noStateHistory;
@@ -55,6 +56,7 @@ class PipelineConfig {
     required this.translate,
     this.threads,
     required this.useGpu,
+    this.computeType,
     required this.toSimplified,
     required this.noContext,
     required this.noStateHistory,
@@ -77,6 +79,7 @@ class PipelineConfig {
       translate.hashCode ^
       threads.hashCode ^
       useGpu.hashCode ^
+      computeType.hashCode ^
       toSimplified.hashCode ^
       noContext.hashCode ^
       noStateHistory.hashCode ^
@@ -101,6 +104,7 @@ class PipelineConfig {
           translate == other.translate &&
           threads == other.threads &&
           useGpu == other.useGpu &&
+          computeType == other.computeType &&
           toSimplified == other.toSimplified &&
           noContext == other.noContext &&
           noStateHistory == other.noStateHistory &&

@@ -1045,8 +1045,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PipelineConfig dco_decode_pipeline_config(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 18)
-      throw Exception('unexpected arr length: expect 18 but see ${arr.length}');
+    if (arr.length != 19)
+      throw Exception('unexpected arr length: expect 19 but see ${arr.length}');
     return PipelineConfig(
       ffmpegPath: dco_decode_String(arr[0]),
       inputPath: dco_decode_String(arr[1]),
@@ -1057,15 +1057,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       translate: dco_decode_bool(arr[6]),
       threads: dco_decode_opt_box_autoadd_i_32(arr[7]),
       useGpu: dco_decode_bool(arr[8]),
-      toSimplified: dco_decode_bool(arr[9]),
-      noContext: dco_decode_bool(arr[10]),
-      noStateHistory: dco_decode_bool(arr[11]),
-      enableDenoise: dco_decode_bool(arr[12]),
-      vadEnabled: dco_decode_bool(arr[13]),
-      vadThreshold: dco_decode_f_64(arr[14]),
-      vadMinSpeechMs: dco_decode_i_32(arr[15]),
-      vadMinSilenceMs: dco_decode_i_32(arr[16]),
-      selectedAudioTrack: dco_decode_opt_box_autoadd_usize(arr[17]),
+      computeType: dco_decode_opt_String(arr[9]),
+      toSimplified: dco_decode_bool(arr[10]),
+      noContext: dco_decode_bool(arr[11]),
+      noStateHistory: dco_decode_bool(arr[12]),
+      enableDenoise: dco_decode_bool(arr[13]),
+      vadEnabled: dco_decode_bool(arr[14]),
+      vadThreshold: dco_decode_f_64(arr[15]),
+      vadMinSpeechMs: dco_decode_i_32(arr[16]),
+      vadMinSilenceMs: dco_decode_i_32(arr[17]),
+      selectedAudioTrack: dco_decode_opt_box_autoadd_usize(arr[18]),
     );
   }
 
@@ -1387,6 +1388,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_translate = sse_decode_bool(deserializer);
     var var_threads = sse_decode_opt_box_autoadd_i_32(deserializer);
     var var_useGpu = sse_decode_bool(deserializer);
+    var var_computeType = sse_decode_opt_String(deserializer);
     var var_toSimplified = sse_decode_bool(deserializer);
     var var_noContext = sse_decode_bool(deserializer);
     var var_noStateHistory = sse_decode_bool(deserializer);
@@ -1406,6 +1408,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       translate: var_translate,
       threads: var_threads,
       useGpu: var_useGpu,
+      computeType: var_computeType,
       toSimplified: var_toSimplified,
       noContext: var_noContext,
       noStateHistory: var_noStateHistory,
@@ -1762,6 +1765,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self.translate, serializer);
     sse_encode_opt_box_autoadd_i_32(self.threads, serializer);
     sse_encode_bool(self.useGpu, serializer);
+    sse_encode_opt_String(self.computeType, serializer);
     sse_encode_bool(self.toSimplified, serializer);
     sse_encode_bool(self.noContext, serializer);
     sse_encode_bool(self.noStateHistory, serializer);

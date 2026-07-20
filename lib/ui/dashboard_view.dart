@@ -473,6 +473,62 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
           icon: const Icon(Icons.folder_open_outlined, size: 16),
           label: const Text('选择本地 CTranslate2 模型文件夹', style: TextStyle(fontSize: 12)),
         ),
+        const SizedBox(height: 12),
+        const Text('模型计算精度 (Compute Type)', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.grey)),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: const Color(0x05FFFFFF),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0x0FFFFFFF)),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: ChoiceChip(
+                  label: const Center(
+                    child: Text('FP16 (高精度/标准)'),
+                  ),
+                  selected: provider.selectedComputeType == 'float16',
+                  onSelected: (selected) {
+                    if (selected) provider.setSelectedComputeType('float16');
+                  },
+                  selectedColor: const Color(0xFF8B5CF6),
+                  labelStyle: TextStyle(
+                    color: provider.selectedComputeType == 'float16' ? Colors.white : Colors.grey[400],
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  backgroundColor: Colors.transparent,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                  showCheckmark: false,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: ChoiceChip(
+                  label: const Center(
+                    child: Text('INT8 (量化/极速省显存)'),
+                  ),
+                  selected: provider.selectedComputeType == 'int8',
+                  onSelected: (selected) {
+                    if (selected) provider.setSelectedComputeType('int8');
+                  },
+                  selectedColor: const Color(0xFF8B5CF6),
+                  labelStyle: TextStyle(
+                    color: provider.selectedComputeType == 'int8' ? Colors.white : Colors.grey[400],
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  backgroundColor: Colors.transparent,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                  showCheckmark: false,
+                ),
+              ),
+            ],
+          ),
+        ),
         if (showLowPowerWarning) ...[
           const SizedBox(height: 12),
           Container(
@@ -748,7 +804,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        '配置: $modelName | $langLabel | $denoiseStr',
+                        '配置: $modelName | ${provider.selectedComputeType.toUpperCase()} | $langLabel | $denoiseStr',
                         style: const TextStyle(fontSize: 12, color: Colors.grey),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,

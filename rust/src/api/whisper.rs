@@ -6,6 +6,7 @@ use std::collections::HashMap;
 struct CachedContext {
     model_path: String,
     use_gpu: bool,
+    compute_type: String,
     model: Arc<WhisperModel>,
 }
 
@@ -20,6 +21,7 @@ static G_CONTEXT: Mutex<Option<CachedContext>> = Mutex::new(None);
 pub(crate) fn get_or_create_context(
     model_path: &str,
     requested_use_gpu: bool,
+    requested_compute_type: Option<&str>,
 ) -> Result<Arc<WhisperModel>, String> {
     let path = std::path::Path::new(model_path);
     if !path.is_dir() {
@@ -30,18 +32,32 @@ pub(crate) fn get_or_create_context(
         .lock()
         .map_err(|e| format!("Failed to lock global context: {}", e))?;
 
+    let target_compute_type = match requested_compute_type {
+        Some("int8") => "int8",
+        Some("float16") | Some("fp16") => "float16",
+        Some("float32") | Some("fp32") => "float32",
+        _ => if requested_use_gpu { "float16" } else { "int8" },
+    };
+
     if let Some(ref cached) = *cache {
-        if cached.model_path == model_path && cached.use_gpu == requested_use_gpu {
-            println!("[Rust] Reusing cached CTranslate2 Whisper context for model: {}", model_path);
+        if cached.model_path == model_path
+            && cached.use_gpu == requested_use_gpu
+            && cached.compute_type == target_compute_type
+        {
+            println!(
+                "[Rust] Reusing cached CTranslate2 Whisper context for model: {} (compute_type={})",
+                model_path, target_compute_type
+            );
             return Ok(cached.model.clone());
         }
     }
 
     let mut use_gpu = requested_use_gpu;
+    let mut compute_type = target_compute_type;
 
     println!(
-        "[Rust] Loading new CTranslate2 Whisper context for model: {} (requested use_gpu={})",
-        model_path, use_gpu
+        "[Rust] Loading new CTranslate2 Whisper context for model: {} (requested use_gpu={}, compute_type={})",
+        model_path, use_gpu, compute_type
     );
     
     if use_gpu {
@@ -74,7 +90,6 @@ pub(crate) fn get_or_create_context(
     }
     
     let mut device = if use_gpu { "cuda" } else { "cpu" };
-    let mut compute_type = if use_gpu { "float16" } else { "int8" };
     
     let mut threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) as i32;
     // Don't use all logical cores, as hyperthreading doesn't help matrix multiplication much.
@@ -100,6 +115,7 @@ pub(crate) fn get_or_create_context(
     *cache = Some(CachedContext {
         model_path: model_path.to_string(),
         use_gpu: requested_use_gpu,
+        compute_type: compute_type.to_string(),
         model: shared_model.clone(),
     });
 
@@ -255,7 +271,7 @@ pub(crate) fn run_transcription_inner(
     }
 
     // 3. 加载 CTranslate2 模型与词表
-    let model = get_or_create_context(&model_path, use_gpu)?;
+    let model = get_or_create_context(&model_path, use_gpu, None)?;
     let vocab = load_vocabulary(&model_path)?;
     let unicode_to_bytes = get_unicode_to_bytes();
     let n_mels = get_num_mel_bins(&model_path).unwrap_or(80);
@@ -951,6 +967,6 @@ pub fn warmup_whisper_context(model_path: String, use_gpu: bool, _total_duration
         }
         
         println!("[Rust] Preloading CTranslate2 Whisper context in background for model: {}", model_path);
-        let _ = get_or_create_context(&model_path, use_gpu);
+        let _ = get_or_create_context(&model_path, use_gpu, None);
     });
 }

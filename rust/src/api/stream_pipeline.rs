@@ -157,6 +157,7 @@ pub struct PipelineConfig {
     pub translate: bool,
     pub threads: Option<i32>,
     pub use_gpu: bool,
+    pub compute_type: Option<String>,
     pub to_simplified: bool,
     pub no_context: bool,
     pub no_state_history: bool,
@@ -209,8 +210,8 @@ fn run_stream_pipeline_inner(
     println!("[Rust] Media total duration: {} seconds", total_duration);
 
     // 2. 初始化 CTranslate2 Whisper 上下文
-    println!("[Rust] Loading CTranslate2 model context...");
-    let ctx = get_or_create_context(&config.model_path, config.use_gpu)
+    println!("[Rust] Loading CTranslate2 model context (compute_type: {:?})...", config.compute_type);
+    let ctx = get_or_create_context(&config.model_path, config.use_gpu, config.compute_type.as_deref())
         .map_err(|e| anyhow!("Failed to load CTranslate2 model: {}", e))?;
 
     // 3. 创建流式管道 (容量均为 10)
@@ -1393,6 +1394,7 @@ mod tests {
             translate: false,
             threads: Some(4),
             use_gpu: true,
+            compute_type: None,
             to_simplified: true,
             enable_denoise: false,
             vad_enabled: true,
@@ -1454,6 +1456,7 @@ mod tests {
             translate: false,
             threads: Some(4),
             use_gpu: true,
+            compute_type: None,
             to_simplified: true,
             enable_denoise: true,
             vad_enabled: true,

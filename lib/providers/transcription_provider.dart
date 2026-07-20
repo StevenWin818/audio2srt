@@ -153,6 +153,14 @@ class TranscriptionProvider with ChangeNotifier {
   String _selectedLanguage = 'auto';
   String get selectedLanguage => _selectedLanguage;
 
+  String _selectedComputeType = 'float16';
+  String get selectedComputeType => _selectedComputeType;
+
+  void setSelectedComputeType(String type) {
+    _selectedComputeType = type;
+    _safeNotifyListeners();
+  }
+
   bool _translateToEnglish = false;
   bool get translateToEnglish => _translateToEnglish;
 
@@ -651,6 +659,7 @@ class TranscriptionProvider with ChangeNotifier {
           translate: _translateToEnglish,
           threads: 4,
           useGpu: _useGpu,
+          computeType: _selectedComputeType,
           toSimplified: _selectedLanguage == 'zh' || _selectedLanguage == 'auto',
           enableDenoise: _enableDenoise,
           vadEnabled: _vadEnabled,

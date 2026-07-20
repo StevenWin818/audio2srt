@@ -968,6 +968,7 @@ impl SseDecode for crate::api::stream_pipeline::PipelineConfig {
         let mut var_translate = <bool>::sse_decode(deserializer);
         let mut var_threads = <Option<i32>>::sse_decode(deserializer);
         let mut var_useGpu = <bool>::sse_decode(deserializer);
+        let mut var_computeType = <Option<String>>::sse_decode(deserializer);
         let mut var_toSimplified = <bool>::sse_decode(deserializer);
         let mut var_noContext = <bool>::sse_decode(deserializer);
         let mut var_noStateHistory = <bool>::sse_decode(deserializer);
@@ -987,6 +988,7 @@ impl SseDecode for crate::api::stream_pipeline::PipelineConfig {
             translate: var_translate,
             threads: var_threads,
             use_gpu: var_useGpu,
+            compute_type: var_computeType,
             to_simplified: var_toSimplified,
             no_context: var_noContext,
             no_state_history: var_noStateHistory,
@@ -1231,6 +1233,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::stream_pipeline::PipelineConf
             self.translate.into_into_dart().into_dart(),
             self.threads.into_into_dart().into_dart(),
             self.use_gpu.into_into_dart().into_dart(),
+            self.compute_type.into_into_dart().into_dart(),
             self.to_simplified.into_into_dart().into_dart(),
             self.no_context.into_into_dart().into_dart(),
             self.no_state_history.into_into_dart().into_dart(),
@@ -1509,6 +1512,7 @@ impl SseEncode for crate::api::stream_pipeline::PipelineConfig {
         <bool>::sse_encode(self.translate, serializer);
         <Option<i32>>::sse_encode(self.threads, serializer);
         <bool>::sse_encode(self.use_gpu, serializer);
+        <Option<String>>::sse_encode(self.compute_type, serializer);
         <bool>::sse_encode(self.to_simplified, serializer);
         <bool>::sse_encode(self.no_context, serializer);
         <bool>::sse_encode(self.no_state_history, serializer);
