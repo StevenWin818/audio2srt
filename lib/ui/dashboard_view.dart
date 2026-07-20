@@ -384,44 +384,94 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
               value: selectedModel,
               dropdownColor: const Color(0xFF1E1E2C),
               focusColor: Colors.transparent,
-              items: ModelService.availableModels.map((m) {
-                final isDl = downloadedModels.contains(m.filename);
-                return DropdownMenuItem<String>(
-                  value: m.filename,
-                  child: Row(
-                    children: [
-                      Text(m.name),
-                      const SizedBox(width: 8),
-                      Text(
-                        '(${m.size})',
-                        style: const TextStyle(fontSize: 11, color: Colors.grey),
-                      ),
-                      const Spacer(),
-                      Tooltip(
-                        message: isDl ? '模型已就绪 (可前往管理)' : '点击下载',
-                        child: GestureDetector(
-                          onTap: () {
-                            provider.setCurrentTab(2);
-                          },
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                            child: Icon(
-                              isDl ? Icons.check_circle_outline : Icons.download_for_offline_outlined,
-                              color: isDl ? Colors.green : Colors.grey,
-                              size: 16,
+              items: [
+                ...ModelService.availableModels.map((m) {
+                  final isDl = downloadedModels.contains(m.filename);
+                  return DropdownMenuItem<String>(
+                    value: m.filename,
+                    child: Row(
+                      children: [
+                        Text(m.name),
+                        const SizedBox(width: 8),
+                        Text(
+                          '(${m.size})',
+                          style: const TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                        const Spacer(),
+                        Tooltip(
+                          message: isDl ? '模型已就绪 (可前往管理)' : '点击下载',
+                          child: GestureDetector(
+                            onTap: () {
+                              provider.setCurrentTab(2);
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                              child: Icon(
+                                isDl ? Icons.check_circle_outline : Icons.download_for_offline_outlined,
+                                color: isDl ? Colors.green : Colors.grey,
+                                size: 16,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
+                  );
+                }).toList(),
+                if (selectedModel != null && !ModelService.availableModels.any((m) => m.filename == selectedModel))
+                  DropdownMenuItem<String>(
+                    value: selectedModel,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '本地模型: ${p.basename(selectedModel)}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const Icon(Icons.folder_shared_outlined, color: Colors.green, size: 16),
+                      ],
+                    ),
                   ),
-                );
-              }).toList(),
+              ],
               onChanged: (val) {
                 if (val != null) provider.setSelectedModel(val);
               },
             ),
           ),
+        ),
+        const SizedBox(height: 8),
+        TextButton.icon(
+          onPressed: () async {
+            final dirPath = await FilePicker.getDirectoryPath();
+            if (dirPath != null) {
+              final modelBin = File(p.join(dirPath, 'model.bin'));
+              final vocabTxt = File(p.join(dirPath, 'vocabulary.txt'));
+              final vocabJson = File(p.join(dirPath, 'vocabulary.json'));
+              final vocabJsonAlt = File(p.join(dirPath, 'vocab.json'));
+              if (modelBin.existsSync() &&
+                  (vocabTxt.existsSync() || vocabJson.existsSync() || vocabJsonAlt.existsSync())) {
+                provider.setSelectedModel(dirPath);
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('已选择本地 CTranslate2 模型: ${p.basename(dirPath)}')),
+                  );
+                }
+              } else {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('错误: 所选文件夹内未找到 model.bin 或 vocabulary.txt/json')),
+                  );
+                }
+              }
+            }
+          },
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+            foregroundColor: const Color(0xFFA78BFA),
+          ),
+          icon: const Icon(Icons.folder_open_outlined, size: 16),
+          label: const Text('选择本地 CTranslate2 模型文件夹', style: TextStyle(fontSize: 12)),
         ),
         if (showLowPowerWarning) ...[
           const SizedBox(height: 12),
@@ -664,17 +714,9 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   }
 
   Widget _buildBackConfigSummary(TranscriptionProvider provider) {
-    final modelName = ModelService.availableModels.firstWhere(
-      (m) => m.filename == provider.selectedModel,
-      orElse: () => WhisperModelInfo(
-        name: '未知模型',
-        filename: '',
-        size: '',
-        sizeMB: 0,
-        url: '',
-        fallbackUrl: '',
-      ),
-    ).name;
+    final modelName = ModelService.availableModels.any((m) => m.filename == provider.selectedModel)
+        ? ModelService.availableModels.firstWhere((m) => m.filename == provider.selectedModel).name
+        : '本地模型: ${p.basename(provider.selectedModel ?? "未知")}';
 
     final langLabel = {
       'auto': '自动检测',

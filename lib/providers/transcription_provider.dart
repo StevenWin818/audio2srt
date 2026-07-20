@@ -310,6 +310,9 @@ class TranscriptionProvider with ChangeNotifier {
     if (!_useGpu) {
       return 'CPU';
     }
+    if (Platform.isWindows) {
+      return 'GPU (NVIDIA CUDA)';
+    }
     if (_vulkanDevices.isEmpty) {
       return 'CPU (安全回退 - 未检测到加速显卡)';
     }
@@ -341,7 +344,7 @@ class TranscriptionProvider with ChangeNotifier {
       orElse: () => ModelService.availableModels.first,
     );
 
-    final isGpuActive = _useGpu && _vulkanDevices.isNotEmpty;
+    final isGpuActive = _useGpu && (_vulkanDevices.isNotEmpty || Platform.isWindows);
     return !isGpuActive && modelInfo.sizeMB > 400.0;
   }
 
@@ -691,6 +694,14 @@ class TranscriptionProvider with ChangeNotifier {
             progressDetail: (processedMs, totalMs) {
               _processedMs = processedMs.toInt();
               _totalMs = totalMs.toInt();
+              if (_totalMs > 0) {
+                _progress = (_processedMs / _totalMs * 100).toInt().clamp(0, 100);
+                try {
+                  windowManager.setProgressBar(_progress / 100.0);
+                } catch (e) {
+                  debugPrint('Failed to set taskbar progress: $e');
+                }
+              }
               if (_transcribeStartTime != null) {
                 final elapsedRealTimeSecs = DateTime.now().difference(_transcribeStartTime!).inMilliseconds / 1000.0;
                 final processedMediaSecs = _processedMs / 1000.0;
@@ -884,7 +895,8 @@ class TranscriptionProvider with ChangeNotifier {
       } else if (event.success != null) {
         resultPath = event.success;
       } else if (event.error != null) {
-        throw Exception(event.error);
+        _setError(event.error!);
+        cancelTranscription();
       }
     }
 
@@ -940,19 +952,22 @@ class TranscriptionProvider with ChangeNotifier {
 
   Future<void> cancelTranscription() async {
     rust_stream.cancelTranscriptionBackend();
-    await _transcriptionSub?.cancel();
-    _transcriptionSub = null;
+    
+    // Set UI status immediately so the user sees it's cancelled,
+    // rather than waiting for the blocked Rust thread to finish its current C++ call.
     _status = TranscriptionStatus.idle;
     _statusMessage = '转写任务已手动停止';
     _syncHighFreqNotifiers();
     _safeNotifyListeners();
 
-    // 手动取消也清除状态栏进度条
     try {
       windowManager.setProgressBar(-1.0);
     } catch (e) {
       debugPrint('Failed to clear taskbar progress: $e');
     }
+
+    await _transcriptionSub?.cancel();
+    _transcriptionSub = null;
   }
 
   // Windows FFI 动态查找并闪烁状态栏/任务栏图标

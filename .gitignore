@@ -74,3 +74,6 @@ devtools_options.yaml
 *.csv
 *.py
 rust/patches/*
+vad_wavs/
+ctranslate2-src.zip
+*.whl

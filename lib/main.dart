@@ -533,8 +533,8 @@ class _InitializationErrorPageState extends State<InitializationErrorPage> {
                   ),
                   const SizedBox(height: 10),
                   _buildCauseItem(
-                    '2. 显卡 Vulkan 驱动兼容性问题：',
-                    '本软件核心使用 Vulkan GPU 加速，核显驱动损坏或过旧会导致库加载闪退。',
+                    '2. 显卡 CUDA / Vulkan 驱动兼容性问题：',
+                    '本软件核心在 Windows 上使用 NVIDIA CUDA 引擎加速，驱动损坏或过旧会导致库加载闪退。',
                   ),
                   const SizedBox(height: 32),
                   Row(

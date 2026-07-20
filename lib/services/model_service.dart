@@ -91,11 +91,18 @@ class ModelService {
   }
 
   Future<String> getModelPath(String filename) async {
+    if (p.isAbsolute(filename)) {
+      return filename;
+    }
     final dir = await getModelDir();
     return p.join(dir.path, filename);
   }
 
   Future<bool> isModelDownloaded(String filename) async {
+    if (p.isAbsolute(filename)) {
+      final modelBin = File(p.join(filename, 'model.bin'));
+      return await modelBin.exists();
+    }
     final path = await getModelPath(filename);
     final file = File(path);
     return await file.exists() && await file.length() > 1024 * 1024; // > 1MB
@@ -205,14 +212,14 @@ class ModelService {
       await modelDir.create(recursive: true);
     }
     
-    final targetPath = p.join(modelDir.path, 'ggml-silero-v5.1.2.bin');
+    final targetPath = p.join(modelDir.path, 'silero_vad.onnx');
     final targetFile = File(targetPath);
     
     if (await targetFile.exists() && await targetFile.length() > 1024 * 1024) {
       return targetPath;
     }
     
-    final data = await rootBundle.load('assets/models/ggml-silero-v5.1.2.bin');
+    final data = await rootBundle.load('assets/models/silero_vad.onnx');
     final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
     await targetFile.writeAsBytes(bytes);
     
