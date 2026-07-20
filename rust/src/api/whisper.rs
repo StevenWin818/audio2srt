@@ -348,7 +348,27 @@ pub(crate) fn run_transcription_inner(
                 }
             }
 
-            let prompt_tokens = get_prompt_tokens(&vocab, &language, translate);
+            let mut actual_language = language.clone();
+            let is_auto = actual_language.is_none() || actual_language.as_deref() == Some("auto");
+            if is_auto {
+                let detected_lang = unsafe {
+                    model.inner.detect_language(
+                        flat_mel.as_ptr(),
+                        n_mels,
+                        n_frames
+                    )
+                };
+                if !detected_lang.is_empty() {
+                    println!("[Rust] Auto language detected: {}", detected_lang);
+                    actual_language = Some(detected_lang);
+                } else {
+                    println!("[Rust] Auto language detection returned empty string! Falling back to en");
+                    actual_language = Some("en".to_string());
+                }
+            }
+
+            let prompt_tokens = get_prompt_tokens(&vocab, &actual_language, translate);
+            println!("[Rust] Final prompt tokens: {:?}", prompt_tokens);
             let repetition_penalty = 1.0f32;
             let no_repeat_ngram_size = 0;
 
@@ -556,18 +576,25 @@ pub fn get_prompt_tokens(
     if let Some(start_idx) = vocab.iter().position(|s| s == "<|startoftranscript|>") {
         prompts.push(start_idx);
         
+        let mut pushed_lang = false;
         if let Some(ref lang) = language {
             if lang != "auto" && !lang.is_empty() {
                 let lang_token = format!("<|{}|>", lang);
                 if let Some(lang_idx) = vocab.iter().position(|s| s == &lang_token) {
                     prompts.push(lang_idx);
+                    pushed_lang = true;
                 }
             }
         }
         
-        let task_token = if translate { "<|translate|>" } else { "<|transcribe|>" };
-        if let Some(task_idx) = vocab.iter().position(|s| s == task_token) {
-            prompts.push(task_idx);
+        // Only push task token if a language token was pushed, OR if language is not "auto"
+        // (to prevent malformed prompt "<|startoftranscript|> <|transcribe|>" which crashes large-v3)
+        let is_auto = language.as_deref() == Some("auto");
+        if pushed_lang || !is_auto {
+            let task_token = if translate { "<|translate|>" } else { "<|transcribe|>" };
+            if let Some(task_idx) = vocab.iter().position(|s| s == task_token) {
+                prompts.push(task_idx);
+            }
         }
     }
     prompts

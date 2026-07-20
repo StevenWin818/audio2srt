@@ -27,5 +27,12 @@ pub mod ffi {
             no_speech_prob: &mut f32,
             avg_logprob: &mut f32,
         ) -> Vec<usize>;
+
+        unsafe fn detect_language(
+            self: &WhisperWrapper,
+            mel_data: *const f32,
+            n_mels: usize,
+            n_frames: usize,
+        ) -> String;
     }
 }

@@ -964,6 +964,7 @@ fn spawn_whisper_worker(
 
         let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
         let mut last_normalized_text = String::new();
+        let mut session_language: Option<String> = None;
 
         while let Ok(task) = rx_whisper_task.recv() {
             if SHOULD_CANCEL.load(Ordering::SeqCst) {
@@ -1026,7 +1027,30 @@ fn spawn_whisper_worker(
                         }
                     }
 
-                    let prompt_tokens = crate::api::whisper::get_prompt_tokens(&vocab, &language, translate);
+                    let mut actual_language = language.clone();
+                    let is_auto = actual_language.is_none() || actual_language.as_deref() == Some("auto");
+                    if is_auto {
+                        let detected_lang = unsafe {
+                            ctx.inner.detect_language(
+                                flat_mel.as_ptr(),
+                                n_mels,
+                                n_frames
+                            )
+                        };
+                        if !detected_lang.is_empty() {
+                            println!("[Rust] Stream Auto language detected: {}", detected_lang);
+                            session_language = Some(detected_lang.clone());
+                            actual_language = Some(detected_lang);
+                        } else if let Some(ref fallback_lang) = session_language {
+                            println!("[Rust] Auto language detection returned empty string! Using session fallback: {}", fallback_lang);
+                            actual_language = Some(fallback_lang.clone());
+                        } else {
+                            println!("[Rust] Auto language detection returned empty string! No session fallback available, using en");
+                            actual_language = Some("en".to_string());
+                        }
+                    }
+
+                    let prompt_tokens = crate::api::whisper::get_prompt_tokens(&vocab, &actual_language, translate);
                     let repetition_penalty = 1.0f32;
                     let no_repeat_ngram_size = 0;
 
@@ -1342,8 +1366,55 @@ mod tests {
             Ok(())
         }
     }
+  
+    #[test]
+    #[ignore]
+    fn test_large_v3_auto_language() {
+        set_rust_perf_logging(true);
+        let input_path = "C:\\Projects\\测试用例\\简单-新闻\\《新闻联播》26-06-21.mp4".to_string();
+        let model_path = "C:\\Projects\\CTranslate2\\models\\faster-whisper-large-v3".to_string();
+        let vad_model_path = "C:\\Projects\\CTranslate2\\audio2srt\\assets\\models\\silero_vad.onnx".to_string();
+        let df_model_path = "C:\\Projects\\CTranslate2\\audio2srt\\assets\\models\\DeepFilterNet3_onnx.tar.gz".to_string();
+
+        println!("Running auto-detect test using input: {}", input_path);
+        println!("Model: {}", model_path);
+
+        let ffmpeg_path = "ffmpeg".to_string();
+        let sink = Arc::new(MockSink) as Arc<dyn TranscriptionSink>;
+        let sink_clone = sink.clone();
+
+        let config = PipelineConfig {
+            ffmpeg_path,
+            input_path,
+            model_path,
+            vad_model_path,
+            df_model_path,
+            language: Some("auto".to_string()),
+            translate: false,
+            threads: Some(4),
+            use_gpu: true,
+            to_simplified: true,
+            enable_denoise: false,
+            vad_enabled: true,
+            vad_threshold: 0.5,
+            vad_min_speech_ms: 300,
+            vad_min_silence_ms: 400,
+            no_context: true,
+            no_state_history: true,
+            selected_audio_track: None,
+        };
+
+        let handle = thread::spawn(move || {
+            let res = run_stream_pipeline_inner(sink_clone, config);
+            println!("Pipeline run result: {:?}", res);
+        });
+
+        thread::sleep(std::time::Duration::from_secs(45));
+        println!("Test finished.");
+    }
 
     #[test]
+    #[ignore]
     fn test_pipeline_performance() {
         set_rust_perf_logging(true);
         let movie_file = "C:\\FFOutput\\testmovie.mkv";

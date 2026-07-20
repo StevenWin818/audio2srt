@@ -33,6 +33,11 @@ public:
       float& no_speech_prob,
       float& avg_logprob) const;
 
+  rust::String detect_language(
+      const float* mel_data,
+      size_t n_mels,
+      size_t n_frames) const;
+
 private:
   std::unique_ptr<ctranslate2::models::Whisper> model_;
 };

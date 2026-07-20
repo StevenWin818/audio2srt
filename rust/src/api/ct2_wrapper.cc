@@ -112,6 +112,32 @@ rust::Vec<size_t> WhisperWrapper::transcribe(
   return result_token_ids;
 }
 
+rust::String WhisperWrapper::detect_language(
+    const float* mel_data,
+    size_t n_mels,
+    size_t n_frames) const {
+  std::vector<int64_t> shape = {1, static_cast<int64_t>(n_mels), static_cast<int64_t>(n_frames)};
+  std::vector<float> mel_vector(mel_data, mel_data + (n_mels * n_frames));
+
+  ctranslate2::StorageView features(shape, mel_vector);
+
+  auto futures = model_->detect_language(features);
+  if (futures.empty()) return rust::String("");
+  
+  auto results = futures[0].get();
+  if (results.empty()) return rust::String("");
+  
+  // The first element is the most probable language, e.g. "<|zh|>"
+  // We can strip the "<|" and "|>" or just return it as is.
+  // returning as is, e.g. "<|zh|>"
+  std::string token = results[0].first;
+  std::cout << "[C++] detect_language returned: " << token << " with prob: " << results[0].second << std::endl;
+  if (token.size() > 4 && token.substr(0, 2) == "<|" && token.substr(token.size() - 2) == "|>") {
+      return rust::String(token.substr(2, token.size() - 4));
+  }
+  return rust::String(token);
+}
+
 std::unique_ptr<WhisperWrapper> create_whisper_model(
     rust::Str model_path,
     rust::Str device,
