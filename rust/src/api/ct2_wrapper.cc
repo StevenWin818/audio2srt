@@ -1,10 +1,15 @@
 #include "ct2_wrapper.h"
+#include "rust/cxx.h"
+#include "rust_lib_audio2srt/src/ctranslate2_bridge.rs.h"
 #include "ctranslate2/models/whisper.h"
 #include "ctranslate2/devices.h"
 #include "ctranslate2/types.h"
 #include "ctranslate2/storage_view.h"
 #include <iostream>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
   ctranslate2::Device str_to_device(const std::string& device) {
@@ -23,6 +28,31 @@ namespace {
   }
 }
 
+size_t get_gpu_free_vram_mb() {
+#ifdef _WIN32
+  typedef int (*cudaMemGetInfoFunc)(size_t*, size_t*);
+  HMODULE hModule = LoadLibraryA("nvcuda.dll");
+  if (!hModule) {
+    hModule = LoadLibraryA("cudart64_12.dll");
+  }
+  if (!hModule) {
+    hModule = LoadLibraryA("cudart64_110.dll");
+  }
+  if (hModule) {
+    cudaMemGetInfoFunc cudaMemGetInfo = (cudaMemGetInfoFunc)GetProcAddress(hModule, "cudaMemGetInfo");
+    if (cudaMemGetInfo) {
+      size_t free_bytes = 0, total_bytes = 0;
+      if (cudaMemGetInfo(&free_bytes, &total_bytes) == 0 && free_bytes > 0) {
+        FreeLibrary(hModule);
+        return free_bytes / (1024 * 1024);
+      }
+    }
+    FreeLibrary(hModule);
+  }
+#endif
+  return 0;
+}
+
 WhisperWrapper::WhisperWrapper(const std::string& model_path,
                                const std::string& device,
                                int device_index,
@@ -34,7 +64,6 @@ WhisperWrapper::WhisperWrapper(const std::string& model_path,
   ctranslate2::ReplicaPoolConfig config;
   config.num_threads_per_replica = intra_threads;
 
-  // Load the model
   model_ = std::make_unique<ctranslate2::models::Whisper>(
       model_path,
       dev,
@@ -60,34 +89,29 @@ rust::Vec<size_t> WhisperWrapper::transcribe(
     float& no_speech_prob,
     float& avg_logprob) const {
 
-  // Create the features StorageView
-  // Shape: [batch_size, n_mels, n_frames] -> [1, n_mels, n_frames]
   std::vector<int64_t> shape = {1, static_cast<int64_t>(n_mels), static_cast<int64_t>(n_frames)};
   std::vector<float> mel_vector(mel_data, mel_data + (n_mels * n_frames));
   ctranslate2::StorageView features(shape, mel_vector);
 
-  // Options
   ctranslate2::models::WhisperOptions options;
   options.beam_size = beam_size;
   options.patience = patience;
   options.sampling_temperature = temperature;
   if (temperature > 0.0f) {
-    options.sampling_topk = 0; // Enable full sampling
+    options.sampling_topk = 0;
   } else {
-    options.sampling_topk = 1; // Greedy search
+    options.sampling_topk = 1;
   }
   options.return_scores = true;
   options.return_no_speech_prob = true;
   options.repetition_penalty = repetition_penalty;
   options.no_repeat_ngram_size = no_repeat_ngram_size;
 
-  // Prompts (passed from Rust)
   std::vector<std::vector<size_t>> prompts = {{}};
   for (size_t token : prompt_tokens) {
     prompts[0].push_back(token);
   }
 
-  // Run generation
   auto futures = model_->generate(features, prompts, options);
   
   rust::Vec<size_t> result_token_ids;
@@ -100,16 +124,84 @@ rust::Vec<size_t> WhisperWrapper::transcribe(
         avg_logprob = result.scores[0];
       }
       if (!result.sequences_ids.empty()) {
-        for (size_t id : result.sequences_ids[0]) {
-          result_token_ids.push_back(id);
+        for (size_t token_id : result.sequences_ids[0]) {
+          result_token_ids.push_back(token_id);
         }
       }
     } catch (const std::exception& e) {
-      std::cerr << "[C++] CTranslate2 Transcription Error: " << e.what() << std::endl;
+      std::cerr << "[WhisperWrapper] C++ exception in generate: " << e.what() << std::endl;
     }
   }
 
   return result_token_ids;
+}
+
+rust::Vec<BatchResult> WhisperWrapper::transcribe_batch(
+    const float* mel_data,
+    size_t batch_size,
+    size_t n_mels,
+    size_t n_frames,
+    size_t beam_size,
+    float patience,
+    float temperature,
+    rust::Slice<const size_t> prompt_tokens,
+    float repetition_penalty,
+    size_t no_repeat_ngram_size) const {
+
+  std::vector<int64_t> shape = {
+      static_cast<int64_t>(batch_size),
+      static_cast<int64_t>(n_mels),
+      static_cast<int64_t>(n_frames)
+  };
+  std::vector<float> mel_vector(mel_data, mel_data + (batch_size * n_mels * n_frames));
+  ctranslate2::StorageView features(shape, mel_vector);
+
+  ctranslate2::models::WhisperOptions options;
+  options.beam_size = beam_size;
+  options.patience = patience;
+  options.sampling_temperature = temperature;
+  if (temperature > 0.0f) {
+    options.sampling_topk = 0;
+  } else {
+    options.sampling_topk = 1;
+  }
+  options.return_scores = true;
+  options.return_no_speech_prob = true;
+  options.repetition_penalty = repetition_penalty;
+  options.no_repeat_ngram_size = no_repeat_ngram_size;
+  options.max_length = 256;
+
+  std::vector<size_t> single_prompt;
+  for (size_t token : prompt_tokens) {
+    single_prompt.push_back(token);
+  }
+  std::vector<std::vector<size_t>> prompts(batch_size, single_prompt);
+
+  auto futures = model_->generate(features, prompts, options);
+
+  rust::Vec<BatchResult> results;
+  for (size_t i = 0; i < futures.size(); ++i) {
+    BatchResult item;
+    item.no_speech_prob = 0.0f;
+    item.avg_logprob = 0.0f;
+    try {
+      auto result = futures[i].get();
+      item.no_speech_prob = result.no_speech_prob;
+      if (!result.scores.empty()) {
+        item.avg_logprob = result.scores[0];
+      }
+      if (!result.sequences_ids.empty()) {
+        for (size_t token_id : result.sequences_ids[0]) {
+          item.token_ids.push_back(token_id);
+        }
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "[WhisperWrapper] C++ exception in generate_batch: " << e.what() << std::endl;
+    }
+    results.push_back(item);
+  }
+
+  return results;
 }
 
 rust::String WhisperWrapper::detect_language(
@@ -118,24 +210,20 @@ rust::String WhisperWrapper::detect_language(
     size_t n_frames) const {
   std::vector<int64_t> shape = {1, static_cast<int64_t>(n_mels), static_cast<int64_t>(n_frames)};
   std::vector<float> mel_vector(mel_data, mel_data + (n_mels * n_frames));
-
   ctranslate2::StorageView features(shape, mel_vector);
 
   auto futures = model_->detect_language(features);
-  if (futures.empty()) return rust::String("");
-  
-  auto results = futures[0].get();
-  if (results.empty()) return rust::String("");
-  
-  // The first element is the most probable language, e.g. "<|zh|>"
-  // We can strip the "<|" and "|>" or just return it as is.
-  // returning as is, e.g. "<|zh|>"
-  std::string token = results[0].first;
-  std::cout << "[C++] detect_language returned: " << token << " with prob: " << results[0].second << std::endl;
-  if (token.size() > 4 && token.substr(0, 2) == "<|" && token.substr(token.size() - 2) == "|>") {
-      return rust::String(token.substr(2, token.size() - 4));
+  if (!futures.empty()) {
+    auto lang_res = futures[0].get();
+    if (!lang_res.empty()) {
+      std::string lang = lang_res[0].first;
+      if (lang.size() > 4 && lang.substr(0, 2) == "<|" && lang.substr(lang.size() - 2) == "|>") {
+        lang = lang.substr(2, lang.size() - 4);
+      }
+      return rust::String(lang);
+    }
   }
-  return rust::String(token);
+  return rust::String("");
 }
 
 std::unique_ptr<WhisperWrapper> create_whisper_model(
@@ -144,16 +232,11 @@ std::unique_ptr<WhisperWrapper> create_whisper_model(
     int device_index,
     rust::Str compute_type,
     int intra_threads) {
-  try {
-    return std::make_unique<WhisperWrapper>(
-        std::string(model_path),
-        std::string(device),
-        device_index,
-        std::string(compute_type),
-        intra_threads
-    );
-  } catch (const std::exception& e) {
-    std::cerr << "[C++] Error creating Whisper model: " << e.what() << std::endl;
-    return nullptr;
-  }
+  return std::make_unique<WhisperWrapper>(
+      std::string(model_path),
+      std::string(device),
+      device_index,
+      std::string(compute_type),
+      intra_threads
+  );
 }

@@ -954,6 +954,7 @@ fn spawn_whisper_worker(
     let model_path = config.model_path.clone();
     let language = config.language.clone();
     let translate = config.translate;
+    let use_gpu = config.use_gpu;
 
     thread::spawn(move || -> Result<()> {
         register_thread_as_pro_audio();
@@ -967,16 +968,58 @@ fn spawn_whisper_worker(
         let mut last_normalized_text = String::new();
         let mut session_language: Option<String> = None;
 
-        while let Ok(task) = rx_whisper_task.recv() {
+        let free_vram_mb = crate::ctranslate2_bridge::ffi::get_gpu_free_vram_mb();
+        let auto_batch_size = if !use_gpu {
+            2
+        } else if free_vram_mb >= 12000 {
+            32
+        } else if free_vram_mb >= 7000 {
+            24
+        } else if free_vram_mb >= 5000 {
+            16
+        } else if free_vram_mb >= 3000 {
+            8
+        } else if free_vram_mb >= 1500 {
+            4
+        } else {
+            2
+        };
+        println!(
+            "[Rust] GPU Free VRAM: {} MB -> Auto allocated batch_size: {} (use_gpu={})",
+            free_vram_mb, auto_batch_size, use_gpu
+        );
+
+        while let Ok(first_task) = rx_whisper_task.recv() {
             if SHOULD_CANCEL.load(Ordering::SeqCst) {
                 break;
             }
-            let WhisperTask { samples: samples_16k, start_ms, end_ms } = task;
-            
-            if !samples_16k.is_empty() {
-                // save_vad_segment_to_wav(&samples_16k, start_ms, end_ms);
+
+            let mut task_batch = vec![first_task];
+            while task_batch.len() < auto_batch_size {
+                match rx_whisper_task.try_recv() {
+                    Ok(t) => task_batch.push(t),
+                    Err(_) => break,
+                }
+            }
+
+            struct PreparedChunk {
+                chunk_start_ms: i64,
+                chunk_actual_duration_ms: i64,
+                chunk_actual_len: usize,
+                total_samples: usize,
+                offset: usize,
+                flat_mel: Vec<f32>,
+            }
+
+            let mut prepared_chunks: Vec<PreparedChunk> = Vec::new();
+
+            for task in task_batch {
+                let WhisperTask { samples: samples_16k, start_ms, end_ms: _ } = task;
+                if samples_16k.is_empty() {
+                    continue;
+                }
                 let total_samples = samples_16k.len();
-                let chunk_size = 480000; // 30s chunks
+                let chunk_size = 480000;
                 let mut offset = 0;
 
                 while offset < total_samples {
@@ -989,14 +1032,11 @@ fn spawn_whisper_worker(
                         chunk_samples.resize(480000, 0.0);
                     }
 
-                    // 1. 计算所有 FFT 帧
                     let fft_frames = mel_spec::stft::Spectrogram::compute_all_cpu(
                         &chunk_samples,
                         400,
                         160,
                     );
-
-                    // 2. 生成 Mel 滤波器组权重
                     let mel_filters = mel_spec::mel::mel(
                         16000.0,
                         400,
@@ -1006,8 +1046,6 @@ fn spawn_whisper_worker(
                         false,
                         true,
                     );
-
-                    // 3. 将各帧 STFT 映射至未归一化的 log10 Mel 能量 (Array2)
                     let n_frames = fft_frames.len();
                     let mut combined_mel = ndarray_016::Array2::zeros((n_mels, n_frames));
                     for (f, frame) in fft_frames.into_iter().enumerate() {
@@ -1017,219 +1055,172 @@ fn spawn_whisper_worker(
                             combined_mel[[m, f]] = log_mel_frame[[m, 0]];
                         }
                     }
-
-                    // 4. 对整段进行全局 Whisper 归一化
                     let normalized = mel_spec::mel::norm_mel(&combined_mel);
-
                     let mut flat_mel = vec![0.0f32; n_mels * n_frames];
                     for f in 0..n_frames {
                         for m in 0..n_mels {
                             flat_mel[m * n_frames + f] = normalized[[m, f]] as f32;
                         }
                     }
+                    prepared_chunks.push(PreparedChunk {
+                        chunk_start_ms,
+                        chunk_actual_duration_ms,
+                        chunk_actual_len,
+                        total_samples,
+                        offset,
+                        flat_mel,
+                    });
 
-                    let mut actual_language = language.clone();
-                    let is_auto = actual_language.is_none() || actual_language.as_deref() == Some("auto");
-                    if is_auto {
-                        let detected_lang = unsafe {
-                            ctx.inner.detect_language(
-                                flat_mel.as_ptr(),
-                                n_mels,
-                                n_frames
-                            )
-                        };
-                        if !detected_lang.is_empty() {
-                            println!("[Rust] Stream Auto language detected: {}", detected_lang);
-                            session_language = Some(detected_lang.clone());
-                            actual_language = Some(detected_lang);
-                        } else if let Some(ref fallback_lang) = session_language {
-                            println!("[Rust] Auto language detection returned empty string! Using session fallback: {}", fallback_lang);
-                            actual_language = Some(fallback_lang.clone());
-                        } else {
-                            println!("[Rust] Auto language detection returned empty string! No session fallback available, using en");
-                            actual_language = Some("en".to_string());
-                        }
-                    }
-
-                    let prompt_tokens = crate::api::whisper::get_prompt_tokens(&vocab, &actual_language, translate);
-                    let repetition_penalty = 1.0f32;
-                    let no_repeat_ngram_size = 0;
-
-                    let start_time = std::time::Instant::now();
-                    let mut final_segs = Vec::new();
-                    let mut final_no_speech_prob = 0.0f32;
-
-                    let get_compression_ratio = |text: &str| -> f32 {
-                        if text.is_empty() {
-                            return 0.0;
-                        }
-                        use flate2::write::GzEncoder;
-                        use flate2::Compression;
-                        use std::io::Write;
-                        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-                        if encoder.write_all(text.as_bytes()).is_err() {
-                            return 1.0;
-                        }
-                        if let Ok(compressed) = encoder.finish() {
-                            text.len() as f32 / compressed.len() as f32
-                        } else {
-                            1.0
-                        }
-                    };
-                    
-                    let temps = vec![0.0f32, 0.2f32, 0.4f32, 0.6f32, 0.8f32, 1.0f32];
-                    for (idx, &temp) in temps.iter().enumerate() {
-                        let mut no_speech_prob = 0.0f32;
-                        let mut avg_logprob = 0.0f32;
-                        let token_ids = unsafe {
-                            ctx.inner.transcribe(
-                                flat_mel.as_ptr(),
-                                n_mels,
-                                n_frames,
-                                1, // beam size 1
-                                1.0, // patience
-                                temp,
-                                &prompt_tokens,
-                                repetition_penalty,
-                                no_repeat_ngram_size,
-                                &mut no_speech_prob,
-                                &mut avg_logprob,
-                            )
-                        };
-
-                        let segs = parse_tokens_to_segments(
-                            &token_ids,
-                            &vocab,
-                            &unicode_to_bytes,
-                            chunk_start_ms,
-                            chunk_actual_duration_ms,
-                        );
-                        
-                        let full_text: String = segs.iter().map(|s| s.text.as_str()).collect();
-                        let ratio = get_compression_ratio(&full_text);
-                        
-                        final_segs = segs;
-                        final_no_speech_prob = no_speech_prob;
-                        
-                        // Fallback criteria matching whisper.cpp:
-                        // 1. avg_logprob < -1.0 (unconfident transcription)
-                        // 2. compression_ratio > 2.4 (highly repetitive)
-                        let is_unconfident = avg_logprob < -1.0;
-                        let is_repetitive = ratio > 2.4;
-                        
-                        if (is_unconfident || is_repetitive) && idx < temps.len() - 1 {
-                            println!(
-                                "[Rust] Fallback triggered at temp {}: avg_logprob = {:.3} (threshold = -1.0), compression_ratio = {:.3} (threshold = 2.4). Retrying...",
-                                temp, avg_logprob, ratio
-                            );
-                            continue;
-                        }
-                        
-                        break;
-                    }
-
-                    if final_no_speech_prob > 0.6 {
-                        println!("[Rust] Whisper detected no_speech_prob: {:.2} > 0.6, skipping music/silence segment", final_no_speech_prob);
-                        offset += chunk_size;
-                        continue;
-                    }
-                    let _elapsed_ms = start_time.elapsed().as_millis() as u64;
-                    let _audio_dur_sec = (chunk_actual_len as f64) / 16000.0;
-                    log_perf!("Whisper", _elapsed_ms, _audio_dur_sec);
-
-                    let is_last_chunk = (offset + chunk_actual_len) == total_samples;
-                    let tail_threshold_ms = if is_last_chunk { 450 } else { 200 };
-
-                    let final_segs_len = final_segs.len();
-                    for (seg_idx, s) in final_segs.iter().enumerate() {
-                        // Safety boundaries logic
-                        if s.start_ms >= chunk_start_ms + chunk_actual_duration_ms - tail_threshold_ms {
-                            continue;
-                        }
-                        let mut s = s.clone();
-                        if s.end_ms > chunk_start_ms + chunk_actual_duration_ms {
-                            s.end_ms = chunk_start_ms + chunk_actual_duration_ms;
-                        }
-
-                        // 分片尾部幻觉过滤
-                        if is_last_chunk && seg_idx + 1 == final_segs_len {
-                            let duration_ms = s.end_ms - s.start_ms;
-                            let is_near_end = s.end_ms >= chunk_start_ms + chunk_actual_duration_ms - 500;
-                            if duration_ms < 800 && is_near_end {
-                                println!(
-                                    "[Rust] 过滤句尾 VAD 缓冲静音段幻觉小尾巴: {:#?} -> {:#?}, 持续时间: {}ms",
-                                    s.start_ms, s.end_ms, duration_ms
-                                );
-                                continue;
-                            }
-                        }
-
-                        let mut final_text = s.text.replace("♪", "")
-                                                 .replace("🎵", "")
-                                                 .replace("[音乐]", "")
-                                                 .replace("(音乐)", "")
-                                                 .replace("[Music]", "")
-                                                 .replace("(Music)", "");
-                        final_text = final_text.trim().to_string();
-
-                        if final_text.is_empty() {
-                            continue;
-                        }
-
-                        // 防止句尾出现幻觉叠字
-                        final_text = clean_end_repetitions(&final_text);
-
-                        if to_simplified {
-                            final_text = convert_chinese(final_text, true);
-                        }
-
-                        // Prevent consecutive duplicate segments (minimum 4 characters)
-                        let cleaned_compare = clean_text_for_comparison(&final_text);
-                        if cleaned_compare.chars().count() >= 4 && cleaned_compare == last_normalized_text {
-                            println!("[Rust] 过滤连续重复字幕 (长度 {}): '{}'", cleaned_compare.chars().count(), final_text);
-                            continue;
-                        }
-                        if !cleaned_compare.is_empty() {
-                            last_normalized_text = cleaned_compare;
-                        }
-
-                        let new_seg = TranscriptionSegment {
-                            start_ms: s.start_ms,
-                            end_ms: s.end_ms,
-                            text: final_text,
-                        };
-                        all_segments.push(new_seg.clone());
-                        if sink.add(TranscriptionEvent::Segment(new_seg)).is_err() {
-                            println!("[Rust] Sink is closed. Aborting whisper loop.");
-                            return Ok(());
-                        }
-                    }
-
-                    // Sliding window logic: step by the last segment's end time if progress is made
-                    let mut step = chunk_size;
-                    if !final_segs.is_empty() {
-                        let last_end_ms = final_segs.last().unwrap().end_ms;
-                        let next_offset_samples = (last_end_ms - start_ms) as usize * 16000 / 1000;
-                        if next_offset_samples > offset {
-                            step = (next_offset_samples - offset).min(chunk_size).max(16000);
-                        }
-                    }
-                    offset += step;
+                    offset += chunk_size;
                 }
             }
 
-            // 推进进度条
-            let progress = ((end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
-            if sink.add(TranscriptionEvent::Progress(progress.clamp(0, 100))).is_err() {
-                println!("[Rust] Sink is closed. Aborting whisper loop.");
-                return Ok(());
+            if prepared_chunks.is_empty() {
+                continue;
             }
-            if sink.add(TranscriptionEvent::ProgressDetail {
-                processed_ms: end_ms,
-                total_ms: (total_duration * 1000.0) as i64,
-            }).is_err() {
-                println!("[Rust] Sink is closed. Aborting whisper loop.");
-                return Ok(());
+
+            let batch_count = prepared_chunks.len();
+            let n_frames = prepared_chunks[0].flat_mel.len() / n_mels;
+            let mut batch_flat_mel = Vec::with_capacity(batch_count * n_mels * n_frames);
+            for pc in &prepared_chunks {
+                if pc.flat_mel.len() != n_mels * n_frames {
+                    println!("[Rust] Warning: Chunk n_frames mismatch! expected {}, got {}. Truncating or padding not fully supported here, skipping this chunk.", n_mels * n_frames, pc.flat_mel.len());
+                    continue;
+                }
+                batch_flat_mel.extend_from_slice(&pc.flat_mel);
+            }
+
+            let mut actual_language = language.clone();
+            let is_auto = actual_language.is_none() || actual_language.as_deref() == Some("auto");
+            if is_auto {
+                let detected_lang = unsafe {
+                    ctx.inner.detect_language(
+                        prepared_chunks[0].flat_mel.as_ptr(),
+                        n_mels,
+                        n_frames
+                    )
+                };
+                if !detected_lang.is_empty() {
+                    println!("[Rust] Stream Auto language detected: {}", detected_lang);
+                    session_language = Some(detected_lang.clone());
+                    actual_language = Some(detected_lang);
+                } else if let Some(ref fallback_lang) = session_language {
+                    actual_language = Some(fallback_lang.clone());
+                } else {
+                    actual_language = Some("en".to_string());
+                }
+            }
+
+            let prompt_tokens = crate::api::whisper::get_prompt_tokens(&vocab, &actual_language, translate);
+            let repetition_penalty = 1.2f32;
+            let no_repeat_ngram_size = 4;
+
+            let start_time = std::time::Instant::now();
+
+            let batch_results = unsafe {
+                ctx.inner.transcribe_batch(
+                    batch_flat_mel.as_ptr(),
+                    batch_count,
+                    n_mels,
+                    n_frames,
+                    1, // beam_size 1
+                    1.0, // patience
+                    0.0, // temp
+                    &prompt_tokens,
+                    repetition_penalty,
+                    no_repeat_ngram_size,
+                )
+            };
+
+            let last_end_ms = prepared_chunks.last().map(|pc| pc.chunk_start_ms + pc.chunk_actual_duration_ms).unwrap_or(0);
+
+            for (pc, b_res) in prepared_chunks.into_iter().zip(batch_results.into_iter()) {
+                if b_res.no_speech_prob > 0.6 {
+                    continue;
+                }
+                let segs = parse_tokens_to_segments(
+                    &b_res.token_ids,
+                    &vocab,
+                    &unicode_to_bytes,
+                    pc.chunk_start_ms,
+                    pc.chunk_actual_duration_ms,
+                );
+
+                let is_last_chunk = (pc.offset + pc.chunk_actual_len) == pc.total_samples;
+                let tail_threshold_ms = if is_last_chunk { 450 } else { 200 };
+
+                let final_segs_len = segs.len();
+                for (seg_idx, s) in segs.iter().enumerate() {
+                    if s.start_ms >= pc.chunk_start_ms + pc.chunk_actual_duration_ms - tail_threshold_ms {
+                        continue;
+                    }
+                    let mut s = s.clone();
+                    if s.end_ms > pc.chunk_start_ms + pc.chunk_actual_duration_ms {
+                        s.end_ms = pc.chunk_start_ms + pc.chunk_actual_duration_ms;
+                    }
+
+                    if is_last_chunk && seg_idx + 1 == final_segs_len {
+                        let duration_ms = s.end_ms - s.start_ms;
+                        let is_near_end = s.end_ms >= pc.chunk_start_ms + pc.chunk_actual_duration_ms - 500;
+                        if duration_ms < 800 && is_near_end {
+                            continue;
+                        }
+                    }
+
+                    let mut final_text = s.text.replace("♪", "")
+                                             .replace("🎵", "")
+                                             .replace("[音乐]", "")
+                                             .replace("(音乐)", "")
+                                             .replace("[Music]", "")
+                                             .replace("(Music)", "");
+                    final_text = final_text.trim().to_string();
+
+                    if final_text.is_empty() {
+                        continue;
+                    }
+
+                    final_text = clean_end_repetitions(&final_text);
+
+                    if to_simplified {
+                        final_text = convert_chinese(final_text, true);
+                    }
+
+                    let cleaned_compare = clean_text_for_comparison(&final_text);
+                    if cleaned_compare.chars().count() >= 4 && cleaned_compare == last_normalized_text {
+                        continue;
+                    }
+                    if !cleaned_compare.is_empty() {
+                        last_normalized_text = cleaned_compare;
+                    }
+
+                    let new_seg = TranscriptionSegment {
+                        start_ms: s.start_ms,
+                        end_ms: s.end_ms,
+                        text: final_text,
+                    };
+                    all_segments.push(new_seg.clone());
+                    let _ = sink.add(TranscriptionEvent::Segment(new_seg));
+                }
+            }
+
+            let _elapsed_ms = start_time.elapsed().as_millis() as u64;
+            let _audio_dur_sec = (batch_count as f64) * 30.0;
+            log_perf!("WhisperBatch", _elapsed_ms, _audio_dur_sec);
+
+            // 推进进度条
+            if last_end_ms > 0 {
+                let progress = ((last_end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
+                if sink.add(TranscriptionEvent::Progress(progress.clamp(0, 100))).is_err() {
+                    println!("[Rust] Sink is closed. Aborting whisper loop.");
+                    return Ok(());
+                }
+                if sink.add(TranscriptionEvent::ProgressDetail {
+                    processed_ms: last_end_ms,
+                    total_ms: (total_duration * 1000.0) as i64,
+                }).is_err() {
+                    println!("[Rust] Sink is closed. Aborting whisper loop.");
+                    return Ok(());
+                }
             }
         }
         

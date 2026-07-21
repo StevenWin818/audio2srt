@@ -1,15 +1,16 @@
 #pragma once
 
+#include "rust/cxx.h"
 #include <memory>
 #include <string>
-#include <vector>
-#include "rust/cxx.h"
 
 namespace ctranslate2 {
   namespace models {
     class Whisper;
   }
 }
+
+struct BatchResult;
 
 class WhisperWrapper {
 public:
@@ -33,6 +34,18 @@ public:
       float& no_speech_prob,
       float& avg_logprob) const;
 
+  rust::Vec<BatchResult> transcribe_batch(
+      const float* mel_data,
+      size_t batch_size,
+      size_t n_mels,
+      size_t n_frames,
+      size_t beam_size,
+      float patience,
+      float temperature,
+      rust::Slice<const size_t> prompt_tokens,
+      float repetition_penalty,
+      size_t no_repeat_ngram_size) const;
+
   rust::String detect_language(
       const float* mel_data,
       size_t n_mels,
@@ -48,3 +61,5 @@ std::unique_ptr<WhisperWrapper> create_whisper_model(
     int device_index,
     rust::Str compute_type,
     int intra_threads);
+
+size_t get_gpu_free_vram_mb();
