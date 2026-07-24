@@ -16,6 +16,5 @@ apply_cargokit(${PROJECT_NAME} ../../../../../../rust rust_lib_audio2srt "")
 # external build triggered from this build file.
 set(rust_lib_audio2srt_bundled_libraries
   "${${PROJECT_NAME}_cargokit_lib}"
-  "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/onnxruntime.dll"
   PARENT_SCOPE
 )

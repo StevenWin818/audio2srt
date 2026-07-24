@@ -1,5 +1,7 @@
-pub mod simple;
 pub mod ffmpeg;
-pub mod whisper;
+pub mod hardware;
+pub mod models;
+pub mod qwen;
+pub mod simple;
 pub mod stream_pipeline;
-
+pub mod whisper;

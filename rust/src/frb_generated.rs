@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1759704528;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1386116060;
 
 // Section: executor
 
@@ -254,6 +254,71 @@ fn wire__crate__api__whisper__get_hardware_acceleration_info_impl(
                 transform_result_sse::<_, ()>((move || {
                     let output_ok =
                         Result::<_, ()>::Ok(crate::api::whisper::get_hardware_acceleration_info())?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__hardware__get_qwen_hardware_info_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_qwen_hardware_info",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok =
+                        Result::<_, ()>::Ok(crate::api::hardware::get_qwen_hardware_info())?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__qwen__get_qwen_runtime_info_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_qwen_runtime_info",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok(crate::api::qwen::get_qwen_runtime_info())?;
                     Ok(output_ok)
                 })())
             }
@@ -624,6 +689,104 @@ fn wire__crate__api__whisper__transcription_segment_default_impl(
         },
     )
 }
+fn wire__crate__api__qwen__unload_qwen_runtime_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "unload_qwen_runtime",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::qwen::unload_qwen_runtime()?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__models__validate_qwen_model_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "validate_qwen_model",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_model_dir = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::models::validate_qwen_model(api_model_dir)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__qwen__validate_qwen_model_dir_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "validate_qwen_model_dir",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_model_dir = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::qwen::validate_qwen_model_dir(api_model_dir)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__whisper__vulkan_device_info_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -651,6 +814,39 @@ fn wire__crate__api__whisper__vulkan_device_info_default_impl(
                 transform_result_sse::<_, ()>((move || {
                     let output_ok =
                         Result::<_, ()>::Ok(crate::api::whisper::VulkanDeviceInfo::default())?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__qwen__warmup_qwen_runtime_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "warmup_qwen_runtime",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_config = <crate::api::qwen::QwenWarmupConfig>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::qwen::warmup_qwen_runtime(api_config)?;
                     Ok(output_ok)
                 })())
             }
@@ -692,6 +888,38 @@ fn wire__crate__api__whisper__warmup_whisper_context_impl(
                             api_total_duration,
                         );
                     })?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__whisper__word_item_default_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "word_item_default",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok(crate::api::whisper::WordItem::default())?;
                     Ok(output_ok)
                 })())
             }
@@ -760,6 +988,51 @@ impl SseDecode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         deserializer.cursor.read_u8().unwrap() != 0
+    }
+}
+
+impl SseDecode for crate::qwen::backend::ComputeDeviceInfo {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_vendor = <String>::sse_decode(deserializer);
+        let mut var_vramMb = <u64>::sse_decode(deserializer);
+        let mut var_supportsVulkan = <bool>::sse_decode(deserializer);
+        let mut var_supportsDirectml = <bool>::sse_decode(deserializer);
+        return crate::qwen::backend::ComputeDeviceInfo {
+            name: var_name,
+            vendor: var_vendor,
+            vram_mb: var_vramMb,
+            supports_vulkan: var_supportsVulkan,
+            supports_directml: var_supportsDirectml,
+        };
+    }
+}
+
+impl SseDecode for crate::qwen::backend::DecoderBackend {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::qwen::backend::DecoderBackend::Auto,
+            1 => crate::qwen::backend::DecoderBackend::Vulkan,
+            2 => crate::qwen::backend::DecoderBackend::Cuda,
+            3 => crate::qwen::backend::DecoderBackend::Cpu,
+            _ => unreachable!("Invalid variant for DecoderBackend: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::qwen::backend::EncoderBackend {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::qwen::backend::EncoderBackend::Auto,
+            1 => crate::qwen::backend::EncoderBackend::DirectMl,
+            2 => crate::qwen::backend::EncoderBackend::Cpu,
+            _ => unreachable!("Invalid variant for EncoderBackend: {}", inner),
+        };
     }
 }
 
@@ -844,6 +1117,20 @@ impl SseDecode for Vec<crate::api::ffmpeg::AudioTrackInfo> {
     }
 }
 
+impl SseDecode for Vec<crate::qwen::backend::ComputeDeviceInfo> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(<crate::qwen::backend::ComputeDeviceInfo>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -881,6 +1168,36 @@ impl SseDecode for Vec<crate::api::whisper::VulkanDeviceInfo> {
             ));
         }
         return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::whisper::WordItem> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::whisper::WordItem>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for crate::api::models::ModelInfo {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_modelId = <String>::sse_decode(deserializer);
+        let mut var_path = <String>::sse_decode(deserializer);
+        let mut var_valid = <bool>::sse_decode(deserializer);
+        let mut var_totalSizeBytes = <u64>::sse_decode(deserializer);
+        let mut var_missingFiles = <Vec<String>>::sse_decode(deserializer);
+        return crate::api::models::ModelInfo {
+            model_id: var_modelId,
+            path: var_path,
+            valid: var_valid,
+            total_size_bytes: var_totalSizeBytes,
+            missing_files: var_missingFiles,
+        };
     }
 }
 
@@ -925,6 +1242,15 @@ impl SseDecode for crate::api::stream_pipeline::PipelineConfig {
         let mut var_modelPath = <String>::sse_decode(deserializer);
         let mut var_vadModelPath = <String>::sse_decode(deserializer);
         let mut var_dfModelPath = <String>::sse_decode(deserializer);
+        let mut var_asrModelDir = <String>::sse_decode(deserializer);
+        let mut var_alignerModelDir = <Option<String>>::sse_decode(deserializer);
+        let mut var_contextPrompt = <Option<String>>::sse_decode(deserializer);
+        let mut var_encoderBackend =
+            <crate::qwen::backend::EncoderBackend>::sse_decode(deserializer);
+        let mut var_decoderBackend =
+            <crate::qwen::backend::DecoderBackend>::sse_decode(deserializer);
+        let mut var_timestampMode =
+            <crate::api::stream_pipeline::TimestampMode>::sse_decode(deserializer);
         let mut var_language = <Option<String>>::sse_decode(deserializer);
         let mut var_translate = <bool>::sse_decode(deserializer);
         let mut var_threads = <Option<i32>>::sse_decode(deserializer);
@@ -944,6 +1270,12 @@ impl SseDecode for crate::api::stream_pipeline::PipelineConfig {
             model_path: var_modelPath,
             vad_model_path: var_vadModelPath,
             df_model_path: var_dfModelPath,
+            asr_model_dir: var_asrModelDir,
+            aligner_model_dir: var_alignerModelDir,
+            context_prompt: var_contextPrompt,
+            encoder_backend: var_encoderBackend,
+            decoder_backend: var_decoderBackend,
+            timestamp_mode: var_timestampMode,
             language: var_language,
             translate: var_translate,
             threads: var_threads,
@@ -961,12 +1293,67 @@ impl SseDecode for crate::api::stream_pipeline::PipelineConfig {
     }
 }
 
+impl SseDecode for crate::qwen::backend::QwenHardwareInfo {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_vulkanAvailable = <bool>::sse_decode(deserializer);
+        let mut var_directmlAvailable = <bool>::sse_decode(deserializer);
+        let mut var_cudaAvailable = <bool>::sse_decode(deserializer);
+        let mut var_cpuAvailable = <bool>::sse_decode(deserializer);
+        let mut var_devices =
+            <Vec<crate::qwen::backend::ComputeDeviceInfo>>::sse_decode(deserializer);
+        let mut var_recommendedEncoderBackend =
+            <crate::qwen::backend::EncoderBackend>::sse_decode(deserializer);
+        let mut var_recommendedDecoderBackend =
+            <crate::qwen::backend::DecoderBackend>::sse_decode(deserializer);
+        return crate::qwen::backend::QwenHardwareInfo {
+            vulkan_available: var_vulkanAvailable,
+            directml_available: var_directmlAvailable,
+            cuda_available: var_cudaAvailable,
+            cpu_available: var_cpuAvailable,
+            devices: var_devices,
+            recommended_encoder_backend: var_recommendedEncoderBackend,
+            recommended_decoder_backend: var_recommendedDecoderBackend,
+        };
+    }
+}
+
+impl SseDecode for crate::api::qwen::QwenWarmupConfig {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_asrModelDir = <String>::sse_decode(deserializer);
+        let mut var_alignerModelDir = <Option<String>>::sse_decode(deserializer);
+        let mut var_encoderBackend =
+            <crate::qwen::backend::EncoderBackend>::sse_decode(deserializer);
+        let mut var_decoderBackend =
+            <crate::qwen::backend::DecoderBackend>::sse_decode(deserializer);
+        return crate::api::qwen::QwenWarmupConfig {
+            asr_model_dir: var_asrModelDir,
+            aligner_model_dir: var_alignerModelDir,
+            encoder_backend: var_encoderBackend,
+            decoder_backend: var_decoderBackend,
+        };
+    }
+}
+
 impl SseDecode for (String, String) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_field0 = <String>::sse_decode(deserializer);
         let mut var_field1 = <String>::sse_decode(deserializer);
         return (var_field0, var_field1);
+    }
+}
+
+impl SseDecode for crate::api::stream_pipeline::TimestampMode {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::stream_pipeline::TimestampMode::Fast,
+            1 => crate::api::stream_pipeline::TimestampMode::Precise,
+            _ => unreachable!("Invalid variant for TimestampMode: {}", inner),
+        };
     }
 }
 
@@ -1014,10 +1401,14 @@ impl SseDecode for crate::api::whisper::TranscriptionSegment {
         let mut var_startMs = <i64>::sse_decode(deserializer);
         let mut var_endMs = <i64>::sse_decode(deserializer);
         let mut var_text = <String>::sse_decode(deserializer);
+        let mut var_words = <Vec<crate::api::whisper::WordItem>>::sse_decode(deserializer);
+        let mut var_timestampQuality = <String>::sse_decode(deserializer);
         return crate::api::whisper::TranscriptionSegment {
             start_ms: var_startMs,
             end_ms: var_endMs,
             text: var_text,
+            words: var_words,
+            timestamp_quality: var_timestampQuality,
         };
     }
 }
@@ -1062,6 +1453,22 @@ impl SseDecode for crate::api::whisper::VulkanDeviceInfo {
     }
 }
 
+impl SseDecode for crate::api::whisper::WordItem {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_text = <String>::sse_decode(deserializer);
+        let mut var_startMs = <i64>::sse_decode(deserializer);
+        let mut var_endMs = <i64>::sse_decode(deserializer);
+        let mut var_confidence = <f32>::sse_decode(deserializer);
+        return crate::api::whisper::WordItem {
+            text: var_text,
+            start_ms: var_startMs,
+            end_ms: var_endMs,
+            confidence: var_confidence,
+        };
+    }
+}
+
 fn pde_ffi_dispatcher_primary_impl(
     func_id: i32,
     port: flutter_rust_bridge::for_generated::MessagePort,
@@ -1088,40 +1495,54 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        9 => wire__crate__api__whisper__hardware_acceleration_info_default_impl(
+        8 => wire__crate__api__hardware__get_qwen_hardware_info_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        10 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__ffmpeg__mux_srt_to_video_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__ffmpeg__probe_audio_tracks_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__whisper__transcribe_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__stream_pipeline__transcribe_stream_impl(
+        9 => wire__crate__api__qwen__get_qwen_runtime_info_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__whisper__hardware_acceleration_info_default_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        16 => wire__crate__api__whisper__transcription_segment_default_impl(
+        12 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__ffmpeg__mux_srt_to_video_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__ffmpeg__probe_audio_tracks_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__whisper__transcribe_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__stream_pipeline__transcribe_stream_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        17 => wire__crate__api__whisper__vulkan_device_info_default_impl(
+        18 => wire__crate__api__whisper__transcription_segment_default_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        18 => wire__crate__api__whisper__warmup_whisper_context_impl(
+        19 => wire__crate__api__qwen__unload_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__models__validate_qwen_model_impl(port, ptr, rust_vec_len, data_len),
+        21 => {
+            wire__crate__api__qwen__validate_qwen_model_dir_impl(port, ptr, rust_vec_len, data_len)
+        }
+        22 => wire__crate__api__whisper__vulkan_device_info_default_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
+        23 => wire__crate__api__qwen__warmup_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__whisper__warmup_whisper_context_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        25 => wire__crate__api__whisper__word_item_default_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1139,8 +1560,8 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        8 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__stream_pipeline__set_rust_perf_logging_impl(
+        10 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__stream_pipeline__set_rust_perf_logging_impl(
             ptr,
             rust_vec_len,
             data_len,
@@ -1171,6 +1592,75 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::ffmpeg::AudioTrackInfo>
     for crate::api::ffmpeg::AudioTrackInfo
 {
     fn into_into_dart(self) -> crate::api::ffmpeg::AudioTrackInfo {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::qwen::backend::ComputeDeviceInfo {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.name.into_into_dart().into_dart(),
+            self.vendor.into_into_dart().into_dart(),
+            self.vram_mb.into_into_dart().into_dart(),
+            self.supports_vulkan.into_into_dart().into_dart(),
+            self.supports_directml.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::qwen::backend::ComputeDeviceInfo
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::qwen::backend::ComputeDeviceInfo>
+    for crate::qwen::backend::ComputeDeviceInfo
+{
+    fn into_into_dart(self) -> crate::qwen::backend::ComputeDeviceInfo {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::qwen::backend::DecoderBackend {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Auto => 0.into_dart(),
+            Self::Vulkan => 1.into_dart(),
+            Self::Cuda => 2.into_dart(),
+            Self::Cpu => 3.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::qwen::backend::DecoderBackend
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::qwen::backend::DecoderBackend>
+    for crate::qwen::backend::DecoderBackend
+{
+    fn into_into_dart(self) -> crate::qwen::backend::DecoderBackend {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::qwen::backend::EncoderBackend {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Auto => 0.into_dart(),
+            Self::DirectMl => 1.into_dart(),
+            Self::Cpu => 2.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::qwen::backend::EncoderBackend
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::qwen::backend::EncoderBackend>
+    for crate::qwen::backend::EncoderBackend
+{
+    fn into_into_dart(self) -> crate::qwen::backend::EncoderBackend {
         self
     }
 }
@@ -1218,6 +1708,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::whisper::HardwareAcceleration
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::models::ModelInfo {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.model_id.into_into_dart().into_dart(),
+            self.path.into_into_dart().into_dart(),
+            self.valid.into_into_dart().into_dart(),
+            self.total_size_bytes.into_into_dart().into_dart(),
+            self.missing_files.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::models::ModelInfo {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::models::ModelInfo>
+    for crate::api::models::ModelInfo
+{
+    fn into_into_dart(self) -> crate::api::models::ModelInfo {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::stream_pipeline::PipelineConfig {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -1226,6 +1737,12 @@ impl flutter_rust_bridge::IntoDart for crate::api::stream_pipeline::PipelineConf
             self.model_path.into_into_dart().into_dart(),
             self.vad_model_path.into_into_dart().into_dart(),
             self.df_model_path.into_into_dart().into_dart(),
+            self.asr_model_dir.into_into_dart().into_dart(),
+            self.aligner_model_dir.into_into_dart().into_dart(),
+            self.context_prompt.into_into_dart().into_dart(),
+            self.encoder_backend.into_into_dart().into_dart(),
+            self.decoder_backend.into_into_dart().into_dart(),
+            self.timestamp_mode.into_into_dart().into_dart(),
             self.language.into_into_dart().into_dart(),
             self.translate.into_into_dart().into_dart(),
             self.threads.into_into_dart().into_dart(),
@@ -1251,6 +1768,80 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::stream_pipeline::PipelineConf
     for crate::api::stream_pipeline::PipelineConfig
 {
     fn into_into_dart(self) -> crate::api::stream_pipeline::PipelineConfig {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::qwen::backend::QwenHardwareInfo {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.vulkan_available.into_into_dart().into_dart(),
+            self.directml_available.into_into_dart().into_dart(),
+            self.cuda_available.into_into_dart().into_dart(),
+            self.cpu_available.into_into_dart().into_dart(),
+            self.devices.into_into_dart().into_dart(),
+            self.recommended_encoder_backend
+                .into_into_dart()
+                .into_dart(),
+            self.recommended_decoder_backend
+                .into_into_dart()
+                .into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::qwen::backend::QwenHardwareInfo
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::qwen::backend::QwenHardwareInfo>
+    for crate::qwen::backend::QwenHardwareInfo
+{
+    fn into_into_dart(self) -> crate::qwen::backend::QwenHardwareInfo {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::qwen::QwenWarmupConfig {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.asr_model_dir.into_into_dart().into_dart(),
+            self.aligner_model_dir.into_into_dart().into_dart(),
+            self.encoder_backend.into_into_dart().into_dart(),
+            self.decoder_backend.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::qwen::QwenWarmupConfig
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::qwen::QwenWarmupConfig>
+    for crate::api::qwen::QwenWarmupConfig
+{
+    fn into_into_dart(self) -> crate::api::qwen::QwenWarmupConfig {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::stream_pipeline::TimestampMode {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Fast => 0.into_dart(),
+            Self::Precise => 1.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::stream_pipeline::TimestampMode
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::stream_pipeline::TimestampMode>
+    for crate::api::stream_pipeline::TimestampMode
+{
+    fn into_into_dart(self) -> crate::api::stream_pipeline::TimestampMode {
         self
     }
 }
@@ -1303,6 +1894,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::whisper::TranscriptionSegment
             self.start_ms.into_into_dart().into_dart(),
             self.end_ms.into_into_dart().into_dart(),
             self.text.into_into_dart().into_dart(),
+            self.words.into_into_dart().into_dart(),
+            self.timestamp_quality.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1337,6 +1930,26 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::whisper::VulkanDeviceInfo>
     for crate::api::whisper::VulkanDeviceInfo
 {
     fn into_into_dart(self) -> crate::api::whisper::VulkanDeviceInfo {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::whisper::WordItem {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.text.into_into_dart().into_dart(),
+            self.start_ms.into_into_dart().into_dart(),
+            self.end_ms.into_into_dart().into_dart(),
+            self.confidence.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::whisper::WordItem {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::whisper::WordItem>
+    for crate::api::whisper::WordItem
+{
+    fn into_into_dart(self) -> crate::api::whisper::WordItem {
         self
     }
 }
@@ -1390,6 +2003,52 @@ impl SseEncode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_u8(self as _).unwrap();
+    }
+}
+
+impl SseEncode for crate::qwen::backend::ComputeDeviceInfo {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.name, serializer);
+        <String>::sse_encode(self.vendor, serializer);
+        <u64>::sse_encode(self.vram_mb, serializer);
+        <bool>::sse_encode(self.supports_vulkan, serializer);
+        <bool>::sse_encode(self.supports_directml, serializer);
+    }
+}
+
+impl SseEncode for crate::qwen::backend::DecoderBackend {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::qwen::backend::DecoderBackend::Auto => 0,
+                crate::qwen::backend::DecoderBackend::Vulkan => 1,
+                crate::qwen::backend::DecoderBackend::Cuda => 2,
+                crate::qwen::backend::DecoderBackend::Cpu => 3,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
+impl SseEncode for crate::qwen::backend::EncoderBackend {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::qwen::backend::EncoderBackend::Auto => 0,
+                crate::qwen::backend::EncoderBackend::DirectMl => 1,
+                crate::qwen::backend::EncoderBackend::Cpu => 2,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
     }
 }
 
@@ -1458,6 +2117,16 @@ impl SseEncode for Vec<crate::api::ffmpeg::AudioTrackInfo> {
     }
 }
 
+impl SseEncode for Vec<crate::qwen::backend::ComputeDeviceInfo> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::qwen::backend::ComputeDeviceInfo>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1485,6 +2154,27 @@ impl SseEncode for Vec<crate::api::whisper::VulkanDeviceInfo> {
         for item in self {
             <crate::api::whisper::VulkanDeviceInfo>::sse_encode(item, serializer);
         }
+    }
+}
+
+impl SseEncode for Vec<crate::api::whisper::WordItem> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::whisper::WordItem>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for crate::api::models::ModelInfo {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.model_id, serializer);
+        <String>::sse_encode(self.path, serializer);
+        <bool>::sse_encode(self.valid, serializer);
+        <u64>::sse_encode(self.total_size_bytes, serializer);
+        <Vec<String>>::sse_encode(self.missing_files, serializer);
     }
 }
 
@@ -1526,6 +2216,12 @@ impl SseEncode for crate::api::stream_pipeline::PipelineConfig {
         <String>::sse_encode(self.model_path, serializer);
         <String>::sse_encode(self.vad_model_path, serializer);
         <String>::sse_encode(self.df_model_path, serializer);
+        <String>::sse_encode(self.asr_model_dir, serializer);
+        <Option<String>>::sse_encode(self.aligner_model_dir, serializer);
+        <Option<String>>::sse_encode(self.context_prompt, serializer);
+        <crate::qwen::backend::EncoderBackend>::sse_encode(self.encoder_backend, serializer);
+        <crate::qwen::backend::DecoderBackend>::sse_encode(self.decoder_backend, serializer);
+        <crate::api::stream_pipeline::TimestampMode>::sse_encode(self.timestamp_mode, serializer);
         <Option<String>>::sse_encode(self.language, serializer);
         <bool>::sse_encode(self.translate, serializer);
         <Option<i32>>::sse_encode(self.threads, serializer);
@@ -1542,11 +2238,56 @@ impl SseEncode for crate::api::stream_pipeline::PipelineConfig {
     }
 }
 
+impl SseEncode for crate::qwen::backend::QwenHardwareInfo {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.vulkan_available, serializer);
+        <bool>::sse_encode(self.directml_available, serializer);
+        <bool>::sse_encode(self.cuda_available, serializer);
+        <bool>::sse_encode(self.cpu_available, serializer);
+        <Vec<crate::qwen::backend::ComputeDeviceInfo>>::sse_encode(self.devices, serializer);
+        <crate::qwen::backend::EncoderBackend>::sse_encode(
+            self.recommended_encoder_backend,
+            serializer,
+        );
+        <crate::qwen::backend::DecoderBackend>::sse_encode(
+            self.recommended_decoder_backend,
+            serializer,
+        );
+    }
+}
+
+impl SseEncode for crate::api::qwen::QwenWarmupConfig {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.asr_model_dir, serializer);
+        <Option<String>>::sse_encode(self.aligner_model_dir, serializer);
+        <crate::qwen::backend::EncoderBackend>::sse_encode(self.encoder_backend, serializer);
+        <crate::qwen::backend::DecoderBackend>::sse_encode(self.decoder_backend, serializer);
+    }
+}
+
 impl SseEncode for (String, String) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.0, serializer);
         <String>::sse_encode(self.1, serializer);
+    }
+}
+
+impl SseEncode for crate::api::stream_pipeline::TimestampMode {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::stream_pipeline::TimestampMode::Fast => 0,
+                crate::api::stream_pipeline::TimestampMode::Precise => 1,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
     }
 }
 
@@ -1591,6 +2332,8 @@ impl SseEncode for crate::api::whisper::TranscriptionSegment {
         <i64>::sse_encode(self.start_ms, serializer);
         <i64>::sse_encode(self.end_ms, serializer);
         <String>::sse_encode(self.text, serializer);
+        <Vec<crate::api::whisper::WordItem>>::sse_encode(self.words, serializer);
+        <String>::sse_encode(self.timestamp_quality, serializer);
     }
 }
 
@@ -1629,6 +2372,16 @@ impl SseEncode for crate::api::whisper::VulkanDeviceInfo {
         <i32>::sse_encode(self.id, serializer);
         <String>::sse_encode(self.name, serializer);
         <u64>::sse_encode(self.total_vram_bytes, serializer);
+    }
+}
+
+impl SseEncode for crate::api::whisper::WordItem {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.text, serializer);
+        <i64>::sse_encode(self.start_ms, serializer);
+        <i64>::sse_encode(self.end_ms, serializer);
+        <f32>::sse_encode(self.confidence, serializer);
     }
 }
 

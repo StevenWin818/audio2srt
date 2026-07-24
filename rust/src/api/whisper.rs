@@ -15,10 +15,55 @@ struct CachedContext {
 
 static G_CONTEXT: Mutex<Option<CachedContext>> = Mutex::new(None);
 
+pub fn setup_gpu_device(ctx_params: &mut WhisperContextParameters, use_gpu: bool) -> String {
+    let mut selected_device_name = "CPU".to_string();
+    if use_gpu {
+        #[cfg(feature = "vulkan")]
+        {
+            let devices = whisper_rs::vulkan::list_devices();
+            if !devices.is_empty() {
+                let dgpu = devices.iter().find(|d| {
+                    let name_lower = d.name.to_lowercase();
+                    let is_igpu = name_lower.contains("integrated")
+                        || name_lower.contains("uhd")
+                        || name_lower.contains("iris")
+                        || name_lower.contains("vega")
+                        || (name_lower.contains("intel") && !name_lower.contains("arc"))
+                        || name_lower.contains("radeon(tm)");
+                    !is_igpu
+                });
+                let selected = dgpu.or(devices.first());
+                if let Some(device) = selected {
+                    ctx_params.use_gpu = true;
+                    ctx_params.gpu_device = device.id;
+                    selected_device_name = format!("GPU: {}", device.name);
+                } else {
+                    ctx_params.use_gpu = false;
+                }
+            } else {
+                ctx_params.use_gpu = false;
+            }
+        }
+        #[cfg(feature = "cuda")]
+        {
+            ctx_params.use_gpu = true;
+            ctx_params.gpu_device = 0;
+            selected_device_name = "CUDA GPU".to_string();
+        }
+        #[cfg(not(any(feature = "vulkan", feature = "cuda")))]
+        {
+            ctx_params.use_gpu = false;
+        }
+    } else {
+        ctx_params.use_gpu = false;
+    }
+    selected_device_name
+}
+
 pub(crate) fn get_or_create_context(
     model_path: &str,
     use_gpu: bool,
-    ctx_params: WhisperContextParameters,
+    mut ctx_params: WhisperContextParameters,
 ) -> Result<Arc<WhisperContext>, String> {
     let mut cache = G_CONTEXT
         .lock()
@@ -31,9 +76,10 @@ pub(crate) fn get_or_create_context(
         }
     }
 
+    let dev_name = setup_gpu_device(&mut ctx_params, use_gpu);
     println!(
-        "[Rust] Loading new Whisper context for model: {} (use_gpu={})",
-        model_path, use_gpu
+        "[Rust] Loading new Whisper context for model: {} (use_gpu={}, dev={})",
+        model_path, use_gpu, dev_name
     );
     let new_ctx = WhisperContext::new_with_params(model_path, ctx_params).map_err(|e| {
         let err_msg = format!("加载模型失败: {}", e);
@@ -52,10 +98,20 @@ pub(crate) fn get_or_create_context(
 }
 
 #[derive(Clone, Debug, Default)]
+pub struct WordItem {
+    pub text: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub confidence: f32,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct TranscriptionSegment {
     pub start_ms: i64,
     pub end_ms: i64,
     pub text: String,
+    pub words: Vec<WordItem>,
+    pub timestamp_quality: String, // "Vad" or "ForcedAligned"
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +137,7 @@ pub struct HardwareAccelerationInfo {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 #[repr(C)]
 struct DISPLAY_DEVICEA {
     cb: u32,
@@ -92,6 +149,7 @@ struct DISPLAY_DEVICEA {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 #[link(name = "kernel32")]
 extern "system" {
     fn LoadLibraryA(lpLibFileName: *const u8) -> isize;
@@ -99,6 +157,7 @@ extern "system" {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 #[link(name = "user32")]
 extern "system" {
     fn EnumDisplayDevicesA(
@@ -110,6 +169,7 @@ extern "system" {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn check_vulkan_supported_safely() -> bool {
     unsafe {
         println!("[Rust] Safe Vulkan Check: Loading vulkan-1.dll...");
@@ -416,58 +476,7 @@ pub(crate) fn run_transcription_inner(
         });
     }
     
-    let mut selected_device_name = "CPU".to_string();
-    if use_gpu {
-        #[cfg(feature = "vulkan")]
-        {
-            let devices = whisper_rs::vulkan::list_devices();
-            if !devices.is_empty() {
-                let dgpu = devices.iter().find(|d| {
-                    let name_lower = d.name.to_lowercase();
-                    let is_igpu = name_lower.contains("integrated")
-                        || name_lower.contains("uhd")
-                        || name_lower.contains("iris")
-                        || name_lower.contains("vega")
-                        || (name_lower.contains("intel") && !name_lower.contains("arc"))
-                        || name_lower.contains("radeon(tm)");
-                    !is_igpu
-                });
-
-                let selected = if let Some(d) = dgpu {
-                    Some(d)
-                } else {
-                    devices.first()
-                };
-
-                if let Some(device) = selected {
-                    println!("[Rust] Selecting Vulkan GPU device {}: {}", device.id, device.name);
-                    ctx_params.use_gpu = true;
-                    ctx_params.gpu_device = device.id;
-                    selected_device_name = format!("GPU: {}", device.name);
-                } else {
-                    println!("[Rust] No Vulkan devices selected, falling back to CPU.");
-                    ctx_params.use_gpu = false;
-                }
-            } else {
-                println!("[Rust] No Vulkan devices found, falling back to CPU.");
-                ctx_params.use_gpu = false;
-            }
-        }
-        #[cfg(feature = "cuda")]
-        {
-            println!("[Rust] CUDA feature compiled. Enabling CUDA GPU acceleration.");
-            ctx_params.use_gpu = true;
-            ctx_params.gpu_device = 0; // default device ID
-            selected_device_name = "CUDA GPU".to_string();
-        }
-        #[cfg(not(any(feature = "vulkan", feature = "cuda")))]
-        {
-            println!("[Rust] Neither Vulkan nor CUDA feature compiled, falling back to CPU.");
-            ctx_params.use_gpu = false;
-        }
-    } else {
-        ctx_params.use_gpu = false;
-    }
+    let selected_device_name = setup_gpu_device(&mut ctx_params, use_gpu);
     println!("[Rust] Hardware device selected for model execution context: {}", selected_device_name);
     
     let ctx = get_or_create_context(&model_path, use_gpu, ctx_params)?;
@@ -639,6 +648,8 @@ pub(crate) fn run_transcription_inner(
                         start_ms: segment.start_timestamp() * 10 + global_offset_ms,
                         end_ms: segment.end_timestamp() * 10 + global_offset_ms,
                         text: cleaned_text,
+                        words: Vec::new(),
+                        timestamp_quality: "Vad".to_string(),
                     });
                 }
             }
@@ -688,6 +699,8 @@ pub(crate) fn run_transcription_inner(
                     start_ms: start * 10,
                     end_ms: end * 10,
                     text,
+                    words: Vec::new(),
+                    timestamp_quality: "Vad".to_string(),
                 });
             }
         }

@@ -369,7 +369,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('识别模型 (Whisper)', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.grey)),
+        const Text('识别模型 (Qwen3-ASR)', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.grey)),
         const SizedBox(height: 8),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -384,10 +384,10 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
               value: selectedModel,
               dropdownColor: const Color(0xFF1E1E2C),
               focusColor: Colors.transparent,
-              items: ModelService.availableModels.map((m) {
-                final isDl = downloadedModels.contains(m.filename);
+              items: ModelService.availableQwenModels.where((m) => m.type == ModelType.asr).map((m) {
+                final isDl = downloadedModels.contains(m.dirName);
                 return DropdownMenuItem<String>(
-                  value: m.filename,
+                  value: m.dirName,
                   child: Row(
                     children: [
                       Text(m.name),
@@ -398,7 +398,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                       ),
                       const Spacer(),
                       Tooltip(
-                        message: isDl ? '模型已就绪 (可前往管理)' : '点击下载',
+                        message: isDl ? '模型已就绪' : '点击下载',
                         child: GestureDetector(
                           onTap: () {
                             provider.setCurrentTab(2);
@@ -664,15 +664,17 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   }
 
   Widget _buildBackConfigSummary(TranscriptionProvider provider) {
-    final modelName = ModelService.availableModels.firstWhere(
-      (m) => m.filename == provider.selectedModel,
-      orElse: () => WhisperModelInfo(
+    final modelName = ModelService.availableQwenModels.firstWhere(
+      (m) => m.dirName == provider.selectedModel,
+      orElse: () => QwenModelInfo(
+        id: 'unknown',
         name: '未知模型',
-        filename: '',
+        description: '',
+        dirName: '',
         size: '',
         sizeMB: 0,
-        url: '',
-        fallbackUrl: '',
+        type: ModelType.asr,
+        files: [],
       ),
     ).name;
 

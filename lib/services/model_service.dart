@@ -1,68 +1,157 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart' show rootBundle;
 
-class WhisperModelInfo {
+enum ModelType { asr, aligner }
+
+class ModelMirror {
+  final String id;
   final String name;
+  final String baseUrl;
+  final String description;
+  int? latencyMs;
+
+  ModelMirror({
+    required this.id,
+    required this.name,
+    required this.baseUrl,
+    required this.description,
+    this.latencyMs,
+  });
+}
+
+class QwenModelFile {
   final String filename;
+  final String urlPath;
+  final double sizeMB;
+
+  QwenModelFile({
+    required this.filename,
+    required this.urlPath,
+    required this.sizeMB,
+  });
+}
+
+class QwenModelInfo {
+  final String id;
+  final String name;
+  final String description;
+  final String dirName;
   final String size;
   final double sizeMB;
-  final String url;
-  final String fallbackUrl;
+  final ModelType type;
+  final List<QwenModelFile> files;
 
-  WhisperModelInfo({
+  QwenModelInfo({
+    required this.id,
     required this.name,
-    required this.filename,
+    required this.description,
+    required this.dirName,
     required this.size,
     required this.sizeMB,
-    required this.url,
-    required this.fallbackUrl,
+    required this.type,
+    required this.files,
   });
 }
 
 class ModelService {
-  static final List<WhisperModelInfo> availableModels = [
-    WhisperModelInfo(
-      name: 'Tiny (快 / 适合测试)',
-      filename: 'ggml-tiny.bin',
-      size: '75 MB',
-      sizeMB: 75.0,
-      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin',
-      fallbackUrl: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin',
+  static final List<ModelMirror> availableMirrors = [
+    ModelMirror(
+      id: 'hf-mirror',
+      name: 'HF-Mirror 国内镜像站 (推荐)',
+      baseUrl: 'https://hf-mirror.com',
+      description: '国内高速 CDN 加速镜像，适合国内网络环境',
     ),
-    WhisperModelInfo(
-      name: 'Base (推荐 / 平衡度高)',
-      filename: 'ggml-base.bin',
-      size: '140 MB',
-      sizeMB: 140.0,
-      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
-      fallbackUrl: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-base.bin',
+    ModelMirror(
+      id: 'huggingface',
+      name: 'HuggingFace 官方源',
+      baseUrl: 'https://huggingface.co',
+      description: '官方直连源，海外网络环境推荐',
     ),
-    WhisperModelInfo(
-      name: 'Small (适中 / 精度适中)',
-      filename: 'ggml-small.bin',
-      size: '460 MB',
-      sizeMB: 460.0,
-      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin',
-      fallbackUrl: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-small.bin',
+    ModelMirror(
+      id: 'modelscope',
+      name: 'ModelScope 魔搭社区',
+      baseUrl: 'https://modelscope.cn',
+      description: '阿里魔搭社区镜像节点',
     ),
-    WhisperModelInfo(
-      name: 'Large V3 Turbo Q8 (稍慢 / 较精确)',
-      filename: 'ggml-large-v3-turbo-q8_0.bin',
-      size: '834 MB',
-      sizeMB: 834.0,
-      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin',
-      fallbackUrl: 'https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin',
+  ];
+
+  static final List<QwenModelInfo> availableQwenModels = [
+    QwenModelInfo(
+      id: 'qwen3-asr-0.6b',
+      name: 'Qwen3-ASR 0.6B',
+      description: '极速 · 低内存占用 (推荐显存 < 4GB)',
+      dirName: 'qwen3-asr-0.6b',
+      size: '930 MB',
+      sizeMB: 930.0,
+      type: ModelType.asr,
+      files: [
+        QwenModelFile(
+          filename: 'config.json',
+          urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/config.json',
+          sizeMB: 0.1,
+        ),
+        QwenModelFile(
+          filename: 'encoder.onnx',
+          urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/encoder.int4.onnx',
+          sizeMB: 450.0,
+        ),
+        QwenModelFile(
+          filename: 'decoder.gguf',
+          urlPath: 'mradermacher/Qwen3-ASR-0.6B-GGUF/resolve/main/Qwen3-ASR-0.6B.Q4_K_M.gguf',
+          sizeMB: 480.0,
+        ),
+      ],
     ),
-    WhisperModelInfo(
-      name: 'Large V3 Q8 (最慢 / 最精确)',
-      filename: 'ggml-large-v3-q8_0.bin',
-      size: '1.57 GB',
-      sizeMB: 1608.0,
-      url: 'https://huggingface.co/adriabama06/whisper-large-v3-ggml/resolve/main/ggml-large-v3-q8_0.bin',
-      fallbackUrl: 'https://hf-mirror.com/adriabama06/whisper-large-v3-ggml/resolve/main/ggml-large-v3-q8_0.bin',
+    QwenModelInfo(
+      id: 'qwen3-asr-1.7b',
+      name: 'Qwen3-ASR 1.7B',
+      description: '高精度 · 推荐 (更高识别准确率)',
+      dirName: 'qwen3-asr-1.7b',
+      size: '2.42 GB',
+      sizeMB: 2420.0,
+      type: ModelType.asr,
+      files: [
+        QwenModelFile(
+          filename: 'config.json',
+          urlPath: 'andrewleech/qwen3-asr-1.7b-onnx/resolve/main/config.json',
+          sizeMB: 0.1,
+        ),
+        QwenModelFile(
+          filename: 'encoder.onnx',
+          urlPath: 'andrewleech/qwen3-asr-1.7b-onnx/resolve/main/encoder.int4.onnx',
+          sizeMB: 1270.0,
+        ),
+        QwenModelFile(
+          filename: 'decoder.gguf',
+          urlPath: 'mradermacher/Qwen3-ASR-1.7B-GGUF/resolve/main/Qwen3-ASR-1.7B.Q4_K_M.gguf',
+          sizeMB: 461.0,
+        ),
+      ],
+    ),
+    QwenModelInfo(
+      id: 'forced-aligner-0.6b',
+      name: 'ForcedAligner 0.6B',
+      description: '精准时间轴组件 (词/字级精确对齐)',
+      dirName: 'forced-aligner-0.6b',
+      size: '450 MB',
+      sizeMB: 450.0,
+      type: ModelType.aligner,
+      files: [
+        QwenModelFile(
+          filename: 'config.json',
+          urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/config.json',
+          sizeMB: 0.1,
+        ),
+        QwenModelFile(
+          filename: 'aligner.onnx',
+          urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/encoder.int4.onnx',
+          sizeMB: 450.0,
+        ),
+      ],
     ),
   ];
 
@@ -78,85 +167,184 @@ class ModelService {
   Future<List<String>> getDownloadedModels() async {
     try {
       final dir = await getModelDir();
-      final List<String> files = [];
-      await for (final entity in dir.list()) {
-        if (entity is File && entity.path.endsWith('.bin')) {
-          files.add(p.basename(entity.path));
+      final List<String> downloadedDirs = [];
+      for (final model in availableQwenModels) {
+        if (model.type == ModelType.asr) {
+          final path = p.join(dir.path, model.dirName);
+          if (await Directory(path).exists()) {
+            final isDownloaded = await isModelDownloaded(model.dirName);
+            if (isDownloaded) {
+              downloadedDirs.add(model.dirName);
+            }
+          }
         }
       }
-      return files;
+      return downloadedDirs;
     } catch (e) {
       return [];
     }
   }
 
-  Future<String> getModelPath(String filename) async {
+  Future<String> getModelPath(String dirName) async {
     final dir = await getModelDir();
-    return p.join(dir.path, filename);
+    return p.join(dir.path, dirName);
   }
 
-  Future<bool> isModelDownloaded(String filename) async {
-    final path = await getModelPath(filename);
-    final file = File(path);
-    return await file.exists() && await file.length() > 1024 * 1024; // > 1MB
+  Future<bool> isModelDownloaded(String dirName) async {
+    final path = await getModelPath(dirName);
+    final modelFolder = Directory(path);
+    if (!await modelFolder.exists()) return false;
+
+    if (await isModelCorrupted(dirName)) {
+      try {
+        debugPrint('[ModelService] Auto purging corrupted model directory $path');
+        await modelFolder.delete(recursive: true);
+      } catch (e) {
+        debugPrint('[ModelService] Failed to delete corrupted model dir: $e');
+      }
+      return false;
+    }
+
+    return true;
   }
 
-  final Dio _dio = Dio();
+  Future<bool> isModelCorrupted(String dirName) async {
+    final path = await getModelPath(dirName);
+    final modelFolder = Directory(path);
+    if (!await modelFolder.exists()) return true;
+
+    final modelInfoMatch = availableQwenModels.where((m) => m.dirName == dirName);
+    if (modelInfoMatch.isEmpty) {
+      return false;
+    }
+
+    final files = await modelFolder.list().toList();
+    if (files.isEmpty) return true;
+
+    int validFiles = 0;
+    int totalBytes = 0;
+
+    for (final entity in files) {
+      if (entity is File) {
+        final len = await entity.length();
+        totalBytes += len;
+        if (len > 10 * 1024 * 1024) {
+          validFiles++;
+        }
+      }
+    }
+
+    return !(validFiles >= 1 && totalBytes > 50 * 1024 * 1024);
+  }
+
+  Future<Map<String, int?>> testMirrorsSpeed() async {
+    final dio = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 4),
+      receiveTimeout: const Duration(seconds: 4),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+    ));
+
+    final Map<String, int?> results = {};
+
+    await Future.wait(availableMirrors.map((mirror) async {
+      final stopwatch = Stopwatch()..start();
+      try {
+        final testUrl = mirror.id == 'modelscope'
+            ? 'https://modelscope.cn'
+            : '${mirror.baseUrl}/andrewleech/qwen3-asr-0.6b-onnx/resolve/main/config.json';
+        final response = await dio.head(testUrl);
+        stopwatch.stop();
+        if (response.statusCode != null && response.statusCode! < 400) {
+          results[mirror.id] = stopwatch.elapsedMilliseconds;
+          mirror.latencyMs = stopwatch.elapsedMilliseconds;
+        } else {
+          results[mirror.id] = null;
+          mirror.latencyMs = null;
+        }
+      } catch (e) {
+        results[mirror.id] = null;
+        mirror.latencyMs = null;
+      }
+    }));
+
+    return results;
+  }
+
   CancelToken? _cancelToken;
 
   Future<void> downloadModel({
-    required WhisperModelInfo model,
+    required QwenModelInfo model,
+    ModelMirror? mirror,
     required Function(double progress) onProgress,
     required Function() onSuccess,
     required Function(String error) onFailure,
   }) async {
+    Directory? targetDir;
     try {
       final dir = await getModelDir();
-      final savePath = p.join(dir.path, model.filename);
-      final tempSavePath = '$savePath.tmp';
+      targetDir = Directory(p.join(dir.path, model.dirName));
+      if (!await targetDir.exists()) {
+        await targetDir.create(recursive: true);
+      }
 
       _cancelToken = CancelToken();
 
-      try {
-        await _dio.download(
-          model.url,
-          tempSavePath,
+      final selectedMirror = mirror ?? availableMirrors.first;
+      final baseUrl = selectedMirror.baseUrl;
+
+      double totalExpectedBytes = model.sizeMB * 1024 * 1024;
+      double completedFileBytes = 0.0;
+
+      final dio = Dio(BaseOptions(
+        followRedirects: true,
+        maxRedirects: 10,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+      ));
+
+      for (int i = 0; i < model.files.length; i++) {
+        final fileInfo = model.files[i];
+        final targetFile = File(p.join(targetDir.path, fileInfo.filename));
+        final fileExpectedBytes = fileInfo.sizeMB * 1024 * 1024;
+
+        final fileDownloadUrl = mirror?.id == 'modelscope'
+            ? 'https://modelscope.cn/api/v1/models/${fileInfo.urlPath}'
+            : '$baseUrl/${fileInfo.urlPath}';
+
+        debugPrint('[ModelService] Downloading from $fileDownloadUrl to ${targetFile.path}');
+
+        await dio.download(
+          fileDownloadUrl,
+          targetFile.path,
           cancelToken: _cancelToken,
           onReceiveProgress: (received, total) {
-            if (total != -1) {
-              final progress = received / total;
-              onProgress(progress);
-            }
+            final fileTotal = total > 0 ? total.toDouble() : fileExpectedBytes;
+            final currentProgressBytes = completedFileBytes + (received.toDouble().clamp(0.0, fileTotal));
+            final totalProgress = (currentProgressBytes / totalExpectedBytes).clamp(0.0, 0.99);
+            onProgress(totalProgress);
           },
         );
-      } catch (e) {
-        if (CancelToken.isCancel(e as DioException)) {
-          rethrow;
-        }
-        // 主站下载失败，回退到镜像站 CDN
-        await _dio.download(
-          model.fallbackUrl,
-          tempSavePath,
-          cancelToken: _cancelToken,
-          onReceiveProgress: (received, total) {
-            if (total != -1) {
-              final progress = received / total;
-              onProgress(progress);
-            }
-          },
-        );
+
+        completedFileBytes += fileExpectedBytes;
       }
 
-      // 下载完成后，将重命名临时文件
-      final tempFile = File(tempSavePath);
-      if (await tempFile.exists()) {
-        await tempFile.rename(savePath);
-        onSuccess();
-      } else {
-        onFailure('下载文件不存在');
-      }
+      onProgress(1.0);
+      onSuccess();
     } catch (e) {
-      if (CancelToken.isCancel(e as DioException)) {
+      debugPrint('[ModelService] Download error: $e');
+      if (targetDir != null && await targetDir.exists()) {
+        final isDownloaded = await isModelDownloaded(model.dirName);
+        if (!isDownloaded) {
+          try {
+            await targetDir.delete(recursive: true);
+          } catch (_) {}
+        }
+      }
+
+      if (e is DioException && CancelToken.isCancel(e)) {
         onFailure('下载已取消');
       } else {
         onFailure('下载失败: ${e.toString()}');
@@ -168,11 +356,16 @@ class ModelService {
     _cancelToken?.cancel();
   }
 
-  Future<void> deleteModel(String filename) async {
-    final path = await getModelPath(filename);
-    final file = File(path);
-    if (await file.exists()) {
-      await file.delete();
+  Future<void> deleteModel(String dirName) async {
+    final path = await getModelPath(dirName);
+    final dir = Directory(path);
+    if (await dir.exists()) {
+      await dir.delete(recursive: true);
+    } else {
+      final file = File(path);
+      if (await file.exists()) {
+        await file.delete();
+      }
     }
   }
 
@@ -190,7 +383,6 @@ class ModelService {
       return targetPath;
     }
     
-    // 加载模型
     final data = await rootBundle.load('assets/models/DeepFilterNet3_onnx.tar.gz');
     final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
     await targetFile.writeAsBytes(bytes);
@@ -219,4 +411,3 @@ class ModelService {
     return targetPath;
   }
 }
-

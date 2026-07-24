@@ -4,6 +4,9 @@
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
 import 'api/ffmpeg.dart';
+import 'api/hardware.dart';
+import 'api/models.dart';
+import 'api/qwen.dart';
 import 'api/simple.dart';
 import 'api/stream_pipeline.dart';
 import 'api/whisper.dart';
@@ -12,6 +15,7 @@ import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_io.dart';
+import 'qwen/backend.dart';
 
 abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RustLibApiImplPlatform({
@@ -52,6 +56,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PipelineConfig dco_decode_box_autoadd_pipeline_config(dynamic raw);
 
   @protected
+  QwenWarmupConfig dco_decode_box_autoadd_qwen_warmup_config(dynamic raw);
+
+  @protected
   TranscriptionEvent dco_decode_box_autoadd_transcription_event(dynamic raw);
 
   @protected
@@ -61,6 +68,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt dco_decode_box_autoadd_usize(dynamic raw);
+
+  @protected
+  ComputeDeviceInfo dco_decode_compute_device_info(dynamic raw);
+
+  @protected
+  DecoderBackend dco_decode_decoder_backend(dynamic raw);
+
+  @protected
+  EncoderBackend dco_decode_encoder_backend(dynamic raw);
 
   @protected
   double dco_decode_f_32(dynamic raw);
@@ -87,6 +103,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<AudioTrackInfo> dco_decode_list_audio_track_info(dynamic raw);
 
   @protected
+  List<ComputeDeviceInfo> dco_decode_list_compute_device_info(dynamic raw);
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
@@ -94,6 +113,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<VulkanDeviceInfo> dco_decode_list_vulkan_device_info(dynamic raw);
+
+  @protected
+  List<WordItem> dco_decode_list_word_item(dynamic raw);
+
+  @protected
+  ModelInfo dco_decode_model_info(dynamic raw);
 
   @protected
   String? dco_decode_opt_String(dynamic raw);
@@ -108,7 +133,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PipelineConfig dco_decode_pipeline_config(dynamic raw);
 
   @protected
+  QwenHardwareInfo dco_decode_qwen_hardware_info(dynamic raw);
+
+  @protected
+  QwenWarmupConfig dco_decode_qwen_warmup_config(dynamic raw);
+
+  @protected
   (String, String) dco_decode_record_string_string(dynamic raw);
+
+  @protected
+  TimestampMode dco_decode_timestamp_mode(dynamic raw);
 
   @protected
   TranscriptionEvent dco_decode_transcription_event(dynamic raw);
@@ -130,6 +164,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   VulkanDeviceInfo dco_decode_vulkan_device_info(dynamic raw);
+
+  @protected
+  WordItem dco_decode_word_item(dynamic raw);
 
   @protected
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
@@ -161,6 +198,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  QwenWarmupConfig sse_decode_box_autoadd_qwen_warmup_config(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   TranscriptionEvent sse_decode_box_autoadd_transcription_event(
     SseDeserializer deserializer,
   );
@@ -172,6 +214,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   BigInt sse_decode_box_autoadd_usize(SseDeserializer deserializer);
+
+  @protected
+  ComputeDeviceInfo sse_decode_compute_device_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DecoderBackend sse_decode_decoder_backend(SseDeserializer deserializer);
+
+  @protected
+  EncoderBackend sse_decode_encoder_backend(SseDeserializer deserializer);
 
   @protected
   double sse_decode_f_32(SseDeserializer deserializer);
@@ -202,6 +255,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<ComputeDeviceInfo> sse_decode_list_compute_device_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
@@ -213,6 +271,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<VulkanDeviceInfo> sse_decode_list_vulkan_device_info(
     SseDeserializer deserializer,
   );
+
+  @protected
+  List<WordItem> sse_decode_list_word_item(SseDeserializer deserializer);
+
+  @protected
+  ModelInfo sse_decode_model_info(SseDeserializer deserializer);
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -227,9 +291,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PipelineConfig sse_decode_pipeline_config(SseDeserializer deserializer);
 
   @protected
+  QwenHardwareInfo sse_decode_qwen_hardware_info(SseDeserializer deserializer);
+
+  @protected
+  QwenWarmupConfig sse_decode_qwen_warmup_config(SseDeserializer deserializer);
+
+  @protected
   (String, String) sse_decode_record_string_string(
     SseDeserializer deserializer,
   );
+
+  @protected
+  TimestampMode sse_decode_timestamp_mode(SseDeserializer deserializer);
 
   @protected
   TranscriptionEvent sse_decode_transcription_event(
@@ -255,6 +328,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   VulkanDeviceInfo sse_decode_vulkan_device_info(SseDeserializer deserializer);
+
+  @protected
+  WordItem sse_decode_word_item(SseDeserializer deserializer);
 
   @protected
   void sse_encode_AnyhowException(
@@ -296,6 +372,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_qwen_warmup_config(
+    QwenWarmupConfig self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_transcription_event(
     TranscriptionEvent self,
     SseSerializer serializer,
@@ -309,6 +391,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_box_autoadd_usize(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_compute_device_info(
+    ComputeDeviceInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_decoder_backend(
+    DecoderBackend self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_encoder_backend(
+    EncoderBackend self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_f_32(double self, SseSerializer serializer);
@@ -341,6 +441,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_compute_device_info(
+    List<ComputeDeviceInfo> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
     SseSerializer serializer,
@@ -359,6 +465,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_word_item(List<WordItem> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_model_info(ModelInfo self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
@@ -374,10 +486,25 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_qwen_hardware_info(
+    QwenHardwareInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_qwen_warmup_config(
+    QwenWarmupConfig self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_record_string_string(
     (String, String) self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_timestamp_mode(TimestampMode self, SseSerializer serializer);
 
   @protected
   void sse_encode_transcription_event(
@@ -408,6 +535,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     VulkanDeviceInfo self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_word_item(WordItem self, SseSerializer serializer);
 }
 
 // Section: wire_class

@@ -6,12 +6,12 @@ import '../services/model_service.dart';
 class ModelsView extends StatelessWidget {
   const ModelsView({super.key});
 
-  Future<void> _deleteModel(BuildContext context, String filename, TranscriptionProvider provider) async {
+  Future<void> _deleteModel(BuildContext context, String dirName, TranscriptionProvider provider) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('删除模型文件'),
-        content: Text('确定要删除模型 $filename 吗？这将释放磁盘空间，之后如果需要需重新下载。'),
+        title: const Text('删除模型组件'),
+        content: Text('确定要删除模型 $dirName 吗？这将释放磁盘空间，之后如果需要需重新下载。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
           TextButton(
@@ -24,10 +24,10 @@ class ModelsView extends StatelessWidget {
     );
 
     if (confirm == true) {
-      await provider.deleteModel(filename);
+      await provider.deleteModel(dirName);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('模型 $filename 已成功删除')),
+          SnackBar(content: Text('模型 $dirName 已成功删除')),
         );
       }
     }
@@ -43,6 +43,8 @@ class ModelsView extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildHeader(),
+          const SizedBox(height: 16),
+          _buildMirrorSelector(context, provider),
           const SizedBox(height: 24),
           Expanded(
             child: _buildModelsGrid(context, provider),
@@ -57,15 +59,71 @@ class ModelsView extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          '模型管理器',
+          'Qwen3 模型管理器',
           style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
         ),
         SizedBox(height: 4),
         Text(
-          '下载并管理用于离线语音识别的 Whisper (GGML 格式) 模型',
+          '管理 Qwen3-ASR (0.6B/1.7B) 语音识别模型与 ForcedAligner 精准时间轴组件',
           style: TextStyle(fontSize: 14, color: Colors.grey),
         ),
       ],
+    );
+  }
+
+  Widget _buildMirrorSelector(BuildContext context, TranscriptionProvider provider) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0x0CFFFFFF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0x1FFFFFFF)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_download_outlined, color: Color(0xFF8B5CF6)),
+          const SizedBox(width: 12),
+          const Text('下载源 (镜像站):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<ModelMirror>(
+                value: provider.selectedMirror,
+                isExpanded: true,
+                dropdownColor: const Color(0xFF1E1E2C),
+                items: ModelService.availableMirrors.map((mirror) {
+                  final lat = mirror.latencyMs;
+                  final latText = lat != null ? ' (${lat}ms)' : '';
+                  return DropdownMenuItem<ModelMirror>(
+                    value: mirror,
+                    child: Text('${mirror.name}$latText'),
+                  );
+                }).toList(),
+                onChanged: (val) {
+                  if (val != null) provider.setSelectedMirror(val);
+                },
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          ElevatedButton.icon(
+            onPressed: provider.isTestingMirrors ? null : () => provider.testMirrorsSpeed(),
+            icon: provider.isTestingMirrors
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.speed, size: 16),
+            label: Text(provider.isTestingMirrors ? '测速中...' : '一键测速'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF8B5CF6),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -77,11 +135,11 @@ class ModelsView extends StatelessWidget {
         mainAxisSpacing: 20,
         childAspectRatio: 1.6,
       ),
-      itemCount: ModelService.availableModels.length,
+      itemCount: ModelService.availableQwenModels.length,
       itemBuilder: (context, index) {
-        final model = ModelService.availableModels[index];
-        final isDownloaded = provider.downloadedModels.contains(model.filename);
-        final isDownloading = provider.downloadingModelFile == model.filename;
+        final model = ModelService.availableQwenModels[index];
+        final isDownloaded = provider.downloadedModels.contains(model.dirName);
+        final isDownloading = provider.downloadingModelFile == model.dirName;
         final downloadProgress = provider.downloadProgress;
 
         return Card(
@@ -105,7 +163,7 @@ class ModelsView extends StatelessWidget {
                 Row(
                   children: [
                     Text(
-                      model.name.split(' (').first,
+                      model.name,
                       style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                     const Spacer(),
@@ -126,13 +184,14 @@ class ModelsView extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 6),
                 Text(
-                  '文件名: ${model.filename}',
+                  model.description,
                   style: const TextStyle(fontSize: 12, color: Colors.grey),
                 ),
+                const SizedBox(height: 4),
                 Text(
-                  '文件大小: ${model.size}',
+                  '组件大小: ${model.size}',
                   style: const TextStyle(fontSize: 12, color: Colors.grey),
                 ),
                 const Spacer(),
@@ -166,30 +225,43 @@ class ModelsView extends StatelessWidget {
                     ],
                   ),
                 ] else ...[
+                  if (provider.downloadError.isNotEmpty) ...[
+                    Text(
+                      provider.downloadError,
+                      style: const TextStyle(fontSize: 11, color: Colors.redAccent),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                  ],
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       if (isDownloaded)
                         IconButton(
                           icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
-                          onPressed: () => _deleteModel(context, model.filename, provider),
+                          onPressed: () => _deleteModel(context, model.dirName, provider),
                         )
                       else
                         const SizedBox(),
                       ElevatedButton(
                         onPressed: provider.downloadingModelFile != null
-                            ? null // 阻止同时下载多个
+                            ? null
                             : isDownloaded
                                 ? () {
-                                    provider.setSelectedModel(model.filename);
+                                    if (model.type == ModelType.asr) {
+                                      provider.setSelectedModel(model.dirName);
+                                    } else {
+                                      provider.setAlignerModel(model.dirName);
+                                    }
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('已默认选择 ${model.filename} 模型')),
+                                      SnackBar(content: Text('已成功启用 ${model.name}')),
                                     );
                                   }
                                 : () {
-                                    provider.downloadModel(model);
+                                    provider.downloadQwenModel(model);
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('开始下载 ${model.filename} 模型...')),
+                                      SnackBar(content: Text('开始从 [${provider.selectedMirror.name}] 下载 ${model.name}...')),
                                     );
                                   },
                         style: ElevatedButton.styleFrom(
@@ -200,7 +272,7 @@ class ModelsView extends StatelessWidget {
                           ),
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         ),
-                        child: Text(isDownloaded ? '选用模型' : '开始下载'),
+                        child: Text(isDownloaded ? '启用组件' : '开始下载'),
                       ),
                     ],
                   ),

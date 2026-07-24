@@ -4,12 +4,13 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import '../frb_generated.dart';
+import '../qwen/backend.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'whisper.dart';
 
 // These functions are ignored because they are not marked as `pub`: `add_perf_record`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_media_duration_secs`, `get_physical_pcore_mask`, `join`, `lock_high_priority`, `parse_duration_str`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_vad_worker`, `spawn_whisper_worker`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FfmpegPumpHandle`, `WhisperTask`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `eq`, `fmt`, `fmt`
 // These functions are ignored (category: IgnoreBecauseNotAllowedOwner): `add`
 
 void setRustPerfLogging({required bool enable}) => RustLib.instance.api
@@ -31,6 +32,12 @@ class PipelineConfig {
   final String modelPath;
   final String vadModelPath;
   final String dfModelPath;
+  final String asrModelDir;
+  final String? alignerModelDir;
+  final String? contextPrompt;
+  final EncoderBackend encoderBackend;
+  final DecoderBackend decoderBackend;
+  final TimestampMode timestampMode;
   final String? language;
   final bool translate;
   final int? threads;
@@ -51,6 +58,12 @@ class PipelineConfig {
     required this.modelPath,
     required this.vadModelPath,
     required this.dfModelPath,
+    required this.asrModelDir,
+    this.alignerModelDir,
+    this.contextPrompt,
+    required this.encoderBackend,
+    required this.decoderBackend,
+    required this.timestampMode,
     this.language,
     required this.translate,
     this.threads,
@@ -73,6 +86,12 @@ class PipelineConfig {
       modelPath.hashCode ^
       vadModelPath.hashCode ^
       dfModelPath.hashCode ^
+      asrModelDir.hashCode ^
+      alignerModelDir.hashCode ^
+      contextPrompt.hashCode ^
+      encoderBackend.hashCode ^
+      decoderBackend.hashCode ^
+      timestampMode.hashCode ^
       language.hashCode ^
       translate.hashCode ^
       threads.hashCode ^
@@ -97,6 +116,12 @@ class PipelineConfig {
           modelPath == other.modelPath &&
           vadModelPath == other.vadModelPath &&
           dfModelPath == other.dfModelPath &&
+          asrModelDir == other.asrModelDir &&
+          alignerModelDir == other.alignerModelDir &&
+          contextPrompt == other.contextPrompt &&
+          encoderBackend == other.encoderBackend &&
+          decoderBackend == other.decoderBackend &&
+          timestampMode == other.timestampMode &&
           language == other.language &&
           translate == other.translate &&
           threads == other.threads &&
@@ -111,3 +136,5 @@ class PipelineConfig {
           vadMinSilenceMs == other.vadMinSilenceMs &&
           selectedAudioTrack == other.selectedAudioTrack;
 }
+
+enum TimestampMode { fast, precise }

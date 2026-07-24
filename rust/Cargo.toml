@@ -8,14 +8,18 @@ crate-type = ["cdylib"]
 
 [dependencies]
 flutter_rust_bridge = "=2.11.1"
-whisper-rs = { version = "0.16.0" }
+whisper-rs = { version = "0.16.0", optional = true }
 hound = "3.5.1"
 anyhow = "1.0"
+thiserror = "1.0"
 zhconv = "0.4.1"
 rubato = "0.15"
 deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", package = "deep_filter", default-features = false }
 deepfilter-rt = { path = "third_party/deepfilter-rt" }
-ort = { version = "=2.0.0-rc.11", default-features = false, features = ["load-dynamic", "ndarray"] }
+# Encoder: ONNX Runtime with DirectML (Windows GPU)
+ort = { version = "=2.0.0-rc.11", default-features = false, features = ["download-binaries", "copy-dylibs", "tls-native", "ndarray", "directml"] }
+# Decoder: llama.cpp via Vulkan (GGUF / multimodal LLM)
+llama-cpp-sys-2 = { version = "0.1.152", default-features = false, optional = true, features = ["vulkan"] }
 flate2 = "1.0"
 tar = "0.4"
 crossbeam-channel = "0.5"
@@ -23,12 +27,22 @@ core_affinity = "0.8"
 windows-sys = { version = "0.61.2", features = ["Win32_System_Threading", "Win32_System_LibraryLoader"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+memmap2 = "0.9"
+sha2 = "0.10"
+once_cell = "1.19"
+parking_lot = "0.12"
+realfft = "1"
 
 
 [features]
-default = ["vulkan"]
-vulkan = ["whisper-rs/vulkan"]
-cuda = ["whisper-rs/cuda"]
+# 默认启用 Vulkan 推理 + DirectML ONNX 推理；任一都可在 release 时被覆盖
+default = ["qwen-vulkan", "qwen-dml", "legacy-whisper", "vulkan"]
+qwen-vulkan = ["dep:llama-cpp-sys-2"]
+qwen-dml    = ["ort/directml"]
+qwen-cpu    = []
+legacy-whisper = ["dep:whisper-rs"]
+vulkan = ["legacy-whisper", "whisper-rs/vulkan"]
+cuda = ["legacy-whisper", "whisper-rs/cuda", "ort/cuda"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
@@ -43,6 +57,3 @@ codegen-units = 1
 debug = 0
 panic = "abort"
 strip = true
-
-
-

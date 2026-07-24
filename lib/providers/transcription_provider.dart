@@ -10,6 +10,7 @@ import 'package:window_manager/window_manager.dart';
 import '../src/rust/api/ffmpeg.dart' as rust_ffmpeg;
 import '../src/rust/api/whisper.dart' as rust_whisper;
 import '../src/rust/api/stream_pipeline.dart' as rust_stream;
+import '../src/rust/qwen/backend.dart' as rust_qwen_backend;
 import '../services/ffmpeg_service.dart';
 import '../services/model_service.dart';
 
@@ -279,6 +280,64 @@ class TranscriptionProvider with ChangeNotifier {
 
   StreamSubscription? _transcriptionSub;
 
+  String? _selectedAlignerModel;
+  String? get selectedAlignerModel => _selectedAlignerModel;
+
+  void setAlignerModel(String dirName) {
+    _selectedAlignerModel = dirName;
+    _safeNotifyListeners();
+  }
+
+  Future<void> downloadQwenModel(QwenModelInfo model) async {
+    _downloadingModelFile = model.dirName;
+    _downloadProgress = 0.0;
+    _downloadError = '';
+    _safeNotifyListeners();
+
+    await _modelService.downloadModel(
+      model: model,
+      mirror: _selectedMirror,
+      onProgress: (progress) {
+        _downloadProgress = progress;
+        _safeNotifyListeners();
+      },
+      onSuccess: () async {
+        _downloadingModelFile = null;
+        _downloadedModels = await _modelService.getDownloadedModels();
+        if (model.type == ModelType.asr) {
+          _selectedModel = model.dirName;
+        } else {
+          _selectedAlignerModel = model.dirName;
+        }
+        _safeNotifyListeners();
+      },
+      onFailure: (error) {
+        _downloadingModelFile = null;
+        _downloadError = error;
+        _safeNotifyListeners();
+      },
+    );
+  }
+
+  Future<bool> checkAndRepairModel(String dirName) async {
+    final isCorrupted = await _modelService.isModelCorrupted(dirName);
+    if (isCorrupted) {
+      debugPrint('[TranscriptionProvider] Model $dirName is corrupted. Auto purging...');
+      await _modelService.deleteModel(dirName);
+      _downloadedModels = await _modelService.getDownloadedModels();
+      if (_selectedModel == dirName) {
+        _selectedModel = _downloadedModels.isNotEmpty ? _downloadedModels.first : null;
+      }
+      if (_selectedAlignerModel == dirName) {
+        _selectedAlignerModel = null;
+      }
+      _statusMessage = '模型缓存文件损坏，已自动清理！请重新下载模型。';
+      _safeNotifyListeners();
+      return true;
+    }
+    return false;
+  }
+
   Future<void> init() async {
     // 搜索系统 FFmpeg
     await _ffmpegService.findSystemFFmpeg();
@@ -296,11 +355,10 @@ class TranscriptionProvider with ChangeNotifier {
     // 加载已下载模型
     _downloadedModels = await _modelService.getDownloadedModels();
     
-    // 如果有已下载的模型，默认选中第一个
     if (_downloadedModels.isNotEmpty) {
       _selectedModel = _downloadedModels.first;
     } else {
-      _selectedModel = ModelService.availableModels.first.filename;
+      _selectedModel = ModelService.availableQwenModels.first.dirName;
     }
     notifyListeners();
   }
@@ -336,9 +394,9 @@ class TranscriptionProvider with ChangeNotifier {
   /// 智能低算力预警：未开启加速或开启但没有硬件加速显卡，且模型大小大于 400MB
   bool get showLowPowerWarning {
     if (_selectedModel == null) return false;
-    final modelInfo = ModelService.availableModels.firstWhere(
-      (m) => m.filename == _selectedModel,
-      orElse: () => ModelService.availableModels.first,
+    final modelInfo = ModelService.availableQwenModels.firstWhere(
+      (m) => m.dirName == _selectedModel,
+      orElse: () => ModelService.availableQwenModels.first,
     );
 
     final isGpuActive = _useGpu && _vulkanDevices.isNotEmpty;
@@ -350,32 +408,38 @@ class TranscriptionProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> downloadModel(WhisperModelInfo model) async {
-    _downloadingModelFile = model.filename;
-    _downloadProgress = 0.0;
-    _downloadError = '';
+  ModelMirror _selectedMirror = ModelService.availableMirrors.first;
+  ModelMirror get selectedMirror => _selectedMirror;
+
+  bool _isTestingMirrors = false;
+  bool get isTestingMirrors => _isTestingMirrors;
+
+  void setSelectedMirror(ModelMirror mirror) {
+    _selectedMirror = mirror;
+    notifyListeners();
+  }
+
+  Future<void> testMirrorsSpeed() async {
+    _isTestingMirrors = true;
     notifyListeners();
 
-    await _modelService.downloadModel(
-      model: model,
-      onProgress: (p) {
-        _downloadProgress = p;
-        notifyListeners();
-      },
-      onSuccess: () async {
-        _downloadingModelFile = null;
-        _downloadProgress = 0.0;
-        _selectedModel = model.filename; // 自动选中刚下载好的模型
-        _downloadedModels = await _modelService.getDownloadedModels(); // 重新加载已下载列表
-        notifyListeners();
-      },
-      onFailure: (err) {
-        _downloadingModelFile = null;
-        _downloadProgress = 0.0;
-        _downloadError = err;
-        notifyListeners();
-      },
-    );
+    final results = await _modelService.testMirrorsSpeed();
+
+    ModelMirror? fastest;
+    int minLatency = 99999;
+    for (final mirror in ModelService.availableMirrors) {
+      final lat = results[mirror.id];
+      if (lat != null && lat < minLatency) {
+        minLatency = lat;
+        fastest = mirror;
+      }
+    }
+    if (fastest != null) {
+      _selectedMirror = fastest;
+    }
+
+    _isTestingMirrors = false;
+    notifyListeners();
   }
 
   void cancelDownload() {
@@ -512,17 +576,13 @@ class TranscriptionProvider with ChangeNotifier {
       if (_selectedModel == null) return;
       try {
         final modelExists = await _modelService.isModelDownloaded(_selectedModel!);
-        if (!modelExists) return;
-        final modelPath = await _modelService.getModelPath(_selectedModel!);
-        final durationSecs = _totalMs > 0 ? (_totalMs.toDouble() / 1000.0) : 300.0;
-        debugPrint('[TranscriptionProvider] Preloading Whisper context (debounced): model=$modelPath, gpu=$_useGpu, duration=$durationSecs');
-        await rust_whisper.warmupWhisperContext(
-          modelPath: modelPath,
-          useGpu: _useGpu,
-          totalDuration: durationSecs,
-        );
+        if (!modelExists) {
+          _downloadedModels = await _modelService.getDownloadedModels();
+          _safeNotifyListeners();
+          return;
+        }
       } catch (e) {
-        debugPrint('Failed to preload Whisper context: $e');
+        debugPrint('[TranscriptionProvider] Model pre-check error: $e');
       }
     });
   }
@@ -594,10 +654,17 @@ class TranscriptionProvider with ChangeNotifier {
       return;
     }
 
-    // 检查模型文件是否存在
+    // 检查模型文件是否存在与完整性
     final modelExists = await _modelService.isModelDownloaded(_selectedModel!);
     if (!modelExists) {
       _setError('所选模型未下载，请先前往模型管理面板进行下载');
+      return;
+    }
+
+    final isCorrupted = await _modelService.isModelCorrupted(_selectedModel!);
+    if (isCorrupted) {
+      await checkAndRepairModel(_selectedModel!);
+      _setError('检测到所选模型已损坏，已自动为您清除损坏缓存！请前往模型管理器重新下载。');
       return;
     }
 
@@ -654,6 +721,12 @@ class TranscriptionProvider with ChangeNotifier {
           ffmpegPath: _ffmpegService.ffmpegPath,
           inputPath: _inputMediaFile!.path,
           modelPath: modelPath,
+          asrModelDir: modelPath,
+          alignerModelDir: _selectedAlignerModel != null ? await _modelService.getModelPath(_selectedAlignerModel!) : null,
+          contextPrompt: null,
+          encoderBackend: _useGpu ? rust_qwen_backend.EncoderBackend.directMl : rust_qwen_backend.EncoderBackend.cpu,
+          decoderBackend: _useGpu ? rust_qwen_backend.DecoderBackend.vulkan : rust_qwen_backend.DecoderBackend.cpu,
+          timestampMode: rust_stream.TimestampMode.precise,
           vadModelPath: vadModelPath,
           dfModelPath: dfModelPath,
           language: _selectedLanguage == 'auto' ? null : _selectedLanguage,
@@ -759,8 +832,22 @@ class TranscriptionProvider with ChangeNotifier {
                 debugPrint('[TranscriptionProvider] 发送成功通知异常: $e');
               }
             },
-            failure: (err) {
-              _setError('转写失败: $err');
+            failure: (err) async {
+              if (err.contains('Failed to load Qwen runtime') ||
+                  err.contains('model not found') ||
+                  err.contains('Corrupt') ||
+                  err.contains('ONNX') ||
+                  err.contains('manifest')) {
+                if (_selectedModel != null) {
+                  await checkAndRepairModel(_selectedModel!);
+                }
+                if (_selectedAlignerModel != null) {
+                  await checkAndRepairModel(_selectedAlignerModel!);
+                }
+                _setError('模型加载失败（检测到文件已损毁），已自动清除损坏缓存！请在模型管理器中重新下载。');
+              } else {
+                _setError('转写失败: $err');
+              }
 
               // 清除状态栏进度条
               try {

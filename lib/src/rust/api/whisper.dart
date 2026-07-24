@@ -8,9 +8,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'whisper.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `calculate_dtw_mem_size`, `calculate_rms`, `check_vulkan_supported_safely`, `get_dtw_model_preset`, `get_or_create_context`, `progress_callback_trampoline`, `register_thread_as_pro_audio`, `run_transcription_inner`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedContext`, `DISPLAY_DEVICEA`, `ProgressContext`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `as_ptr`, `calculate_dtw_mem_size`, `calculate_rms`, `check_vulkan_supported_safely`, `get_dtw_model_preset`, `get_or_create_context`, `new`, `progress_callback_trampoline`, `register_thread_as_pro_audio`, `run_transcription_inner`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedContext`, `DISPLAY_DEVICEA`, `ProgressContextGuard`, `ProgressContext`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 Future<HardwareAccelerationInfo> getHardwareAccelerationInfo() =>
     RustLib.instance.api.crateApiWhisperGetHardwareAccelerationInfo();
@@ -127,18 +127,27 @@ class TranscriptionSegment {
   final PlatformInt64 startMs;
   final PlatformInt64 endMs;
   final String text;
+  final List<WordItem> words;
+  final String timestampQuality;
 
   const TranscriptionSegment({
     required this.startMs,
     required this.endMs,
     required this.text,
+    required this.words,
+    required this.timestampQuality,
   });
 
   static Future<TranscriptionSegment> default_() =>
       RustLib.instance.api.crateApiWhisperTranscriptionSegmentDefault();
 
   @override
-  int get hashCode => startMs.hashCode ^ endMs.hashCode ^ text.hashCode;
+  int get hashCode =>
+      startMs.hashCode ^
+      endMs.hashCode ^
+      text.hashCode ^
+      words.hashCode ^
+      timestampQuality.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -147,7 +156,9 @@ class TranscriptionSegment {
           runtimeType == other.runtimeType &&
           startMs == other.startMs &&
           endMs == other.endMs &&
-          text == other.text;
+          text == other.text &&
+          words == other.words &&
+          timestampQuality == other.timestampQuality;
 }
 
 class VulkanDeviceInfo {
@@ -175,4 +186,35 @@ class VulkanDeviceInfo {
           id == other.id &&
           name == other.name &&
           totalVramBytes == other.totalVramBytes;
+}
+
+class WordItem {
+  final String text;
+  final PlatformInt64 startMs;
+  final PlatformInt64 endMs;
+  final double confidence;
+
+  const WordItem({
+    required this.text,
+    required this.startMs,
+    required this.endMs,
+    required this.confidence,
+  });
+
+  static Future<WordItem> default_() =>
+      RustLib.instance.api.crateApiWhisperWordItemDefault();
+
+  @override
+  int get hashCode =>
+      text.hashCode ^ startMs.hashCode ^ endMs.hashCode ^ confidence.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WordItem &&
+          runtimeType == other.runtimeType &&
+          text == other.text &&
+          startMs == other.startMs &&
+          endMs == other.endMs &&
+          confidence == other.confidence;
 }
