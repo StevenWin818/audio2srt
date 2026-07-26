@@ -109,23 +109,24 @@ impl AudioProcessor {
                 N_FFT
             )));
         }
-        let mut x = vec![0.0f32; samples.len()];
-        // Pre-emphasis.
-        x[0] = samples[0];
-        for i in 1..samples.len() {
-            x[i] = samples[i] - PREEMPH * samples[i - 1];
-        }
+        let x = samples.to_vec();
 
         let plan = mel_plan();
         let mut inner = plan.fft.make_input_vec();
         let mut spectrum = plan.fft.make_output_vec();
         let n_freqs = N_FFT / 2 + 1;
-        let n_frames = (x.len() - N_FFT) / HOP_LENGTH + 1;
+        let n_frames = if x.len() >= N_FFT {
+            (x.len() - N_FFT) / HOP_LENGTH + 1
+        } else {
+            0
+        };
+        if n_frames == 0 {
+            return Err(QwenError::AudioError("audio too short for stft".into()));
+        }
         let mut feats = vec![0.0f32; N_MELS * n_frames];
 
         for frame in 0..n_frames {
             let start = frame * HOP_LENGTH;
-            // 阶段输入：窗口帧，填充为 N_FFT。
             for i in 0..N_FFT {
                 inner[i] = x[start + i] * plan.window[i];
             }
@@ -133,7 +134,7 @@ impl AudioProcessor {
                 .process(&mut inner, &mut spectrum)
                 .map_err(|e| QwenError::AudioError(format!("FFT failed: {}", e)))?;
 
-            // Power spectrum -> log-mel.
+            // 功率谱 -> Whisper log-mel（以 10 为底的对数）
             for m in 0..N_MELS {
                 let mut acc = 0.0f32;
                 let row = m * n_freqs;
@@ -142,37 +143,22 @@ impl AudioProcessor {
                     let power = c.re * c.re + c.im * c.im;
                     acc += plan.mel[row + k] * power;
                 }
-                // Natural log, clamped to a small floor (long-form std).
-                let v = acc.max(1e-10).ln();
+                let v = acc.max(1e-10).log10();
                 feats[m * n_frames + frame] = v;
             }
         }
 
-        // 每个话语 CMVN（随时间变化的均值归一化）— NeMo 评估默认值。
-        let mut mean = vec![0.0f64; N_MELS];
-        for m in 0..N_MELS {
-            let mut sum = 0.0f64;
-            for f in 0..n_frames {
-                sum += feats[m * n_frames + f] as f64;
-            }
-            mean[m] = sum / n_frames as f64;
+        // 标准 Whisper Feature Extractor 绝对功率归一化：
+        // 截断 log10 功率于 -8.0 处，随后通过 (v + 4.0) / 4.0 映射至 [-1.0, 1.0]
+        for v in feats.iter_mut() {
+            let clamped = (*v).max(-8.0);
+            *v = (clamped + 4.0) / 4.0;
         }
-        let mut std = vec![1.0f64; N_MELS];
-        for m in 0..N_MELS {
-            let mut acc = 0.0f64;
-            for f in 0..n_frames {
-                let d = feats[m * n_frames + f] as f64 - mean[m];
-                acc += d * d;
-            }
-            let var = (acc / n_frames as f64).max(1e-5);
-            std[m] = var.sqrt();
-        }
-        for m in 0..N_MELS {
-            for f in 0..n_frames {
-                let v = (feats[m * n_frames + f] as f64 - mean[m]) / std[m];
-                feats[m * n_frames + f] = v as f32;
-            }
-        }
+
+        let min_f = feats.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+        let max_f = feats.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+        let mean_f: f32 = feats.iter().sum::<f32>() / feats.len() as f32;
+        println!("[audio] Mel features: n_frames={} min={:.4} max={:.4} mean={:.4}", n_frames, min_f, max_f, mean_f);
 
         Ok((feats, n_frames))
     }

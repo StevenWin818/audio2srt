@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // llama-cpp-sys-2 crate 在 Cargo.toml 中显式引入，通过 llama_cpp_sys_2 重导出底层 C API
 use llama_cpp_sys_2 as ll;
 
+
 pub struct DecodeRequest<'a> {
     pub encoder_output: &'a EncoderOutput,
     pub language: Option<&'a str>,
@@ -163,18 +164,18 @@ impl QwenDecoder {
             )));
         }
 
-        let lang_hint = match req.language.as_deref() {
-            Some(l) if !l.is_empty() && l != "auto" => format!(" (in {})", l),
-            _ => String::new(),
-        };
-
+        // 精确匹配 Qwen3-ASR 官方对话 Prompt 模板。
+        // 模型在训练时将音频特征作为完整的 user 消息。
+        // 在 <|audio_end|> 之后添加额外的自然语言指令，
+        // 会偏离其 ASR 专属输出协议，导致无法稳定触发正常自回归转写。
+        let context = req.context.unwrap_or("");
         let sys_prompt = format!(
-            "<|im_start|>system\nYou are a speech recognition assistant. Transcribe the user's audio verbatim{}.<|im_end|>\n<|im_start|>user\n",
-            lang_hint
+            "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n",
+            context
         );
         let mut prefix_tokens = self.tokenize_str(&sys_prompt)?;
 
-        let (audio_start_tok, audio_end_tok) = find_audio_tokens(self.vocab);
+        let (audio_start_tok, audio_end_tok, _) = find_audio_tokens(self.vocab);
         if audio_start_tok >= 0 {
             prefix_tokens.push(audio_start_tok);
         } else {
@@ -210,14 +211,14 @@ impl QwenDecoder {
             suffix_tokens.append(&mut tag_tokens);
         }
 
-        let user_suffix_str = "\nPlease transcribe the speech above.<|im_end|>\n<|im_start|>assistant\n";
-        let mut user_suffix_tokens = self.tokenize_str(user_suffix_str)?;
+        let user_suffix_str = "<|im_end|>\n<|im_start|>assistant\n".to_string();
+        let mut user_suffix_tokens = self.tokenize_str(&user_suffix_str)?;
         suffix_tokens.append(&mut user_suffix_tokens);
 
         self.submit_token_batch(&suffix_tokens, current_pos)?;
         current_pos += suffix_tokens.len();
 
-        // 4) 使用 Sampler 采样链（重复惩罚 + 贪婪采样）自回归生成 Token
+        // 4) Qwen3-ASR 官方推理使用 temperature=0.0。
         let chain_params = unsafe { ll::llama_sampler_chain_default_params() };
         let sampler = unsafe { ll::llama_sampler_chain_init(chain_params) };
         if sampler.is_null() {
@@ -226,27 +227,23 @@ impl QwenDecoder {
             ));
         }
 
-        let pen_sampler = unsafe {
-            ll::llama_sampler_init_penalties(
-                64,    // repeat_last_n
-                1.20,  // penalty_repeat
-                0.20,  // penalty_freq
-                0.20,  // penalty_present
-            )
-        };
-        if !pen_sampler.is_null() {
-            unsafe { ll::llama_sampler_chain_add(sampler, pen_sampler) };
-        }
         let greedy_sampler = unsafe { ll::llama_sampler_init_greedy() };
-        if !greedy_sampler.is_null() {
-            unsafe { ll::llama_sampler_chain_add(sampler, greedy_sampler) };
+        if greedy_sampler.is_null() {
+            unsafe { ll::llama_sampler_free(sampler) };
+            return Err(QwenError::DecoderError(
+                "llama_sampler_init_greedy returned NULL".into(),
+            ));
         }
+        unsafe { ll::llama_sampler_chain_add(sampler, greedy_sampler) };
 
         let eos_tok = unsafe { ll::llama_vocab_eos(self.vocab) };
         let eot_tok = unsafe { ll::llama_vocab_eot(self.vocab) };
 
         const MAX_NEW_TOKENS: usize = 256;
-        let mut output = String::new();
+        // Token Piece 是任意字节片段，单个片段不保证是有效的 UTF-8 字符。
+        // 将所有片段收集完后再统一转换为 UTF-8 字符串，
+        // 避免中日韩等多字节字符因跨 Token 切割而导致无声丢弃和乱码。
+        let mut output_bytes = Vec::<u8>::new();
         let mut generated = 0usize;
 
         for _ in 0..MAX_NEW_TOKENS {
@@ -261,31 +258,24 @@ impl QwenDecoder {
             }
 
             let is_eog = unsafe { ll::llama_vocab_is_eog(self.vocab, next) };
-            if is_eog || next == eos_tok || next == eot_tok || next == 151645 || next == 151643 || next == 128247 {
+            if is_eog
+                || next == eos_tok
+                || next == eot_tok
+                || next == 151645 // <|im_end|>
+                || next == 151643 // <|endoftext|>
+                || next == 151670 // <|audio_end|>
+                || next == 128247 // </s>
+            {
+                let piece = self.token_piece(next).unwrap_or_default();
+                println!("[decoder] Break triggered on token ID={} ({:?})", next, String::from_utf8_lossy(&piece));
                 break;
             }
 
-            let mut buf = [0u8; 64];
-            let n = unsafe {
-                ll::llama_token_to_piece(
-                    self.vocab,
-                    next,
-                    buf.as_mut_ptr() as *mut c_char,
-                    buf.len() as i32,
-                    0,
-                    false,
-                )
-            };
-            if n > 0 {
-                let take = (n as usize).min(buf.len());
-                if let Ok(s) = std::str::from_utf8(&buf[..take]) {
-                    output.push_str(s);
-                }
-            }
+            output_bytes.extend_from_slice(&self.token_piece(next)?);
 
             generated += 1;
 
-            if output.ends_with("\n\n\n") {
+            if output_bytes.ends_with(b"\n\n") {
                 break;
             }
 
@@ -295,7 +285,11 @@ impl QwenDecoder {
 
         unsafe { ll::llama_sampler_free(sampler) };
 
-        let cleaned = output
+        let output = String::from_utf8_lossy(&output_bytes).into_owned();
+        let forced_language = req.language.and_then(canonical_qwen_language);
+        let (detected_language, asr_text) =
+            parse_qwen_asr_output(&output, forced_language);
+        let cleaned = asr_text
             .replace("<|im_end|>", "")
             .replace("<|im_start|>", "")
             .replace("<|endoftext|>", "")
@@ -315,7 +309,7 @@ impl QwenDecoder {
 
         Ok(DecodeResult {
             text: cleaned,
-            detected_language: req.language.map(|s| s.to_string()),
+            detected_language,
             generated_tokens: generated,
             prompt_tokens: prompt_len,
             elapsed_ms,
@@ -335,7 +329,7 @@ impl QwenDecoder {
                 len_i32,
                 std::ptr::null_mut(),
                 0,
-                true,
+                false,
                 true,
             )
         };
@@ -352,7 +346,7 @@ impl QwenDecoder {
                 len_i32,
                 tokens.as_mut_ptr(),
                 tokens.len() as i32,
-                true,
+                false,
                 true,
             )
         };
@@ -364,6 +358,42 @@ impl QwenDecoder {
         }
         tokens.truncate(rc as usize);
         Ok(tokens)
+    }
+
+    fn token_piece(&self, token: ll::llama_token) -> Result<Vec<u8>, QwenError> {
+        let mut buf = vec![0u8; 64];
+        let mut n = unsafe {
+            ll::llama_token_to_piece(
+                self.vocab,
+                token,
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len() as i32,
+                0,
+                false,
+            )
+        };
+
+        if n < 0 {
+            buf.resize((-n) as usize, 0);
+            n = unsafe {
+                ll::llama_token_to_piece(
+                    self.vocab,
+                    token,
+                    buf.as_mut_ptr() as *mut c_char,
+                    buf.len() as i32,
+                    0,
+                    false,
+                )
+            };
+        }
+        if n < 0 {
+            return Err(QwenError::DecoderError(format!(
+                "llama_token_to_piece buffer sizing failed for token {} (rc={})",
+                token, n
+            )));
+        }
+        buf.truncate(n as usize);
+        Ok(buf)
     }
 
     /// 向 llama_decode 提交 Token ID 序列，位置递增
@@ -401,7 +431,7 @@ impl QwenDecoder {
         let rc = unsafe { ll::llama_decode(self.context, batch) };
         unsafe { ll::llama_batch_free(batch) };
 
-        if rc < 0 {
+        if rc != 0 {
             return Err(QwenError::DecoderError(format!(
                 "llama_decode rc={}",
                 rc
@@ -410,9 +440,7 @@ impl QwenDecoder {
         Ok(())
     }
 
-    /// 将声学 Embedding 向量批次直接注入 llama
-    /// **当前未启用** — Encoder 输出维度 ≠ LLM n_embd，且 decoder.gguf 缺乏音频投影层。保留以备后续集成。
-    #[allow(dead_code)]
+    /// 将声学 Embedding 向量分块注入 llama，并赋予 <|audio_pad|> Token 身份
     fn submit_embedding_batch(
         &mut self,
         embeddings: &[f32],
@@ -432,50 +460,125 @@ impl QwenDecoder {
             )));
         }
 
-        let mut batch = unsafe { ll::llama_batch_init(n_tokens as i32, self.n_embd, 1) };
-
-        unsafe {
-            if !batch.embd.is_null() {
-                std::ptr::copy_nonoverlapping(
-                    embeddings.as_ptr(),
-                    batch.embd,
-                    n_tokens * n_embd,
-                );
-            }
-            for i in 0..n_tokens {
-                if !batch.pos.is_null() {
-                    *batch.pos.add(i) = (start_pos + i) as ll::llama_pos;
-                }
-                if !batch.n_seq_id.is_null() {
-                    *batch.n_seq_id.add(i) = 1;
-                }
-                if !batch.seq_id.is_null() {
-                    let seq_ptr = *batch.seq_id.add(i);
-                    if !seq_ptr.is_null() {
-                        *seq_ptr = 0;
-                    }
-                }
-                if !batch.logits.is_null() {
-                    *batch.logits.add(i) = 0;
-                }
-            }
-            batch.n_tokens = n_tokens as i32;
-        }
-
-        let rc = unsafe { ll::llama_decode(self.context, batch) };
-        unsafe { ll::llama_batch_free(batch) };
-
-        if rc < 0 {
+        let non_finite = embeddings
+            .iter()
+            .take(n_tokens * n_embd)
+            .filter(|v| !v.is_finite())
+            .count();
+        if non_finite != 0 {
             return Err(QwenError::DecoderError(format!(
-                "llama_decode embedding batch rc={}",
-                rc
+                "encoder produced {} non-finite embedding values",
+                non_finite
             )));
         }
-        Ok(())
-    }
+        let (min_embedding, max_embedding) = embeddings
+            .iter()
+            .take(n_tokens * n_embd)
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &value| {
+                (min.min(value), max.max(value))
+            });
 
-    pub fn load_test_stub() -> Self {
-        unimplemented!("QwenDecoder::load_test_stub is not supported after migration")
+        let physical_batch = 256.min(n_tokens);
+        println!(
+            "[decoder] Audio embedding range=[{:.4}, {:.4}], physical batch={}{}",
+            min_embedding,
+            max_embedding,
+            physical_batch,
+            if self.use_gpu {
+                " (Vulkan-safe)"
+            } else {
+                ""
+            }
+        );
+
+        // Qwen3-ASR 解码器继承自 Qwen3-Omni/Qwen3-VL 架构，使用交织多模态 RoPE
+        // (interleaved M-RoPE, rope_type=IMROPE, mrope_section=[24,20,20])。
+        // llama.cpp 0.1.152 在 MRoPE 模型下，对 **embedding-only** 批次不做 1D-
+        // 位置自动广播 —— `ubatch_add` (`llama-batch.cpp:713-720`) 对每条 RoPE
+        // 轴 (j ∈ {0,1,2,3}) 都从 `batch.pos[j*n_tokens + idxs[i]]` 取位置。
+        // 仅 **text-token 批次** 例外：`llama-graph.cpp:146-156` 会把 T/H/W 三轴
+        // 全部赋成 `pos[i]`、E 轴赋成 0，形成"3 axis 同位置"。
+        //
+        // 官方 Qwen3-ASR 推理 (`qwen_asr/.../modeling_qwen3_asr.py` 中
+        // `get_rope_index`、以及 llama.cpp 多模态 `mtmd-helper.cpp:184-198`
+        // 的 `set_position_mrope_1d`) 对音频段就是 **T=H=W=T 全同位置**的共享
+        // 排布。
+        //
+        // 因此嵌入批次提交时，必须把 `batch.pos` 显式按 M-RoPE 轴交织布局填
+        // 满 (长度 `n_pos_per_embd * n_tokens`)，否则 llama.cpp 会读跨边界的
+        // 堆内存，导致 RoPE 旋转角任意漂移 —— 输出乱码、且因 LLM 倾向低熵
+        // "安全"token 而出现大量空格 / 中日乱字。
+        //
+        // `llama_batch_init(n_alloc, embd_dim, n_seq)` 默认 `pos` 仅 `n_alloc`
+        // 长，无法承载 4*n_tokens 的位置数据；以 `chunk_tokens * 4` 为分配
+        // 长度即可 (embd/logits/seq_id 等 buffer 同样 N 倍扩容，只使用前 chunk
+        // 个元素即可)。
+        const N_POS_PER_EMBD: usize = 4;
+
+        for token_offset in (0..n_tokens).step_by(physical_batch) {
+            let chunk_tokens = (n_tokens - token_offset).min(physical_batch);
+            let n_alloc = chunk_tokens * N_POS_PER_EMBD;
+            let mut batch =
+                unsafe { ll::llama_batch_init(n_alloc as i32, self.n_embd, 1) };
+
+            unsafe {
+                if batch.embd.is_null() {
+                    ll::llama_batch_free(batch);
+                    return Err(QwenError::DecoderError(
+                        "llama_batch_init returned a null embedding buffer".into(),
+                    ));
+                }
+                std::ptr::copy_nonoverlapping(
+                    embeddings.as_ptr().add(token_offset * n_embd),
+                    batch.embd,
+                    chunk_tokens * n_embd,
+                );
+
+                // C 堆内存 malloc 分配的 n_seq_id、seq_id、logits 包含随机未初始化数据，
+                // 必须显式填充合法初始值 (n_seq_id=1, seq_id[i][0]=0, logits=0)，
+                // 避免 llama_decode 报 init: invalid seq_id[-2] 错误。
+                for i in 0..chunk_tokens {
+                    if !batch.n_seq_id.is_null() {
+                        *batch.n_seq_id.add(i) = 1;
+                    }
+                    if !batch.seq_id.is_null() {
+                        let seq_ptr = *batch.seq_id.add(i);
+                        if !seq_ptr.is_null() {
+                            *seq_ptr = 0;
+                        }
+                    }
+                    if !batch.logits.is_null() {
+                        *batch.logits.add(i) = 0;
+                    }
+                }
+
+                // 按 mtmd-helper.cpp:184-198 `set_position_mrope_1d` 方式填
+                // 所有 4 个 RoPE 轴：T = H = W = E = (start_pos + token_offset + i)，
+                // 这是 Qwen3-ASR 纯 1D 位置在 MRoPE 上的正确等效。
+                // (rope_sections[3]==0 时 E 轴不会被真正消费，但写入也无害。)
+                if !batch.pos.is_null() {
+                    for i in 0..chunk_tokens {
+                        let p = (start_pos + token_offset + i) as ll::llama_pos;
+                        for j in 0..N_POS_PER_EMBD {
+                            *batch.pos.add(j * chunk_tokens + i) = p;
+                        }
+                    }
+                }
+                batch.n_tokens = chunk_tokens as i32;
+            }
+
+            let rc = unsafe { ll::llama_decode(self.context, batch) };
+            batch.n_tokens = n_alloc as i32;
+            unsafe { ll::llama_batch_free(batch) };
+
+            if rc != 0 {
+                return Err(QwenError::DecoderError(format!(
+                    "llama_decode embedding batch rc={} at audio token {}",
+                    rc, token_offset
+                )));
+            }
+        }
+        Ok(())
     }
 
     pub fn backend(&self) -> DecoderBackend {
@@ -499,81 +602,118 @@ impl QwenDecoder {
 // 辅助函数：从 llama.cpp 词汇表中检测音频控制 Token ID
 // ---------------------------------------------------------------------------
 
-/// 使用特殊的解析模式分词字符串 "<|audio_start|>" 和 "<|audio_end|>"。
-/// 如果词汇表中不包含专用的 Token ID，则返回 (-1, -1)。
-fn find_audio_tokens(vocab: *const ll::llama_vocab) -> (i32, i32) {
-    let probe_start = "<|audio_start|>";
-    let probe_end = "<|audio_end|>";
-    let start_c = match CString::new(probe_start) {
-        Ok(s) => s,
-        Err(_) => return (-1, -1),
-    };
-    let end_c = match CString::new(probe_end) {
-        Ok(s) => s,
-        Err(_) => return (-1, -1),
-    };
+/// 使用特殊的解析模式分词字符串 "<|audio_start|>", "<|audio_end|>" 和 "<|audio_pad|>"。
+fn find_audio_tokens(
+    vocab: *const ll::llama_vocab,
+) -> (ll::llama_token, ll::llama_token, ll::llama_token) {
+    let probe_start = CString::new("<|audio_start|>").unwrap();
+    let probe_end = CString::new("<|audio_end|>").unwrap();
+    let probe_pad = CString::new("<|audio_pad|>").unwrap();
 
-    let start_needed = unsafe {
-        ll::llama_tokenize(
-            vocab,
-            start_c.as_ptr(),
-            probe_start.len() as i32,
-            std::ptr::null_mut(),
-            0,
-            true,
-            true,
-        )
-    };
-    let end_needed = unsafe {
-        ll::llama_tokenize(
-            vocab,
-            end_c.as_ptr(),
-            probe_end.len() as i32,
-            std::ptr::null_mut(),
-            0,
-            true,
-            true,
-        )
-    };
+    let mut start_buf = [-1_i32; 4];
+    let mut end_buf = [-1_i32; 4];
+    let mut pad_buf = [-1_i32; 4];
 
-    let n_start = start_needed.abs() as usize;
-    let n_end = end_needed.abs() as usize;
-
-    if n_start == 0 || n_end == 0 {
-        println!("[decoder] Audio token markers NOT found in vocab");
-        return (-1, -1);
-    }
-
-    let mut start_buf = vec![0_i32; n_start + 4];
-    let mut end_buf = vec![0_i32; n_end + 4];
     let rc_start = unsafe {
         ll::llama_tokenize(
             vocab,
-            start_c.as_ptr(),
-            probe_start.len() as i32,
+            probe_start.as_ptr(),
+            probe_start.to_bytes().len() as i32,
             start_buf.as_mut_ptr(),
             start_buf.len() as i32,
-            true,
+            false,
             true,
         )
     };
     let rc_end = unsafe {
         ll::llama_tokenize(
             vocab,
-            end_c.as_ptr(),
-            probe_end.len() as i32,
+            probe_end.as_ptr(),
+            probe_end.to_bytes().len() as i32,
             end_buf.as_mut_ptr(),
             end_buf.len() as i32,
+            false,
             true,
+        )
+    };
+    let rc_pad = unsafe {
+        ll::llama_tokenize(
+            vocab,
+            probe_pad.as_ptr(),
+            probe_pad.to_bytes().len() as i32,
+            pad_buf.as_mut_ptr(),
+            pad_buf.len() as i32,
+            false,
             true,
         )
     };
 
-    if rc_start <= 0 || rc_end <= 0 {
-        return (-1, -1);
+    let sid = if rc_start == 1 { start_buf[0] } else { -1 };
+    let eid = if rc_end == 1 { end_buf[0] } else { -1 };
+    let pid = if rc_pad == 1 { pad_buf[0] } else { 151676 };
+
+    println!(
+        "[decoder] Found audio token IDs: <|audio_start|>={} <|audio_end|>={} <|audio_pad|>={}",
+        sid, eid, pid
+    );
+    (sid, eid, pid)
+}
+
+fn canonical_qwen_language(language: &str) -> Option<&'static str> {
+    match language.trim().to_ascii_lowercase().as_str() {
+        "" | "auto" => None,
+        "zh" | "zh-cn" | "chinese" => Some("Chinese"),
+        "en" | "english" => Some("English"),
+        "ja" | "jp" | "japanese" => Some("Japanese"),
+        "ko" | "kr" | "korean" => Some("Korean"),
+        "yue" | "cantonese" => Some("Cantonese"),
+        _ => None,
     }
-    let sid = start_buf[0];
-    let eid = end_buf[0];
-    println!("[decoder] Found audio token IDs: <|audio_start|>={} <|audio_end|>={}", sid, eid);
-    (sid, eid)
+}
+
+fn parse_qwen_asr_output(
+    output: &str,
+    forced_language: Option<&str>,
+) -> (Option<String>, String) {
+    if let Some(language) = forced_language {
+        return (Some(language.to_string()), output.to_string());
+    }
+
+    let Some((metadata, text)) = output.split_once("<asr_text>") else {
+        return (None, output.to_string());
+    };
+    let metadata = metadata.trim();
+    let language = metadata
+        .to_ascii_lowercase()
+        .find("language ")
+        .map(|idx| metadata[idx + "language ".len()..].trim().to_string())
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("none"));
+    (language, text.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{canonical_qwen_language, parse_qwen_asr_output};
+
+    #[test]
+    fn maps_ui_language_codes_to_qwen_names() {
+        assert_eq!(canonical_qwen_language("zh"), Some("Chinese"));
+        assert_eq!(canonical_qwen_language("en"), Some("English"));
+        assert_eq!(canonical_qwen_language("auto"), None);
+    }
+
+    #[test]
+    fn parses_auto_language_output() {
+        let (language, text) =
+            parse_qwen_asr_output("language Chinese<asr_text>你好世界", None);
+        assert_eq!(language.as_deref(), Some("Chinese"));
+        assert_eq!(text, "你好世界");
+    }
+
+    #[test]
+    fn forced_language_output_is_text_only() {
+        let (language, text) = parse_qwen_asr_output("hello", Some("English"));
+        assert_eq!(language.as_deref(), Some("English"));
+        assert_eq!(text, "hello");
+    }
 }

@@ -23,11 +23,12 @@ enum InputLayout {
 }
 
 pub struct QwenEncoder {
-    session: Session,
+    pub session: Session,
     backend: EncoderBackend,
     model_path: String,
     input_name: String,
     backend_path: String,
+    #[allow(dead_code)]
     layout: InputLayout,
 }
 
@@ -115,31 +116,38 @@ impl QwenEncoder {
         let audio_duration_ms =
             ((samples.len() as f64 / SAMPLE_RATE as f64) * 1000.0) as u64;
 
-        // 构建输入 Tensor 降级策略：优先尝试 *Raw 原始音频*，失败后再重试 Mel 频谱。
-        // Qwen3-ASR 的 encoder.onnx 通常要求原始音频，因为其内部图自带 Mel FBank 计算。
-        let try_order: [(bool, Vec<f32>, Vec<i64>); 2] = [
-            // 1) Raw 原始音频 ── 大多数 ONNX 编码器所期望的输入
-            (
-                !matches!(self.layout, InputLayout::Mel),
-                samples.to_vec(),
-                vec![1_i64, samples.len() as i64],
-            ),
-            // 2) Mel 频谱 ── 针对无内部 FBank 编码器的备用方案
-            {
-                let maybe_mel = AudioProcessor::log_mel(samples);
-                match maybe_mel {
-                    Ok((f, nf)) => (true, f, vec![1_i64, N_MELS as i64, nf as i64]),
-                    Err(_) => (false, Vec::new(), Vec::new()),
-                }
-            },
-        ];
+        // 根据在 load() 时探测到的 ONNX 输入 layout 选择对应输入特征。
+        // Qwen3-ASR 的 encoder.onnx 输入名为 `mel`，声明 shape `[1, 128, time]`，
+        // 期望外部预计算好的 log-mel 特征图
+        // secondary 仅在 layout 不明或可同时支持两种输入时作为最佳排序使用。
+        let (primary, fallback) = match self.layout {
+            InputLayout::Mel => {
+                let mel = AudioProcessor::log_mel(samples)
+                    .map(|(f, nf)| (f, vec![1_i64, N_MELS as i64, nf as i64]))
+                    .map_err(|e| QwenError::AudioError(format!("log_mel: {:?}", e)))?;
+                let mel = Some(mel);
+                let raw = None;
+                (mel, raw)
+            }
+            InputLayout::Raw | InputLayout::Unknown => {
+                let raw = Some((samples.to_vec(), vec![1_i64, samples.len() as i64]));
+                let mel = AudioProcessor::log_mel(samples)
+                    .ok()
+                    .map(|(f, nf)| (f, vec![1_i64, N_MELS as i64, nf as i64]));
+                (raw, mel)
+            }
+        };
+
+        // 排序：layout 匹配的特征优先；另一特征仅在主路径失败时作为兜底。
+        let try_order: [Option<(Vec<f32>, Vec<i64>)>; 2] = [primary, fallback];
 
         let mut last_err: Option<QwenError> = None;
         let mut embeddings = Vec::new();
         let mut shape_vec = Vec::new();
 
-        for (enabled, data, shape) in &try_order {
-            if !enabled || data.is_empty() {
+        for entry in &try_order {
+            let Some((data, shape)) = entry else { continue };
+            if data.is_empty() {
                 continue;
             }
             let tensor = match Tensor::<f32>::from_array((
@@ -157,6 +165,7 @@ impl QwenEncoder {
                 .run(inputs![self.input_name.as_str() => tensor])
             {
                 Ok(outputs) => {
+                    println!("[encoder] ONNX inference succeeded with input shape {:?}", shape);
                     let res = extract_embeddings(outputs);
                     match res {
                         Ok((e, s)) => {
@@ -193,11 +202,6 @@ impl QwenEncoder {
             shape: shape_vec,
             audio_duration_ms,
         })
-    }
-
-    pub fn load_test_stub() -> Self {
-        // 无模型文件无法构建真实 Session
-        unimplemented!("QwenEncoder::load_test_stub is not supported after migration")
     }
 
     pub fn backend(&self) -> EncoderBackend {

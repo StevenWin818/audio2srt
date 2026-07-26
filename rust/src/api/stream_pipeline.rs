@@ -12,12 +12,11 @@ use flate2::read::GzDecoder;
 use tar::Archive;
 use deepfilter_rt::DeepFilterStream;
 use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContextParameters, WhisperVadContext, WhisperVadContextParams, WhisperVadParams};
+use whisper_rs::{WhisperVadContext, WhisperVadContextParams, WhisperVadParams};
 use crate::frb_generated::StreamSink;
-use crate::api::whisper::{
-    TranscriptionSegment, TranscriptionEvent, get_or_create_context,
-    convert_chinese, calculate_dtw_mem_size, get_dtw_model_preset,
-    register_thread_as_pro_audio,
+use crate::api::silero_vad::{
+    TranscriptionSegment, TranscriptionEvent, WordItem,
+    convert_chinese, register_thread_as_pro_audio,
 };
 
 static PERF_LOG_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -140,7 +139,8 @@ pub trait TranscriptionSink: Send + Sync {
 
 impl TranscriptionSink for StreamSink<TranscriptionEvent> {
     fn add(&self, event: TranscriptionEvent) -> Result<(), String> {
-        self.add(event).map_err(|e| e.to_string())
+        StreamSink::<TranscriptionEvent, flutter_rust_bridge::SseCodec>::add(self, event)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -220,127 +220,49 @@ fn run_stream_pipeline_inner(
     };
     println!("[Rust] Media total duration: {} seconds", total_duration);
 
-    // 2. 检查是否为 Qwen 模型体系目录
-    let qwen_dir_opt = if is_qwen_model_dir(&config.asr_model_dir) {
-        Some(config.asr_model_dir.clone())
+    // 2. 初始化 Qwen ASR 管道
+    let app_data = std::env::var("APPDATA").unwrap_or_default();
+    let default_qwen = format!("{}/com.audio2srt/audio2srt/models/qwen3-asr-0.6b", app_data.replace('\\', "/"));
+
+    let qwen_dir = if is_qwen_model_dir(&config.asr_model_dir) {
+        config.asr_model_dir.clone()
     } else if is_qwen_model_dir(&config.model_path) {
-        Some(config.model_path.clone())
-    } else {
-        None
-    };
-
-    if let Some(qwen_dir) = qwen_dir_opt {
-        println!("[Rust] Initializing Qwen ASR pipeline with model dir: {}", qwen_dir);
-        let runtime = crate::qwen::runtime::QwenRuntime::load(
-            &qwen_dir,
-            config.aligner_model_dir.as_deref(),
-            config.encoder_backend,
-            config.decoder_backend,
-        ).map_err(|e| anyhow!("Failed to load Qwen runtime: {:?}", e))?;
-        let runtime_arc = Arc::new(runtime);
-
-        let (tx_raw_48k, rx_raw_48k) = sync_channel::<Vec<f32>>(10);
-        let (tx_clean_48k, rx_clean_48k) = sync_channel::<Vec<f32>>(10);
-        let (tx_qwen_task, rx_qwen_task) = sync_channel::<WhisperTask>(10);
-
-        let ffmpeg_handle = spawn_ffmpeg_pump(&config, tx_raw_48k)?;
-        let dfn_handle = spawn_dfn_worker(&config, rx_raw_48k, tx_clean_48k);
-        let vad_handle = spawn_vad_worker(&config, rx_clean_48k, tx_qwen_task);
-        let qwen_handle = spawn_qwen_worker(runtime_arc, &config, total_duration, rx_qwen_task, sink);
-
-        ffmpeg_handle.join()?;
-        dfn_handle.join().map_err(|_| anyhow!("DFN3 thread panicked"))??;
-        vad_handle.join().map_err(|_| anyhow!("VAD thread panicked"))??;
-        qwen_handle.join().map_err(|_| anyhow!("Failed to join Qwen GPU thread"))??;
-
-        return Ok(());
-    }
-
-    // 3. 传统 Whisper 回退上下文初始化
-    let actual_model_file = if Path::new(&config.model_path).is_dir() {
-        let mut found_bin = None;
-        if let Ok(entries) = std::fs::read_dir(&config.model_path) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.extension().map_or(false, |ext| ext == "bin") {
-                    found_bin = Some(p.to_string_lossy().to_string());
-                    break;
-                }
-            }
-        }
-        found_bin.unwrap_or_else(|| {
-            let app_data = std::env::var("APPDATA").unwrap_or_default();
-            let large = format!("{}/com.audio2srt/audio2srt/models/ggml-large-v3-q8_0.bin", app_data);
-            let base = format!("{}/com.audio2srt/audio2srt/models/ggml-base.bin", app_data);
-            if Path::new(&large).exists() {
-                large
-            } else {
-                base
-            }
-        })
-    } else if Path::new(&config.model_path).exists() {
         config.model_path.clone()
+    } else if Path::new(&default_qwen).exists() {
+        default_qwen
     } else {
-        let app_data = std::env::var("APPDATA").unwrap_or_default();
-        let large = format!("{}/com.audio2srt/audio2srt/models/ggml-large-v3-q8_0.bin", app_data);
-        let base = format!("{}/com.audio2srt/audio2srt/models/ggml-base.bin", app_data);
-        if Path::new(&large).exists() {
-            large
-        } else {
-            base
-        }
+        return Err(anyhow!("未找到有效的 Qwen ASR 模型目录: {}", config.asr_model_dir));
     };
 
-    println!("[Rust] Loading Whisper model context from: {}", actual_model_file);
-    let mut ctx_params = WhisperContextParameters::default();
-    
-    // 如果可用，使用模型预设启用 DTW 模式
-    let dtw_preset = get_dtw_model_preset(&actual_model_file);
-    if let Some(preset) = dtw_preset {
-        println!("[Rust] DTW alignment enabled with preset for model: {}", actual_model_file);
-        let num_samples = (total_duration * 16000.0) as usize;
-        let mem_size = calculate_dtw_mem_size(num_samples);
-        ctx_params.dtw_parameters(whisper_rs::DtwParameters {
-            mode: whisper_rs::DtwMode::ModelPreset { model_preset: preset },
-            dtw_mem_size: mem_size,
-        });
-    } else {
-        println!("[Rust] DTW alignment disabled (no preset for model: {})", actual_model_file);
-        ctx_params.dtw_parameters(whisper_rs::DtwParameters {
-            mode: whisper_rs::DtwMode::None,
-            dtw_mem_size: 0,
-        });
-    }
-    
-    let selected_device_name = crate::api::whisper::setup_gpu_device(&mut ctx_params, config.use_gpu);
-    println!("[Rust] Hardware device for Whisper: {}", selected_device_name);
+    println!("[Rust] Initializing Qwen ASR pipeline with model dir: {}", qwen_dir);
+    let runtime = crate::qwen::runtime::QwenRuntime::load(
+        &qwen_dir,
+        config.aligner_model_dir.as_deref(),
+        config.encoder_backend,
+        config.decoder_backend,
+    ).map_err(|e| anyhow!("Failed to load Qwen runtime: {:?}", e))?;
+    let runtime_arc = Arc::new(runtime);
 
-    let ctx = get_or_create_context(&actual_model_file, config.use_gpu, ctx_params)
-        .map_err(|e| anyhow!("Failed to load Whisper model: {}", e))?;
-
-    // 4. 创建流式管道 (容量均为 10)
     let (tx_raw_48k, rx_raw_48k) = sync_channel::<Vec<f32>>(10);
     let (tx_clean_48k, rx_clean_48k) = sync_channel::<Vec<f32>>(10);
-    let (tx_whisper_task, rx_whisper_task) = sync_channel::<WhisperTask>(10);
+    let (tx_asr_task, rx_asr_task) = sync_channel::<AsrTask>(10);
 
-    // 5. 启动各个独立的工作节点
     let ffmpeg_handle = spawn_ffmpeg_pump(&config, tx_raw_48k)?;
     let dfn_handle = spawn_dfn_worker(&config, rx_raw_48k, tx_clean_48k);
-    let vad_handle = spawn_vad_worker(&config, rx_clean_48k, tx_whisper_task);
-    let whisper_handle = spawn_whisper_worker(ctx, &config, total_duration, rx_whisper_task, sink);
+    let vad_handle = spawn_vad_worker(&config, rx_clean_48k, tx_asr_task);
+    let qwen_handle = spawn_qwen_worker(runtime_arc, &config, total_duration, rx_asr_task, sink);
 
-    // 6. 等待收尾
     ffmpeg_handle.join()?;
     dfn_handle.join().map_err(|_| anyhow!("DFN3 thread panicked"))??;
     vad_handle.join().map_err(|_| anyhow!("VAD thread panicked"))??;
-    whisper_handle.join().map_err(|_| anyhow!("Failed to join Whisper GPU thread"))??;
+    qwen_handle.join().map_err(|_| anyhow!("Failed to join Qwen GPU thread"))??;
 
     Ok(())
 }
 
 // ==== 工作线程结构体与辅助函数 ====
 
-struct WhisperTask {
+struct AsrTask {
     samples: Vec<f32>,
     start_ms: i64,
     end_ms: i64,
@@ -562,7 +484,7 @@ fn spawn_dfn_worker(
             return Ok(());
         }
 
-        // ✅ 在工作线程内部延迟解压 DeepFilterNet 模型
+        // 在工作线程内部延迟解压 DeepFilterNet 模型
         println!("[Rust] Preparing DeepFilterNet3 models from tar.gz...");
         let extracted_dir = extract_tar_gz_if_needed(Path::new(&df_model_path))?;
         println!("[Rust] DeepFilterStream prepared at: {:?}", extracted_dir);
@@ -750,7 +672,7 @@ fn spawn_dfn_worker(
 fn spawn_vad_worker(
     config: &PipelineConfig,
     rx_clean_48k: std::sync::mpsc::Receiver<Vec<f32>>,
-    tx_whisper_task: std::sync::mpsc::SyncSender<WhisperTask>,
+    tx_asr_task: std::sync::mpsc::SyncSender<AsrTask>,
 ) -> thread::JoinHandle<Result<()>> {
     let vad_enabled = config.vad_enabled;
     let vad_model_path = config.vad_model_path.clone();
@@ -857,7 +779,7 @@ fn spawn_vad_worker(
                                     let end_ms = current_offset_ms + (safe_end as i64 * 1000 / 16000);
 
                                     if segment_samples.len() > 3200 {
-                                        if tx_whisper_task.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
+                                        if tx_asr_task.send(AsrTask { samples: segment_samples, start_ms, end_ms }).is_err() {
                                             break;
                                         }
                                     }
@@ -883,7 +805,7 @@ fn spawn_vad_worker(
                                     let start_ms = current_offset_ms + (safe_start as i64 * 1000 / 16000);
                                     let end_ms = current_offset_ms + (audio_buffer.len() as i64 * 1000 / 16000);
                                     
-                                    let _ = tx_whisper_task.send(WhisperTask { samples: segment_samples, start_ms, end_ms });
+                                    let _ = tx_asr_task.send(AsrTask { samples: segment_samples, start_ms, end_ms });
                                 } else {
                                     println!("[Rust] VAD 过滤: 成功丢弃 30 秒的非语音/纯音乐数据");
                                 }
@@ -901,7 +823,7 @@ fn spawn_vad_worker(
                         let start_ms = current_offset_ms;
                         let end_ms = current_offset_ms + 10000;
                         current_offset_ms = end_ms;
-                        if tx_whisper_task.send(WhisperTask { samples: segment_samples, start_ms, end_ms }).is_err() {
+                        if tx_asr_task.send(AsrTask { samples: segment_samples, start_ms, end_ms }).is_err() {
                             break;
                         }
                         check_and_cut = true;
@@ -917,144 +839,120 @@ fn spawn_vad_worker(
             let seg_duration_ms = (audio_buffer.len() as f64 / 16000.0 * 1000.0) as i64;
             let start_ms = current_offset_ms;
             let end_ms = current_offset_ms + seg_duration_ms;
-            let _ = tx_whisper_task.send(WhisperTask { samples: audio_buffer, start_ms, end_ms });
+            let _ = tx_asr_task.send(AsrTask { samples: audio_buffer, start_ms, end_ms });
         }
 
-        drop(tx_whisper_task);
+        drop(tx_asr_task);
         Ok(())
     })
 }
 
-fn spawn_whisper_worker(
-    ctx: Arc<whisper_rs::WhisperContext>,
+fn spawn_qwen_worker(
+    runtime: Arc<crate::qwen::runtime::QwenRuntime>,
     config: &PipelineConfig,
     total_duration: f64,
-    rx_whisper_task: std::sync::mpsc::Receiver<WhisperTask>,
+    rx_task: std::sync::mpsc::Receiver<AsrTask>,
     sink: Arc<dyn TranscriptionSink>,
 ) -> thread::JoinHandle<Result<()>> {
-    let threads = config.threads;
-    let translate = config.translate;
-    let language = config.language.clone();
-    let no_context = config.no_context;
     let to_simplified = config.to_simplified;
+    let language = config.language.clone();
+    let context_prompt = config.context_prompt.clone();
 
     thread::spawn(move || -> Result<()> {
         register_thread_as_pro_audio();
-
-        let mut whisper_state = ctx.create_state()
-            .map_err(|e| anyhow!("Failed to create Whisper state: {}", e))?;
-
         let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
-        
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        let n_threads = threads.unwrap_or(4);
-        params.set_n_threads(n_threads);
-        params.set_translate(translate);
-        if let Some(ref lang) = language {
-            if lang != "auto" && !lang.is_empty() { 
-                params.set_language(Some(lang.as_str())); 
-            } else { 
-                params.set_language(None); 
-                params.set_detect_language(false); 
-            }
-        } else {
-            params.set_language(None); 
-            params.set_detect_language(false);
-        }
-        params.set_temperature(0.0);
-        params.set_temperature_inc(0.2);
-        params.set_entropy_thold(2.4);
-        params.set_logprob_thold(-1.0);
-        params.set_no_speech_thold(0.6);
-        params.set_single_segment(false);
 
-        while let Ok(task) = rx_whisper_task.recv() {
+        while let Ok(task) = rx_task.recv() {
             if SHOULD_CANCEL.load(Ordering::SeqCst) {
                 break;
             }
-            let WhisperTask { samples: mut samples_16k, start_ms, end_ms } = task;
-            
-            if !samples_16k.is_empty() {
-                // 强行对超短音频使用静音填充以保护 DTW 机制
-                const MIN_SAMPLES_FOR_DTW: usize = 8000; // 0.5s
-                if samples_16k.len() < MIN_SAMPLES_FOR_DTW {
-                    samples_16k.resize(MIN_SAMPLES_FOR_DTW, 0.0);
-                }
+            let AsrTask { samples: samples_16k, start_ms, end_ms } = task;
 
-                let mut current_params = params.clone();
-                current_params.set_no_context(no_context);
-                current_params.set_single_segment(false); 
-                current_params.set_suppress_blank(true);
-
-                let start_time = std::time::Instant::now();
-                let full_res = whisper_state.full(current_params, &samples_16k);
-                let _elapsed_ms = start_time.elapsed().as_millis() as u64;
-                let _audio_dur_sec = samples_16k.len() as f64 / 16000.0;
-                log_perf!("Whisper", _elapsed_ms, _audio_dur_sec);
-
-                full_res.map_err(|e| anyhow!("Whisper inference error: {:?}", e))?;
-
-                let n_segments = whisper_state.full_n_segments();
-                for i in 0..n_segments {
-                    if let Some(segment) = whisper_state.get_segment(i) {
-                        let text = segment.to_str_lossy().unwrap_or_default().into_owned();
-                        
-                        // 滤除音乐和叹气符号
-                        let mut final_text = text.replace("♪", "")
-                                                 .replace("[音乐]", "")
-                                                 .replace("(音乐)", "")
-                                                 .replace("[Music]", "")
-                                                 .replace("(Music)", "");
-                        final_text = final_text.trim().to_string();
-
-                        if final_text.is_empty() {
-                            continue;
-                        }
-
-                        let sub_start_ms = start_ms + segment.start_timestamp() * 10;
-                        let sub_end_ms = start_ms + segment.end_timestamp() * 10;
-
-                        if to_simplified {
-                            final_text = convert_chinese(final_text, true);
-                        }
-
-                        let new_seg = TranscriptionSegment {
-                            start_ms: sub_start_ms,
-                            end_ms: sub_end_ms,
-                            text: final_text,
-                            timestamp_quality: "Vad".to_string(),
-                            words: Vec::new(),
-                        };
-                        all_segments.push(new_seg.clone());
-                        if sink.add(TranscriptionEvent::Segment(new_seg)).is_err() {
-                            println!("[Rust] Sink is closed. Aborting whisper loop.");
-                            return Ok(());
-                        }
-                    }
-                }
+            if samples_16k.is_empty() {
+                continue;
             }
 
-            // 推进进度条
+            let start_time = std::time::Instant::now();
+            let decode_res = match runtime.transcribe_segment(
+                &samples_16k,
+                language.as_deref(),
+                context_prompt.as_deref(),
+            ) {
+                Ok(res) => res,
+                Err(e) => {
+                    println!("[Rust] Qwen transcribe segment error: {:?}", e);
+                    continue;
+                }
+            };
+
+            let _elapsed_ms = start_time.elapsed().as_millis() as u64;
+            let _audio_dur_sec = samples_16k.len() as f64 / 16000.0;
+            log_perf!("Qwen", _elapsed_ms, _audio_dur_sec);
+
+            let mut final_text = decode_res.text.trim().to_string();
+            if final_text.is_empty() {
+                continue;
+            }
+
+            if to_simplified {
+                final_text = convert_chinese(final_text, true);
+            }
+
+            // 强制对齐
+            let word_items = match runtime.align_segment(
+                &samples_16k,
+                &final_text,
+                start_ms as u64,
+                end_ms as u64,
+            ) {
+                Ok(align_res) => align_res
+                    .units
+                    .into_iter()
+                    .map(|u| WordItem {
+                        text: u.text,
+                        start_ms: u.start_ms as i64,
+                        end_ms: u.end_ms as i64,
+                        confidence: u.confidence.unwrap_or(1.0),
+                    })
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
+
+            let new_seg = TranscriptionSegment {
+                start_ms,
+                end_ms,
+                text: final_text,
+                timestamp_quality: "Qwen3-ForcedAligned".to_string(),
+                words: word_items,
+            };
+
+            all_segments.push(new_seg.clone());
+            if sink.add(TranscriptionEvent::Segment(new_seg)).is_err() {
+                println!("[Rust] Sink closed. Aborting Qwen loop.");
+                return Ok(());
+            }
+
+            // Progress
             let progress = ((end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
             if sink.add(TranscriptionEvent::Progress(progress.clamp(0, 100))).is_err() {
-                println!("[Rust] Sink is closed. Aborting whisper loop.");
+                println!("[Rust] Sink closed. Aborting Qwen loop.");
                 return Ok(());
             }
             if sink.add(TranscriptionEvent::ProgressDetail {
                 processed_ms: end_ms,
                 total_ms: (total_duration * 1000.0) as i64,
             }).is_err() {
-                println!("[Rust] Sink is closed. Aborting whisper loop.");
+                println!("[Rust] Sink closed. Aborting Qwen loop.");
                 return Ok(());
             }
         }
-        
+
         let _ = sink.add(TranscriptionEvent::Success(all_segments));
         Ok(())
     })
 }
 
-// ==== 现有的辅助函数 ====
+// ==== 管道辅助函数 ====
 
 fn extract_tar_gz_if_needed(tar_gz_path: &Path) -> Result<std::path::PathBuf> {
     let parent = tar_gz_path.parent().ok_or_else(|| anyhow!("No parent dir"))?;
@@ -1064,7 +962,6 @@ fn extract_tar_gz_if_needed(tar_gz_path: &Path) -> Result<std::path::PathBuf> {
         .ok_or_else(|| anyhow!("Invalid model filename"))?;
     let dest_dir = parent.join(file_stem);
     
-    // 检查所有预期的模型文件是否都已存在
     let expected_files = [
         "config.ini",
         "enc_conv_streaming.onnx",
@@ -1086,7 +983,6 @@ fn extract_tar_gz_if_needed(tar_gz_path: &Path) -> Result<std::path::PathBuf> {
         return Ok(check_dir.to_path_buf());
     }
     
-    // 如果目标目录已存在，先进行清理，避免残留不完整的解压文件
     if dest_dir.exists() {
         let _ = std::fs::remove_dir_all(&dest_dir);
     }
@@ -1117,8 +1013,6 @@ fn lock_high_priority() {
         SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
     }
 }
-
-
 
 #[cfg(target_os = "windows")]
 fn disable_power_throttling() {
@@ -1167,8 +1061,6 @@ fn set_thread_affinity_mask(mask: usize) {
     }
 }
 
-
-
 fn is_qwen_model_dir(dir_or_file: &str) -> bool {
     let path = Path::new(dir_or_file);
     let lower = dir_or_file.to_lowercase();
@@ -1189,115 +1081,10 @@ fn is_qwen_model_dir(dir_or_file: &str) -> bool {
     false
 }
 
-fn spawn_qwen_worker(
-    runtime: Arc<crate::qwen::runtime::QwenRuntime>,
-    config: &PipelineConfig,
-    total_duration: f64,
-    rx_task: std::sync::mpsc::Receiver<WhisperTask>,
-    sink: Arc<dyn TranscriptionSink>,
-) -> thread::JoinHandle<Result<()>> {
-    let to_simplified = config.to_simplified;
-    let language = config.language.clone();
-    let context_prompt = config.context_prompt.clone();
-
-    thread::spawn(move || -> Result<()> {
-        register_thread_as_pro_audio();
-        let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
-
-        while let Ok(task) = rx_task.recv() {
-            if SHOULD_CANCEL.load(Ordering::SeqCst) {
-                break;
-            }
-            let WhisperTask { samples: samples_16k, start_ms, end_ms } = task;
-
-            if samples_16k.is_empty() {
-                continue;
-            }
-
-            let start_time = std::time::Instant::now();
-            let decode_res = match runtime.transcribe_segment(
-                &samples_16k,
-                language.as_deref(),
-                context_prompt.as_deref(),
-            ) {
-                Ok(res) => res,
-                Err(e) => {
-                    println!("[Rust] Qwen transcribe segment error: {:?}", e);
-                    continue;
-                }
-            };
-
-            let _elapsed_ms = start_time.elapsed().as_millis() as u64;
-            let _audio_dur_sec = samples_16k.len() as f64 / 16000.0;
-            log_perf!("Qwen", _elapsed_ms, _audio_dur_sec);
-
-            let mut final_text = decode_res.text.trim().to_string();
-            if final_text.is_empty() {
-                continue;
-            }
-
-            if to_simplified {
-                final_text = convert_chinese(final_text, true);
-            }
-
-            // Forced Alignment
-            let word_items = match runtime.align_segment(
-                &samples_16k,
-                &final_text,
-                start_ms as u64,
-                end_ms as u64,
-            ) {
-                Ok(align_res) => align_res
-                    .units
-                    .into_iter()
-                    .map(|u| crate::api::whisper::WordItem {
-                        text: u.text,
-                        start_ms: u.start_ms as i64,
-                        end_ms: u.end_ms as i64,
-                        confidence: u.confidence.unwrap_or(1.0),
-                    })
-                    .collect(),
-                Err(_) => Vec::new(),
-            };
-
-            let new_seg = TranscriptionSegment {
-                start_ms,
-                end_ms,
-                text: final_text,
-                timestamp_quality: "Qwen3-ForcedAligned".to_string(),
-                words: word_items,
-            };
-
-            all_segments.push(new_seg.clone());
-            if sink.add(TranscriptionEvent::Segment(new_seg)).is_err() {
-                println!("[Rust] Sink closed. Aborting Qwen loop.");
-                return Ok(());
-            }
-
-            // Progress
-            let progress = ((end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
-            if sink.add(TranscriptionEvent::Progress(progress.clamp(0, 100))).is_err() {
-                println!("[Rust] Sink closed. Aborting Qwen loop.");
-                return Ok(());
-            }
-            if sink.add(TranscriptionEvent::ProgressDetail {
-                processed_ms: end_ms,
-                total_ms: (total_duration * 1000.0) as i64,
-            }).is_err() {
-                println!("[Rust] Sink closed. Aborting Qwen loop.");
-                return Ok(());
-            }
-        }
-
-        let _ = sink.add(TranscriptionEvent::Success(all_segments));
-        Ok(())
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::whisper::TranscriptionEvent;
+    use crate::api::silero_vad::TranscriptionEvent;
 
     struct MockSink;
 

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 flutter_rust_bridge = "=2.11.1"
@@ -48,12 +48,22 @@ cuda = ["legacy-whisper", "whisper-rs/cuda", "ort/cuda"]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
 
 [profile.dev]
+opt-level = 0
+debug = true
+debug-assertions = true
+overflow-checks = true
+codegen-units = 32
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 3
 debug-assertions = false
 
 [profile.release]
-opt-level = "z"
-lto = "fat"
-codegen-units = 1
-debug = 0
-panic = "abort"
-strip = true
+opt-level = 3           # 最佳优化速度
+lto = "fat"             # 开启 Fat LTO 全局链接时内联与优化
+codegen-units = 1       # 设为 1 以最大化 LTO 优化效果与无用代码裁剪
+debug = 0               # 彻底关闭调试信息
+panic = "abort"         # 移除堆栈展开表 (Unwind Table) 大幅裁剪体积
+strip = true            # 自动剥离所有符号表 (Symbols)
+
