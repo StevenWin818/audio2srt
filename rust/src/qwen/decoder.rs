@@ -125,6 +125,19 @@ impl QwenDecoder {
 
         let vocab = unsafe { ll::llama_model_get_vocab(model) };
         let n_embd = unsafe { ll::llama_model_n_embd(model) };
+        // 打印 GGUF 内嵌的模型描述 (含量化类型)，便于确认实际加载的是哪个变体
+        let mut desc_buf = vec![0u8; 256];
+        let desc_len = unsafe {
+            ll::llama_model_desc(
+                model,
+                desc_buf.as_mut_ptr() as *mut c_char,
+                desc_buf.len(),
+            )
+        };
+        if desc_len > 0 {
+            desc_buf.truncate(desc_len as usize);
+            println!("[decoder] model desc: {}", String::from_utf8_lossy(&desc_buf));
+        }
         println!(
             "[decoder] loaded, n_embd={} vocab_tokens={}",
             n_embd,
@@ -137,8 +150,8 @@ impl QwenDecoder {
         ctx_params.n_batch = 1024;
         ctx_params.n_ubatch = 512;
         ctx_params.n_seq_max = 1;
-        ctx_params.n_threads = 4;
-        ctx_params.n_threads_batch = 4;
+        ctx_params.n_threads = 8;
+        ctx_params.n_threads_batch = 8;
         ctx_params.flash_attn_type = ll::LLAMA_FLASH_ATTN_TYPE_ENABLED as _;
         // 生成生成式使用：无池化、因果注意力机制
         ctx_params.pooling_type = ll::LLAMA_POOLING_TYPE_NONE as _;

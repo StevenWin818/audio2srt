@@ -348,9 +348,9 @@ fn run_stream_pipeline_inner(
         config.decoder_backend,
     )?;
 
-    let (tx_raw_48k, rx_raw_48k) = sync_channel::<Vec<f32>>(10);
-    let (tx_clean_48k, rx_clean_48k) = sync_channel::<Vec<f32>>(10);
-    let (tx_asr_task, rx_asr_task) = sync_channel::<AsrTask>(10);
+    let (tx_raw_48k, rx_raw_48k) = sync_channel::<Vec<f32>>(16);
+    let (tx_clean_48k, rx_clean_48k) = sync_channel::<Vec<f32>>(16);
+    let (tx_asr_task, rx_asr_task) = sync_channel::<AsrTask>(16);
 
     let ffmpeg_handle = spawn_ffmpeg_pump(&config, tx_raw_48k)?;
     let dfn_handle = spawn_dfn_worker(&config, rx_raw_48k, tx_clean_48k);
@@ -975,7 +975,7 @@ fn spawn_qwen_worker(
 
     // 编码/解码双线程流水线：段 N 在 GPU 上自回归解码时，段 N+1 已在编码。
     // 解决原实现"编码时 GPU 空闲、解码时编码器空闲"的串行瓶颈。
-    let (tx_encoded, rx_encoded) = std::sync::mpsc::sync_channel::<EncodedTask>(4);
+    let (tx_encoded, rx_encoded) = std::sync::mpsc::sync_channel::<EncodedTask>(8);
 
     let encoder_handle = {
         let runtime = runtime.clone();
@@ -987,6 +987,7 @@ fn spawn_qwen_worker(
                 if task.samples.is_empty() {
                     continue;
                 }
+                let start_time = std::time::Instant::now();
                 let enc_out = match runtime.encode_segment(&task.samples) {
                     Ok(e) => e,
                     Err(e) => {
@@ -994,6 +995,16 @@ fn spawn_qwen_worker(
                         continue;
                     }
                 };
+                let _elapsed_ms = start_time.elapsed().as_millis() as u64;
+                let _audio_dur_sec = task.samples.len() as f64 / 16000.0;
+                let embd_dim = enc_out.shape.last().copied().unwrap_or(1024).max(1);
+                println!(
+                    "[encoder] Encoded {:.2}s audio in {}ms ({} audio tokens)",
+                    _audio_dur_sec,
+                    _elapsed_ms,
+                    enc_out.embeddings.len() / embd_dim
+                );
+                log_perf!("QwenEncode", _elapsed_ms, _audio_dur_sec);
                 if tx_encoded
                     .send(EncodedTask {
                         samples: task.samples,

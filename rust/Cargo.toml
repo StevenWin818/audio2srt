@@ -40,7 +40,13 @@ realfft = "1"
 #    - 非 Windows 平台: GGUF(Vulkan) + ort(CPU)
 # 2. cuda 特性:
 #    - 全平台: GGUF(CUDA) + ort(CUDA)
-default = ["cuda"]
+#
+# 默认同时启用 cuda + qwen-dml-win：
+# - encoder 的 CUDA EP 与 DirectML EP 分支都会编译；
+# - Auto 后端下按 CUDA -> DirectML -> CPU 顺序尝试；
+# - 无 cuDNN/CUDA 13 环境的机器自动落到 DirectML (DX12 通用)，
+#   避免 encoder 静默跑 CPU。
+default = ["cuda", "qwen-dml-win"]
 vulkan = ["dep:llama-cpp-sys-2", "llama-cpp-sys-2/vulkan", "qwen-dml-win", "legacy-whisper"]
 cuda   = ["dep:llama-cpp-sys-2", "llama-cpp-sys-2/cuda", "ort/cuda", "legacy-whisper"]
 

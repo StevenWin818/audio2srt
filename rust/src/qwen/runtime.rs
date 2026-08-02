@@ -136,3 +136,46 @@ impl QwenRuntime {
         self.cancel.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::qwen::backend::{DecoderBackend, EncoderBackend};
+
+    /// 完全复刻 app 的运行时加载路径 (Auto 后端 + 实际模型目录)，
+    /// 验证 encoder 在真实运行时中是否占用 GPU 显存。
+    /// 运行: QWEN_MODEL_DIR=... cargo test --lib runtime_load_and_encode_auto -- --nocapture
+    #[test]
+    fn runtime_load_and_encode_auto() {
+        fn gpu_mem(label: &str) {
+            if let Ok(out) = std::process::Command::new("nvidia-smi")
+                .args(["--query-gpu=memory.used", "--format=csv,noheader"])
+                .output()
+            {
+                println!("[test] GPU mem {}: {}", label, String::from_utf8_lossy(&out.stdout).trim());
+            }
+        }
+        let model_dir = std::env::var("QWEN_MODEL_DIR").unwrap_or_else(|_| {
+            let appdata = std::env::var("APPDATA").expect("APPDATA");
+            format!("{}\\com.audio2srt\\audio2srt\\models\\qwen3-asr-1.7b-f16", appdata)
+        });
+        assert!(std::path::Path::new(&model_dir).exists(), "model dir not found: {}", model_dir);
+
+        gpu_mem("before load");
+        let runtime = QwenRuntime::load(&model_dir, None, EncoderBackend::Auto, DecoderBackend::Auto)
+            .expect("runtime load failed");
+        gpu_mem("after load (pre-encode)");
+
+        let samples = vec![0.0f32; 160000];
+        let t0 = std::time::Instant::now();
+        let out = runtime.encode_segment(&samples).expect("encode failed");
+        let dt = t0.elapsed();
+        println!(
+            "[test] runtime encode 10s audio: {:.2}s, {} embeddings",
+            dt.as_secs_f64(),
+            out.embeddings.len()
+        );
+        gpu_mem("after encode");
+        assert!(!out.embeddings.is_empty());
+    }
+}

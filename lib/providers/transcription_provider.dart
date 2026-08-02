@@ -365,6 +365,8 @@ class TranscriptionProvider with ChangeNotifier {
     final savedModel = await _loadSelectedModelPref();
     if (savedModel != null && await _modelService.isModelDownloaded(savedModel)) {
       _selectedModel = savedModel;
+    } else if (_downloadedModels.contains('qwen3-asr-0.6b-f16')) {
+      _selectedModel = 'qwen3-asr-0.6b-f16';
     } else if (_downloadedModels.contains('qwen3-asr-0.6b')) {
       _selectedModel = 'qwen3-asr-0.6b';
     } else if (_downloadedModels.isNotEmpty) {
@@ -775,8 +777,12 @@ class TranscriptionProvider with ChangeNotifier {
           asrModelDir: modelPath,
           alignerModelDir: _selectedAlignerModel != null ? await _modelService.getModelPath(_selectedAlignerModel!) : null,
           contextPrompt: null,
-          encoderBackend: _useGpu ? rust_qwen_backend.EncoderBackend.directMl : rust_qwen_backend.EncoderBackend.cpu,
-          decoderBackend: _useGpu ? rust_qwen_backend.DecoderBackend.vulkan : rust_qwen_backend.DecoderBackend.cpu,
+          encoderBackend: _useGpu
+              ? rust_qwen_backend.EncoderBackend.auto
+              : rust_qwen_backend.EncoderBackend.cpu,
+          decoderBackend: _useGpu
+              ? rust_qwen_backend.DecoderBackend.auto
+              : rust_qwen_backend.DecoderBackend.cpu,
           timestampMode: rust_stream.TimestampMode.precise,
           vadModelPath: vadModelPath,
           dfModelPath: dfModelPath,
