@@ -6,6 +6,7 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:path/path.dart' as p;
 import '../providers/transcription_provider.dart';
 import '../services/model_service.dart';
+import 'hover_dropdown.dart';
 import '../src/rust/api/ffmpeg.dart' as rust_ffmpeg;
 
 class DashboardView extends StatefulWidget {
@@ -322,7 +323,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
           child: Image.file(
             File(provider.thumbnailPath!),
             fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => _buildMusicCoverPlaceholder(),
+            errorBuilder: (_, _, _) => _buildMusicCoverPlaceholder(),
           ),
         ),
       );
@@ -362,7 +363,6 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
 
   Widget _buildLeftColumn(TranscriptionProvider provider) {
     final selectedBase = provider.selectedModelBase;
-    final selectedQuant = provider.selectedQuant;
     final downloadedModels = provider.downloadedModels;
     final showLowPowerWarning = provider.showLowPowerWarning;
     final enableDenoise = provider.enableDenoise;
@@ -370,60 +370,44 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('识别模型 (Qwen3-ASR)', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.grey)),
+        const Text('识别模型 (Qwen3-ASR)', style:  TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.grey)),
         const SizedBox(height: 8),
         // 模型版本选择
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: const Color(0x05FFFFFF),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0x0FFFFFFF)),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              isExpanded: true,
-              value: selectedBase,
-              dropdownColor: const Color(0xFF1E1E2C),
-              focusColor: Colors.transparent,
-              items: ModelService.availableBaseModels.map((m) {
-                final isDl = downloadedModels.contains(m.id);
-                return DropdownMenuItem<String>(
-                  value: m.id,
-                  child: Row(
-                    children: [
-                      Text(m.name),
-                      const SizedBox(width: 8),
-                      Text(
-                        '(${m.baseSizeText})',
-                        style: const TextStyle(fontSize: 11, color: Colors.grey),
-                      ),
-                      const Spacer(),
-                      Tooltip(
-                        message: isDl ? '模型已就绪' : '点击下载',
-                        child: GestureDetector(
-                          onTap: () {
-                            provider.setCurrentTab(2);
-                          },
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                            child: Icon(
-                              isDl ? Icons.check_circle_outline : Icons.download_for_offline_outlined,
-                              color: isDl ? Colors.green : Colors.grey,
-                              size: 16,
-                            ),
-                          ),
+        HoverDropdown<String>(
+          value: selectedBase,
+          items: ModelService.availableBaseModels.map((m) {
+            final isDl = downloadedModels.contains(m.id);
+            return DropdownMenuItem<String>(
+              value: m.id,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(m.name),
+                  const Spacer(),
+                  Tooltip(
+                    message: isDl ? '模型已就绪' : '点击下载',
+                    child: GestureDetector(
+                      onTap: () {
+                        provider.setCurrentTab(2);
+                      },
+                      child: Container(
+                        alignment: Alignment.center,
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Icon(
+                          isDl ? Icons.check_circle_outline : Icons.download_for_offline_outlined,
+                          color: isDl ? Colors.green : Colors.grey,
+                          size: 16,
                         ),
                       ),
-                    ],
+                    ),
                   ),
-                );
-              }).toList(),
-              onChanged: (val) {
-                if (val != null) provider.setSelectedModelBase(val);
-              },
-            ),
-          ),
+                ],
+              ),
+            );
+          }).toList(),
+          onChanged: (val) {
+            if (val != null) provider.setSelectedModelBase(val);
+          },
         ),
         const SizedBox(height: 8),
         // 量化等级: 横向拖动数轴 (左=快速, 右=精确; 未下载档位灰色不可选)
@@ -493,31 +477,18 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       children: [
         const Text('音频主语言', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.grey)),
         const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            color: const Color(0x05FFFFFF),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0x0FFFFFFF)),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              isExpanded: true,
-              value: selectedLanguage,
-              dropdownColor: const Color(0xFF1E1E2C),
-              focusColor: Colors.transparent,
-              items: const [
-                DropdownMenuItem(value: 'auto', child: Text('自动检测语言 (Auto)')),
-                DropdownMenuItem(value: 'zh', child: Text('中文 (Chinese)')),
-                DropdownMenuItem(value: 'en', child: Text('英文 (English)')),
-                DropdownMenuItem(value: 'ja', child: Text('日语 (Japanese)')),
-                DropdownMenuItem(value: 'ko', child: Text('韩语 (Korean)')),
-              ],
-              onChanged: (val) {
-                if (val != null) provider.setSelectedLanguage(val);
-              },
-            ),
-          ),
+        HoverDropdown<String>(
+          value: selectedLanguage,
+          items: const [
+            DropdownMenuItem(value: 'auto', child: Text('自动检测语言 (Auto)')),
+            DropdownMenuItem(value: 'zh', child: Text('中文 (Chinese)')),
+            DropdownMenuItem(value: 'en', child: Text('英文 (English)')),
+            DropdownMenuItem(value: 'ja', child: Text('日语 (Japanese)')),
+            DropdownMenuItem(value: 'ko', child: Text('韩语 (Korean)')),
+          ],
+          onChanged: (val) {
+            if (val != null) provider.setSelectedLanguage(val);
+          },
         ),
         const SizedBox(height: 16),
         Row(
@@ -545,35 +516,22 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
           const SizedBox(height: 16),
           const Text('选择提取音轨', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.grey)),
           const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: const Color(0x05FFFFFF),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0x0FFFFFFF)),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<rust_ffmpeg.AudioTrackInfo>(
-                isExpanded: true,
-                value: selectedTrack,
-                dropdownColor: const Color(0xFF1E1E2C),
-                focusColor: Colors.transparent,
-                items: availableTracks.map((track) {
-                  final lang = track.language ?? '未知';
-                  final codec = track.codecName;
-                  final title = track.title != null ? ' - ${track.title}' : '';
-                  return DropdownMenuItem<rust_ffmpeg.AudioTrackInfo>(
-                    value: track,
-                    child: Text('音轨 ${track.index.toInt() + 1}: $lang ($codec)$title', style: const TextStyle(fontSize: 13)),
-                  );
-                }).toList(),
-                onChanged: (val) {
-                  if (val != null) {
-                    provider.setSelectedTrack(val);
-                  }
-                },
-              ),
-            ),
+          HoverDropdown<rust_ffmpeg.AudioTrackInfo>(
+            value: selectedTrack,
+            items: availableTracks.map((track) {
+              final lang = track.language ?? '未知';
+              final codec = track.codecName;
+              final title = track.title != null ? ' - ${track.title}' : '';
+              return DropdownMenuItem<rust_ffmpeg.AudioTrackInfo>(
+                value: track,
+                child: Text('音轨 ${track.index.toInt() + 1}: $lang ($codec)$title', style: const TextStyle(fontSize: 13)),
+              );
+            }).toList(),
+            onChanged: (val) {
+              if (val != null) {
+                provider.setSelectedTrack(val);
+              }
+            },
           ),
         ],
       ],
@@ -697,105 +655,186 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     return LayoutBuilder(builder: (context, constraints) {
       final w = constraints.maxWidth;
       final n = quants.length;
-      final slot = n > 1 ? w / (n - 1) : 0.0;
+      // 数轴两端内缩 (与标签半宽一致), 让轨道端点 = 首尾档位 = 快速/精确 标记三者绝对对齐
       const labelWidth = 88.0;
+      final axisPad = labelWidth / 2; // 44.0
+      final trackW = (w - 2 * axisPad).clamp(0.0, double.infinity);
+      final slot = n > 1 ? trackW / (n - 1) : 0.0;
 
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 两端标记
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('快速', style: TextStyle(fontSize: 11, color: Colors.grey.shade400)),
-                Text('精确', style: TextStyle(fontSize: 11, color: Colors.grey.shade400)),
-              ],
-            ),
-          ),
-          // 数轴 (padding 归零, 档位点与下方标签按同一几何对齐)
-          Slider(
-            value: thumbIdx.toDouble(),
-            min: 0,
-            max: (n - 1).toDouble(),
-            divisions: n - 1,
-            padding: EdgeInsets.zero,
-            activeColor: const Color(0xFF8B5CF6),
-            inactiveColor: const Color(0x33FFFFFF),
-            onChanged: (v) {
-              final idx = v.round();
-              final q = quants[idx];
-              if (provider.isQuantReady(base.id, q.id)) {
-                provider.setSelectedQuant(q.id);
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('${q.label} 尚未下载，请前往模型管理器下载'),
-                    duration: const Duration(seconds: 2),
-                  ),
-                );
-              }
-            },
-          ),
-          // 档位标签: 每档中心 x = i/(n-1)*w, 与 Slider 档位点精确对齐
-          SizedBox(
-            height: 46,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                for (int i = 0; i < n; i++)
+      return Semantics(
+        container: true,
+        label: '模型量化数轴选择器',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 1. 首尾两端标记 ("快速" & "精确"): 增强 line-height 与 Chip 美化，与轨道首尾端点 (X=axisPad, X=w-axisPad) 精确居中对齐
+            SizedBox(
+              height: 26,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  // 左侧 "快速" 标签 (中心点居中在 axisPad)
                   Positioned(
-                    left: i * slot - labelWidth / 2,
+                    left: axisPad - labelWidth / 2,
                     width: labelWidth,
-                    child: GestureDetector(
-                      onTap: provider.isQuantReady(base.id, quants[i].id)
-                          ? () => provider.setSelectedQuant(quants[i].id)
-                          : () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('${quants[i].label} 尚未下载，请前往模型管理器下载'),
-                                  duration: const Duration(seconds: 2),
-                                ),
-                              );
-                            },
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.circle,
-                            size: 10,
-                            color: provider.isQuantReady(base.id, quants[i].id)
-                                ? (i == selIdx
-                                    ? const Color(0xFF8B5CF6)
-                                    : Colors.grey.shade300)
-                                : Colors.grey.shade700,
+                    child: Container(
+                      alignment: Alignment.center,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0x1510B981),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: const Color(0x3010B981)),
+                        ),
+                        child: const Text(
+                          '⚡ 快速',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF34D399),
+                            height: 1.4,
+                            letterSpacing: 0.5,
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            quants[i].label,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: provider.isQuantReady(base.id, quants[i].id)
-                                  ? (i == selIdx ? const Color(0xFFA78BFA) : Colors.white)
-                                  : Colors.grey.shade600,
-                              fontWeight: i == selIdx ? FontWeight.bold : FontWeight.normal,
-                            ),
-                          ),
-                          Text(
-                            quants[i].sizeText,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(fontSize: 9, color: Colors.grey.shade600),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
-              ],
+                  // 右侧 "精确" 标签 (中心点居中在 w - axisPad)
+                  Positioned(
+                    left: (w - axisPad) - labelWidth / 2,
+                    width: labelWidth,
+                    child: Container(
+                      alignment: Alignment.center,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0x158B5CF6),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: const Color(0x308B5CF6)),
+                        ),
+                        child: const Text(
+                          '🎯 精确',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFFA78BFA),
+                            height: 1.4,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 8),
+
+            // 2. 数轴 Slider: 使用 _CustomQuantSliderTrackShape 确保轨道左端点 = 0th档位点 = axisPad, 右端点 = (n-1)th档位点 = w - axisPad
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: axisPad),
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackShape: const _CustomQuantSliderTrackShape(),
+                  trackHeight: 4.0,
+                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7.0),
+                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 14.0),
+                  activeTrackColor: const Color(0xFF8B5CF6),
+                  inactiveTrackColor: const Color(0x33FFFFFF),
+                  thumbColor: const Color(0xFFA78BFA),
+                  overlayColor: const Color(0x228B5CF6),
+                ),
+                child: Slider(
+                  value: thumbIdx.toDouble(),
+                  min: 0,
+                  max: (n - 1).toDouble(),
+                  divisions: n - 1,
+                  onChanged: (v) {
+                    final idx = v.round();
+                    final q = quants[idx];
+                    if (provider.isQuantReady(base.id, q.id)) {
+                      provider.setSelectedQuant(q.id);
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('${q.label} 尚未下载，请前往模型管理器下载'),
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // 3. 档位卡片标签: 每档中心 X = axisPad + i * slot, 与 Slider 档位点及首尾标记精确对齐
+            SizedBox(
+              height: 52,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  for (int i = 0; i < n; i++)
+                    Positioned(
+                      left: axisPad + i * slot - labelWidth / 2,
+                      width: labelWidth,
+                      child: GestureDetector(
+                        onTap: provider.isQuantReady(base.id, quants[i].id)
+                            ? () => provider.setSelectedQuant(quants[i].id)
+                            : () {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('${quants[i].label} 尚未下载，请前往模型管理器下载'),
+                                    duration: const Duration(seconds: 2),
+                                  ),
+                                );
+                              },
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.circle,
+                              size: i == selIdx ? 10 : 8,
+                              color: provider.isQuantReady(base.id, quants[i].id)
+                                  ? (i == selIdx
+                                      ? const Color(0xFF8B5CF6)
+                                      : Colors.grey.shade300)
+                                  : Colors.grey.shade700,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              quants[i].label,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 11,
+                                height: 1.4,
+                                color: provider.isQuantReady(base.id, quants[i].id)
+                                    ? (i == selIdx ? const Color(0xFFA78BFA) : Colors.white)
+                                    : Colors.grey.shade600,
+                                fontWeight: i == selIdx ? FontWeight.bold : FontWeight.normal,
+                              ),
+                            ),
+                            Text(
+                              quants[i].sizeText,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 9,
+                                height: 1.3,
+                                color: Colors.grey.shade500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       );
     });
   }
@@ -1179,5 +1218,26 @@ class _ScrollingOutputListState extends State<ScrollingOutputList> {
         );
       },
     );
+  }
+}
+
+/// 自定义数轴轨道 Shape: 强制轨道从 Slider Widget 的左边缘 (0.0) 精确绘制到右边缘 (width)，
+/// 从而使首尾 Slider 档位点、数轴轨道端点与 "快速/精确" 标记完全无死角居中对齐。
+class _CustomQuantSliderTrackShape extends RectangularSliderTrackShape {
+  const _CustomQuantSliderTrackShape();
+
+  @override
+  Rect getPreferredRect({
+    required RenderBox parentBox,
+    Offset offset = Offset.zero,
+    required SliderThemeData sliderTheme,
+    bool isEnabled = false,
+    bool isDiscrete = false,
+  }) {
+    final double trackHeight = sliderTheme.trackHeight ?? 4.0;
+    final double trackLeft = offset.dx;
+    final double trackWidth = parentBox.size.width;
+    final double trackTop = offset.dy + (parentBox.size.height - trackHeight) / 2;
+    return Rect.fromLTWH(trackLeft, trackTop, trackWidth, trackHeight);
   }
 }

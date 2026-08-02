@@ -59,7 +59,7 @@ class QwenModelInfo {
   });
 }
 
-/// 解码器量化版本。文件名约定: decoder.<id>.gguf (如 decoder.q4_k_m.gguf)
+/// 解码器量化版本。文件名约定: `decoder.<id>.gguf` (如 `decoder.q4_k_m.gguf`)
 class QwenQuantVersion {
   final String id; // 'f16' | 'q8_0' | 'q6_k' | 'q4_k_m'
   final String label; // 显示名，如 '全量 F16'
@@ -82,7 +82,7 @@ class QwenQuantVersion {
 
 /// 一个基础模型目录: encoder + config 共享，多个量化 decoder 并存。
 /// 存储结构:
-///   models/<id>/
+///   models/`<id>`/
 ///     config.json
 ///     encoder.onnx
 ///     decoder.f16.gguf
@@ -127,7 +127,7 @@ class ModelService {
     ),
     ModelMirror(
       id: 'hf-mirror',
-      name: 'HF-Mirror 国内镜像站',
+      name: 'HF-Mirror 镜像站',
       baseUrl: 'https://hf-mirror.com',
       description: '国内高速 CDN 加速镜像，适合国内网络环境',
     ),
@@ -342,17 +342,6 @@ class ModelService {
     return results;
   }
 
-  Future<bool> isAlignerDownloaded() async {
-    final path = await getModelPath(alignerModel.dirName);
-    if (!await Directory(path).exists()) return false;
-    final f = File(p.join(path, 'aligner.onnx'));
-    try {
-      return await f.exists() && await f.length() > 50 * 1024 * 1024;
-    } catch (_) {
-      return false;
-    }
-  }
-
   /// 基础模型本地实际占用 (encoder + config + 所有已下载 decoder)
   Future<int> getBaseLocalBytes(String baseId) async {
     final path = await getModelPath(baseId);
@@ -397,9 +386,7 @@ class ModelService {
         }
       }
     }
-    if (best == null) {
-      best = availableMirrors.first;
-    }
+    best ??= availableMirrors.first;
     debugPrint('[ModelService] Auto-picked mirror: ${best.name} (${best.latencyMs}ms)');
     return best;
   }
@@ -473,6 +460,8 @@ class ModelService {
     required Function(String error) onFailure,
   }) async {
     Directory? targetDir;
+    // 本次会话待下载文件 (中断时用于清理残片)
+    final filesToDownload = <QwenModelFile>[];
     try {
       final dir = await getModelDir();
       targetDir = Directory(p.join(dir.path, model.id));
@@ -496,7 +485,7 @@ class ModelService {
       ));
 
       // 构建待下载文件列表: 基础文件 (缺失才下) + 量化 decoder (缺失才下)
-      final filesToDownload = <QwenModelFile>[];
+      filesToDownload.clear();
       for (final f in model.baseFiles) {
         final target = File(p.join(targetDir.path, f.filename));
         final ok = f.filename == 'encoder.onnx'
@@ -528,7 +517,7 @@ class ModelService {
         final fileTotal = realSizes[f.filename] ?? (f.sizeMB * 1024 * 1024).round();
         final url = '$baseUrl/${f.urlPath}';
 
-        debugPrint('[ModelService] Downloading $url -> ${targetFile.path} (${fileTotal} bytes)');
+        debugPrint('[ModelService] Downloading $url -> ${targetFile.path} ($fileTotal bytes)');
 
         await dio.download(
           url,
@@ -549,6 +538,17 @@ class ModelService {
       onSuccess();
     } catch (e) {
       debugPrint('[ModelService] Download error: $e');
+      // 清理本次会话下载的文件，防止残片被误判为已下载 (下载中断留下 >50MB 残片时，
+      // isQuantDownloaded 会误判，导致下次跳过下载而转写加载损坏文件)
+      for (final f in filesToDownload) {
+        try {
+          final target = File(p.join(targetDir?.path ?? '', f.filename));
+          if (await target.exists()) {
+            await target.delete();
+            debugPrint('[ModelService] Cleaned partial file ${f.filename}');
+          }
+        } catch (_) {}
+      }
       if (e is DioException && CancelToken.isCancel(e)) {
         onFailure('下载已取消');
       } else {
@@ -565,6 +565,8 @@ class ModelService {
   }) async {
     final model = alignerModel;
     Directory? targetDir;
+    // 本次会话待下载文件 (中断时用于清理残片)
+    final filesToDownload = <QwenModelFile>[];
     try {
       final dir = await getModelDir();
       targetDir = Directory(p.join(dir.path, model.dirName));
@@ -582,12 +584,11 @@ class ModelService {
         },
       ));
 
-      final filesToDownload = <QwenModelFile>[];
+      filesToDownload.clear();
       for (final f in model.files) {
         final target = File(p.join(targetDir.path, f.filename));
         if (!await target.exists()) filesToDownload.add(f);
       }
-
       final realSizes = <String, int>{};
       for (final f in filesToDownload) {
         final url = '$baseUrl/${f.urlPath}';
@@ -619,6 +620,16 @@ class ModelService {
       onSuccess();
     } catch (e) {
       debugPrint('[ModelService] Aligner download error: $e');
+      // 清理本次会话下载的文件，防止残片被误判为已下载
+      for (final f in filesToDownload) {
+        try {
+          final target = File(p.join(targetDir?.path ?? '', f.filename));
+          if (await target.exists()) {
+            await target.delete();
+            debugPrint('[ModelService] Cleaned partial file ${f.filename}');
+          }
+        } catch (_) {}
+      }
       if (e is DioException && CancelToken.isCancel(e)) {
         onFailure('下载已取消');
       } else {
@@ -639,13 +650,21 @@ class ModelService {
     }
   }
 
-  /// 删除整个基础模型目录 (encoder + 所有量化)
-  Future<void> deleteBase(String baseId) async {
+  /// 修复基础模型: 只删除损坏的基础文件 (encoder.onnx 过小/损坏)，保留完好的量化 decoder。
+  /// config.json 缺失时无需删除 (下载时自动补齐)。返回是否清理了文件。
+  Future<bool> repairBase(String baseId) async {
     final path = await getModelPath(baseId);
-    final dir = Directory(path);
-    if (await dir.exists()) {
-      await dir.delete(recursive: true);
+    final encoder = File(p.join(path, 'encoder.onnx'));
+    try {
+      if (await encoder.exists() && await encoder.length() <= 100 * 1024 * 1024) {
+        await encoder.delete();
+        debugPrint('[ModelService] Repair: removed corrupted encoder.onnx in $baseId');
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[ModelService] Repair encoder check error: $e');
     }
+    return false;
   }
 
   Future<void> deleteAligner() async {
@@ -658,7 +677,7 @@ class ModelService {
 
   /// 迁移旧版存储布局:
   /// 旧结构每个量化一个目录 (qwen3-asr-0.6b-f16/...)，且 decoder 统一命名为 decoder.gguf。
-  /// 新结构: 一模型一目录 + decoder.<quant>.gguf 多文件。
+  /// 新结构: 一模型一目录 + `decoder.<quant>.gguf` 多文件。
   /// 这里把旧目录中已知量化的 decoder.gguf 复制为新命名 (保留原文件，安全)。
   Future<void> migrateLegacyLayout() async {
     try {

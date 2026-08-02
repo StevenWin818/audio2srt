@@ -65,6 +65,12 @@ Future<void> main() async {
   if (isRustInitialized) {
     runApp(const Audio2SrtApp());
   } else {
+    try {
+      await windowManager.setTitleBarStyle(TitleBarStyle.normal);
+      await windowManager.setPreventClose(false);
+    } catch (e) {
+      debugPrint('Resetting windowManager failed: $e');
+    }
     runApp(InitializationErrorApp(error: initError, stackTrace: initStackTrace));
   }
 }
@@ -79,6 +85,11 @@ class Audio2SrtApp extends StatelessWidget {
       child: MaterialApp(
         title: 'Audio2Srt - 本地智能字幕生成',
         debugShowCheckedModeBanner: false,
+        builder: (context, child) {
+          return ExcludeSemantics(
+            child: child ?? const SizedBox(),
+          );
+        },
         locale: const Locale('zh', 'CN'),
         supportedLocales: const [
           Locale('zh', 'CN'),
@@ -580,6 +591,31 @@ class _InitializationErrorPageState extends State<InitializationErrorPage> {
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          try {
+                            windowManager.destroy();
+                          } catch (_) {
+                            exit(0);
+                          }
+                        },
+                        icon: const Icon(Icons.close, color: Color(0xFFEF4444)),
+                        label: const Text(
+                          '退出程序',
+                          style: TextStyle(
+                            color: Color(0xFFEF4444),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Color(0x3FEF4444)),
+                          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
                           ),
                         ),
                       ),

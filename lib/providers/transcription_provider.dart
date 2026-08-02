@@ -186,12 +186,6 @@ class TranscriptionProvider with ChangeNotifier {
   bool _isGpuAvailable = false;
   bool get isGpuAvailable => _isGpuAvailable;
 
-  bool _isModelLoading = false;
-  bool get isModelLoading => _isModelLoading;
-
-  String? _loadingModelName;
-  String? get loadingModelName => _loadingModelName;
-
   List<rust_whisper.VulkanDeviceInfo> _vulkanDevices = [];
   List<rust_whisper.VulkanDeviceInfo> get vulkanDevices => _vulkanDevices;
 
@@ -287,7 +281,7 @@ class TranscriptionProvider with ChangeNotifier {
   }
 
   // 全局模型下载状态
-  /// 下载标识: 基础模型为 "<baseId>|<quantId>"，aligner 为 "forced-aligner-0.6b"
+  /// 下载标识: 基础模型为 `<baseId>|<quantId>`，aligner 为 `forced-aligner-0.6b`
   String? _downloadingModelFile;
   String? get downloadingModelFile => _downloadingModelFile;
 
@@ -301,7 +295,7 @@ class TranscriptionProvider with ChangeNotifier {
   List<String> _downloadedModels = [];
   List<String> get downloadedModels => _downloadedModels;
 
-  /// 已下载的量化组合: "<baseId>|<quantId>"
+  /// 已下载的量化组合: `<baseId>|<quantId>`
   Set<String> _readyQuants = {};
   Set<String> get readyQuants => _readyQuants;
 
@@ -394,16 +388,20 @@ class TranscriptionProvider with ChangeNotifier {
   Future<bool> checkAndRepairModel(String dirName) async {
     final isCorrupted = await _modelService.isBaseCorrupted(dirName);
     if (isCorrupted) {
-      debugPrint('[TranscriptionProvider] Model $dirName is corrupted. Auto purging...');
-      await _modelService.deleteBase(dirName);
+      debugPrint('[TranscriptionProvider] Model $dirName base files corrupted. Auto repairing...');
+      // 只清理损坏的基础文件 (encoder/config)，保留已下载的量化 decoder
+      final cleaned = await _modelService.repairBase(dirName);
       _downloadedModels = await _modelService.getDownloadedBases();
-      if (_selectedModelBase == dirName) {
+      final stillBroken = !(await _modelService.isBaseDownloaded(dirName));
+      if (_selectedModelBase == dirName && stillBroken) {
         _selectedModelBase = _downloadedModels.isNotEmpty ? _downloadedModels.first : null;
       }
       if (_selectedAlignerModel == dirName) {
         _selectedAlignerModel = null;
       }
-      _statusMessage = '模型缓存文件损坏，已自动清理！请重新下载模型。';
+      _statusMessage = cleaned
+          ? '检测到模型基础文件损坏，已清理损坏文件（已下载的量化版本已保留）。请重新下载缺失部分。'
+          : '模型基础文件缺失，请重新下载。';
       _safeNotifyListeners();
       return true;
     }
@@ -617,15 +615,6 @@ class TranscriptionProvider with ChangeNotifier {
     await _modelService.deleteQuant(baseId, quantId);
     _downloadedModels = await _modelService.getDownloadedBases();
     await _refreshReadyQuants();
-    notifyListeners();
-  }
-
-  Future<void> deleteBaseModel(String baseId) async {
-    await _modelService.deleteBase(baseId);
-    _downloadedModels = await _modelService.getDownloadedBases();
-    if (_selectedModelBase == baseId) {
-      _selectedModelBase = _downloadedModels.isNotEmpty ? _downloadedModels.first : null;
-    }
     notifyListeners();
   }
 

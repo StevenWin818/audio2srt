@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/transcription_provider.dart';
 import '../services/model_service.dart';
+import 'hover_dropdown.dart';
 
 class ModelsView extends StatefulWidget {
   const ModelsView({super.key});
@@ -12,13 +13,14 @@ class ModelsView extends StatefulWidget {
 }
 
 class _ModelsViewState extends State<ModelsView> {
-  /// 各量化版本的本地实际体积缓存: "<baseId>|<quantId>" -> bytes
+  /// 各量化版本的本地实际体积缓存: `<baseId>|<quantId>` -> bytes
   final Map<String, int> _localSizes = {};
 
   /// 基础模型总占用缓存
   final Map<String, int> _baseSizes = {};
 
-  DateTime _lastSizeRefresh = DateTime.fromMillisecondsSinceEpoch(0);
+  TranscriptionProvider? _provider;
+  Timer? _sizeRefreshTimer;
 
   @override
   void initState() {
@@ -26,10 +28,31 @@ class _ModelsViewState extends State<ModelsView> {
     _refreshSizes();
   }
 
-  /// 防抖刷新本地体积: 下载/删除完成后 UI 重新 build 时自动更新
-  Future<void> _refreshSizesDebounced() async {
-    if (DateTime.now().difference(_lastSizeRefresh).inSeconds < 3) return;
-    await _refreshSizes();
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final p = Provider.of<TranscriptionProvider>(context);
+    if (p != _provider) {
+      _provider?.removeListener(_onProviderChanged);
+      _provider = p;
+      _provider?.addListener(_onProviderChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    _provider?.removeListener(_onProviderChanged);
+    _sizeRefreshTimer?.cancel();
+    super.dispose();
+  }
+
+  /// 下载进度会高频 notify: 用 Timer 防抖，状态稳定 2s 后才刷新一次本地体积，
+  /// 避免下载期间反复扫描磁盘。
+  void _onProviderChanged() {
+    _sizeRefreshTimer?.cancel();
+    _sizeRefreshTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) _refreshSizes();
+    });
   }
 
   Future<void> _refreshSizes() async {
@@ -48,7 +71,6 @@ class _ModelsViewState extends State<ModelsView> {
         _localSizes
           ..clear()
           ..addAll(updated);
-        _lastSizeRefresh = DateTime.now();
       });
     }
   }
@@ -82,35 +104,6 @@ class _ModelsViewState extends State<ModelsView> {
     }
   }
 
-  Future<void> _deleteBase(
-      BuildContext context, String baseId, TranscriptionProvider provider) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('删除整个模型'),
-        content: Text('确定要删除模型 $baseId 吗？将删除 encoder 与全部量化版本，释放磁盘空间。'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm == true) {
-      await provider.deleteBaseModel(baseId);
-      await _refreshSizes();
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('模型 $baseId 已删除')),
-        );
-      }
-    }
-  }
-
   Future<void> _deleteAligner(BuildContext context, TranscriptionProvider provider) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -137,7 +130,6 @@ class _ModelsViewState extends State<ModelsView> {
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<TranscriptionProvider>(context);
-    _refreshSizesDebounced();
 
     return Padding(
       padding: const EdgeInsets.all(24.0),
@@ -175,6 +167,7 @@ class _ModelsViewState extends State<ModelsView> {
 
   /// 下载源选择: 自动 (测速) / 官方 / HF-Mirror，紧凑单行
   Widget _buildMirrorSelector(TranscriptionProvider provider) {
+    final mirrors = [ModelService.autoMirror, ...ModelService.availableMirrors];
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
@@ -189,35 +182,33 @@ class _ModelsViewState extends State<ModelsView> {
           const Text('下载源:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
           const SizedBox(width: 8),
           Expanded(
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                value: provider.selectedMirrorId,
-                isExpanded: true,
-                dropdownColor: const Color(0xFF1E1E2C),
-                style: const TextStyle(fontSize: 13, color: Colors.white),
-                // 按钮 (选中态) 显示完整标签, 如 "自动（当前：HF-Mirror 国内镜像站）"
-                selectedItemBuilder: (context) => [
-                  for (final mirror in [ModelService.autoMirror, ...ModelService.availableMirrors])
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        mirror.id == 'auto' ? provider.selectedMirrorLabel : mirror.name,
-                        style: const TextStyle(fontSize: 13, color: Colors.white),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+            child: HoverDropdown<String>(
+              value: provider.selectedMirrorId,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              borderRadius: 8,
+              height: 42,
+              // 按钮 (选中态) 显示完整标签, 如 "自动（当前：HF-Mirror 国内镜像站）"
+              selectedItemBuilder: (context) => [
+                for (final mirror in mirrors)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      mirror.id == 'auto' ? provider.selectedMirrorLabel : mirror.name,
+                      style: const TextStyle(fontSize: 13, color: Colors.white),
+                      overflow: TextOverflow.ellipsis,
                     ),
-                ],
-                items: [
-                  for (final mirror in [ModelService.autoMirror, ...ModelService.availableMirrors])
-                    DropdownMenuItem<String>(
-                      value: mirror.id,
-                      child: Text(mirror.name),
-                    ),
-                ],
-                onChanged: (val) {
-                  if (val != null) provider.setSelectedMirrorId(val);
-                },
-              ),
+                  ),
+              ],
+              items: [
+                for (final mirror in mirrors)
+                  DropdownMenuItem<String>(
+                    value: mirror.id,
+                    child: Text(mirror.name),
+                  ),
+              ],
+              onChanged: (val) {
+                if (val != null) provider.setSelectedMirrorId(val);
+              },
             ),
           ),
         ],
@@ -243,8 +234,6 @@ class _ModelsViewState extends State<ModelsView> {
   Widget _buildBaseModelCard(
       BuildContext context, TranscriptionProvider provider, QwenBaseModel model) {
     final isBaseDl = provider.downloadedModels.contains(model.id);
-    final isDownloadingBase = provider.downloadingModelFile?.startsWith('${model.id}|') ?? false;
-    final downloadProgress = provider.downloadProgress;
     final baseLocalBytes = _baseSizes['base:${model.id}'] ?? 0;
 
     return Card(
