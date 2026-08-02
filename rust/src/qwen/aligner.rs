@@ -1,6 +1,5 @@
 use crate::qwen::error::QwenError;
 use ort::session::Session;
-use ort::ep::DirectML;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,8 +48,16 @@ impl QwenAligner {
         builder = builder
             .with_intra_threads(2)
             .map_err(|e| QwenError::OnnxError(format!("aligner intra_threads: {}", e)))?;
-        #[cfg(all(target_os = "windows", feature = "qwen-dml"))]
+        #[cfg(any(feature = "cuda", feature = "qwen-cuda"))]
         {
+            use ort::ep::CUDA;
+            if let Ok(b) = builder.clone().with_execution_providers([CUDA::default().build()]) {
+                builder = b;
+            }
+        }
+        #[cfg(all(target_os = "windows", any(feature = "vulkan", feature = "qwen-dml", feature = "qwen-dml-win")))]
+        {
+            use ort::ep::DirectML;
             if let Ok(b) = builder.clone().with_execution_providers([DirectML::default().build()]) {
                 builder = b;
             }

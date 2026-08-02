@@ -29,6 +29,113 @@ pub fn set_rust_perf_logging(enable: bool) {
 static SHOULD_CANCEL: AtomicBool = AtomicBool::new(false);
 static ACTIVE_FFMPEG_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
 
+#[flutter_rust_bridge::frb(ignore)]
+pub fn get_or_create_qwen_runtime(
+    qwen_dir: &str,
+    aligner_dir: Option<&str>,
+    encoder_backend: crate::qwen::backend::EncoderBackend,
+    decoder_backend: crate::qwen::backend::DecoderBackend,
+) -> Result<Arc<crate::qwen::runtime::QwenRuntime>> {
+    let enc_backend_resolved = match encoder_backend {
+        crate::qwen::backend::EncoderBackend::Auto => {
+            if cfg!(any(feature = "cuda", feature = "qwen-cuda")) {
+                crate::qwen::backend::EncoderBackend::Cuda
+            } else if cfg!(all(target_os = "windows", any(feature = "vulkan", feature = "qwen-dml", feature = "qwen-dml-win"))) {
+                crate::qwen::backend::EncoderBackend::DirectMl
+            } else {
+                crate::qwen::backend::EncoderBackend::Cpu
+            }
+        }
+        b => b,
+    };
+    let dec_backend_resolved = match decoder_backend {
+        crate::qwen::backend::DecoderBackend::Auto => {
+            if cfg!(any(feature = "cuda", feature = "qwen-cuda")) {
+                crate::qwen::backend::DecoderBackend::Cuda
+            } else if cfg!(any(feature = "vulkan", feature = "qwen-vulkan")) {
+                crate::qwen::backend::DecoderBackend::Vulkan
+            } else {
+                crate::qwen::backend::DecoderBackend::Cpu
+            }
+        }
+        b => b,
+    };
+
+    let norm_asr = qwen_dir.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let norm_aligner = aligner_dir.map(|s| s.replace('\\', "/").trim_end_matches('/').to_lowercase());
+
+    let key = crate::qwen::context::RuntimeCacheKey {
+        asr_model_id: norm_asr,
+        aligner_model_id: norm_aligner,
+        encoder_backend: enc_backend_resolved,
+        decoder_backend: dec_backend_resolved,
+    };
+
+    let mut cache = crate::qwen::context::GLOBAL_QWEN_CACHE.lock();
+    if let Some(runtime) = cache.get(&key) {
+        println!("[Rust Cache HIT] 成功秒级复用显存中的预加载 QwenRuntime (Model: {})", qwen_dir);
+        runtime.reset_cancel();
+        return Ok(runtime);
+    }
+
+    // 目录或 Backend 变更：先清理旧的 Cache，触发原 QwenDecoder 的 Drop，彻底释放 GPU 显存！
+    println!("[Rust Cache MISS] 未命中预加载缓存! 请求键: {:?}. 正在释放旧模型并载入新模型...", key);
+    cache.clear();
+
+    println!("[Rust] Loading new QwenRuntime into GPU VRAM from model dir: {}", qwen_dir);
+    let runtime = Arc::new(
+        crate::qwen::runtime::QwenRuntime::load(
+            qwen_dir,
+            aligner_dir,
+            encoder_backend,
+            decoder_backend,
+        )
+        .map_err(|e| anyhow!("Failed to load Qwen runtime: {:?}", e))?,
+    );
+
+    cache.set(key, runtime.clone());
+    Ok(runtime)
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn unload_qwen_runtime() {
+    let mut cache = crate::qwen::context::GLOBAL_QWEN_CACHE.lock();
+    println!("[Rust] unload_qwen_runtime: Dropping cached QwenRuntime and freeing GPU VRAM...");
+    cache.clear();
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn preload_qwen_model(
+    asr_model_dir: String,
+    aligner_model_dir: Option<String>,
+) -> Result<(), String> {
+    println!("[Rust] Spawning background thread for preloading Qwen model: {}", asr_model_dir);
+    std::thread::spawn(move || {
+        let app_data = std::env::var("APPDATA").unwrap_or_default();
+        let default_qwen = format!("{}/com.audio2srt/audio2srt/models/qwen3-asr-0.6b", app_data.replace('\\', "/"));
+
+        let qwen_dir = if is_qwen_model_dir(&asr_model_dir) {
+            asr_model_dir
+        } else if Path::new(&default_qwen).exists() {
+            default_qwen
+        } else {
+            println!("[Rust Preload] Model dir not valid: {}", asr_model_dir);
+            return;
+        };
+
+        match get_or_create_qwen_runtime(
+            &qwen_dir,
+            aligner_model_dir.as_deref(),
+            crate::qwen::backend::EncoderBackend::Auto,
+            crate::qwen::backend::DecoderBackend::Auto,
+        ) {
+            Ok(_) => println!("[Rust Preload] Successfully preloaded model into VRAM: {}", qwen_dir),
+            Err(e) => println!("[Rust Preload] Preload model error: {:?}", e),
+        }
+    });
+    Ok(())
+}
+
 #[flutter_rust_bridge::frb(sync)]
 pub fn cancel_transcription_backend() {
     SHOULD_CANCEL.store(true, Ordering::SeqCst);
@@ -234,14 +341,12 @@ fn run_stream_pipeline_inner(
         return Err(anyhow!("未找到有效的 Qwen ASR 模型目录: {}", config.asr_model_dir));
     };
 
-    println!("[Rust] Initializing Qwen ASR pipeline with model dir: {}", qwen_dir);
-    let runtime = crate::qwen::runtime::QwenRuntime::load(
+    let runtime_arc = get_or_create_qwen_runtime(
         &qwen_dir,
         config.aligner_model_dir.as_deref(),
         config.encoder_backend,
         config.decoder_backend,
-    ).map_err(|e| anyhow!("Failed to load Qwen runtime: {:?}", e))?;
-    let runtime_arc = Arc::new(runtime);
+    )?;
 
     let (tx_raw_48k, rx_raw_48k) = sync_channel::<Vec<f32>>(10);
     let (tx_clean_48k, rx_clean_48k) = sync_channel::<Vec<f32>>(10);
@@ -847,6 +952,16 @@ fn spawn_vad_worker(
     })
 }
 
+struct EncodedTask {
+    samples: Vec<f32>,
+    enc_out: crate::qwen::encoder::EncoderOutput,
+    start_ms: i64,
+    end_ms: i64,
+}
+
+/// 连续解码为空(模型跳过)的音频最大合并时长，超过则丢弃避免污染后续识别。
+const MAX_MERGE_SECONDS: usize = 10;
+
 fn spawn_qwen_worker(
     runtime: Arc<crate::qwen::runtime::QwenRuntime>,
     config: &PipelineConfig,
@@ -858,96 +973,176 @@ fn spawn_qwen_worker(
     let language = config.language.clone();
     let context_prompt = config.context_prompt.clone();
 
-    thread::spawn(move || -> Result<()> {
-        register_thread_as_pro_audio();
-        let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
+    // 编码/解码双线程流水线：段 N 在 GPU 上自回归解码时，段 N+1 已在编码。
+    // 解决原实现"编码时 GPU 空闲、解码时编码器空闲"的串行瓶颈。
+    let (tx_encoded, rx_encoded) = std::sync::mpsc::sync_channel::<EncodedTask>(4);
 
-        while let Ok(task) = rx_task.recv() {
-            if SHOULD_CANCEL.load(Ordering::SeqCst) {
-                break;
-            }
-            let AsrTask { samples: samples_16k, start_ms, end_ms } = task;
-
-            if samples_16k.is_empty() {
-                continue;
-            }
-
-            let start_time = std::time::Instant::now();
-            let decode_res = match runtime.transcribe_segment(
-                &samples_16k,
-                language.as_deref(),
-                context_prompt.as_deref(),
-            ) {
-                Ok(res) => res,
-                Err(e) => {
-                    println!("[Rust] Qwen transcribe segment error: {:?}", e);
+    let encoder_handle = {
+        let runtime = runtime.clone();
+        thread::spawn(move || -> Result<()> {
+            while let Ok(task) = rx_task.recv() {
+                if SHOULD_CANCEL.load(Ordering::SeqCst) {
+                    break;
+                }
+                if task.samples.is_empty() {
                     continue;
                 }
-            };
-
-            let _elapsed_ms = start_time.elapsed().as_millis() as u64;
-            let _audio_dur_sec = samples_16k.len() as f64 / 16000.0;
-            log_perf!("Qwen", _elapsed_ms, _audio_dur_sec);
-
-            let mut final_text = decode_res.text.trim().to_string();
-            if final_text.is_empty() {
-                continue;
-            }
-
-            if to_simplified {
-                final_text = convert_chinese(final_text, true);
-            }
-
-            // 强制对齐
-            let word_items = match runtime.align_segment(
-                &samples_16k,
-                &final_text,
-                start_ms as u64,
-                end_ms as u64,
-            ) {
-                Ok(align_res) => align_res
-                    .units
-                    .into_iter()
-                    .map(|u| WordItem {
-                        text: u.text,
-                        start_ms: u.start_ms as i64,
-                        end_ms: u.end_ms as i64,
-                        confidence: u.confidence.unwrap_or(1.0),
+                let enc_out = match runtime.encode_segment(&task.samples) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        println!("[Rust] Qwen encode segment error: {:?}", e);
+                        continue;
+                    }
+                };
+                if tx_encoded
+                    .send(EncodedTask {
+                        samples: task.samples,
+                        enc_out,
+                        start_ms: task.start_ms,
+                        end_ms: task.end_ms,
                     })
-                    .collect(),
-                Err(_) => Vec::new(),
-            };
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Ok(())
+        })
+    };
 
-            let new_seg = TranscriptionSegment {
-                start_ms,
-                end_ms,
-                text: final_text,
-                timestamp_quality: "Qwen3-ForcedAligned".to_string(),
-                words: word_items,
-            };
+    let decoder_handle = {
+        thread::spawn(move || -> Result<()> {
+            register_thread_as_pro_audio();
+            let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
+            let max_merge_samples = MAX_MERGE_SECONDS * 16000;
+            // 合并缓冲：模型对嘈杂/语言切换初期的短片段倾向输出空结果(跳过)。
+            // 空结果不直接丢弃，而是与下一个片段拼接后整体重编码重试，
+            // 直到模型能识别为止。
+            let mut pending: Option<(Vec<f32>, i64)> = None;
 
-            all_segments.push(new_seg.clone());
-            if sink.add(TranscriptionEvent::Segment(new_seg)).is_err() {
-                println!("[Rust] Sink closed. Aborting Qwen loop.");
-                return Ok(());
+            while let Ok(mut task) = rx_encoded.recv() {
+                if SHOULD_CANCEL.load(Ordering::SeqCst) {
+                    break;
+                }
+
+                // 与上一个"空结果"片段拼接
+                if let Some((p_samples, p_start_ms)) = pending.take() {
+                    if p_samples.len() + task.samples.len() > max_merge_samples {
+                        println!(
+                            "[Rust] Qwen: dropping {}ms of unrecognized (empty) audio",
+                            p_samples.len() * 1000 / 16000
+                        );
+                    } else {
+                        let mut merged = Vec::with_capacity(p_samples.len() + task.samples.len());
+                        merged.extend_from_slice(&p_samples);
+                        merged.extend_from_slice(&task.samples);
+                        match runtime.encode_segment(&merged) {
+                            Ok(enc_out) => {
+                                task = EncodedTask {
+                                    samples: merged,
+                                    enc_out,
+                                    start_ms: p_start_ms,
+                                    end_ms: task.end_ms,
+                                };
+                            }
+                            Err(e) => {
+                                println!("[Rust] Qwen merge re-encode error: {:?}", e);
+                            }
+                        }
+                    }
+                }
+
+                let start_time = std::time::Instant::now();
+                let decode_res = match runtime.decode_segment(
+                    &task.enc_out,
+                    language.as_deref(),
+                    context_prompt.as_deref(),
+                ) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        println!("[Rust] Qwen transcribe segment error: {:?}", e);
+                        continue;
+                    }
+                };
+
+                let _elapsed_ms = start_time.elapsed().as_millis() as u64;
+                let _audio_dur_sec = task.samples.len() as f64 / 16000.0;
+                log_perf!("Qwen", _elapsed_ms, _audio_dur_sec);
+
+                let mut final_text = decode_res.text.trim().to_string();
+                if final_text.is_empty() {
+                    // 模型跳过：保留音频待与下一个片段合并重试
+                    pending = Some((task.samples, task.start_ms));
+                    continue;
+                }
+
+                if to_simplified {
+                    final_text = convert_chinese(final_text, true);
+                }
+
+                // 强制对齐
+                let word_items = match runtime.align_segment(
+                    &task.samples,
+                    &final_text,
+                    task.start_ms as u64,
+                    task.end_ms as u64,
+                ) {
+                    Ok(align_res) => align_res
+                        .units
+                        .into_iter()
+                        .map(|u| WordItem {
+                            text: u.text,
+                            start_ms: u.start_ms as i64,
+                            end_ms: u.end_ms as i64,
+                            confidence: u.confidence.unwrap_or(1.0),
+                        })
+                        .collect(),
+                    Err(_) => Vec::new(),
+                };
+
+                let new_seg = TranscriptionSegment {
+                    start_ms: task.start_ms,
+                    end_ms: task.end_ms,
+                    text: final_text,
+                    timestamp_quality: "Qwen3-ForcedAligned".to_string(),
+                    words: word_items,
+                };
+
+                all_segments.push(new_seg.clone());
+                if sink.add(TranscriptionEvent::Segment(new_seg)).is_err() {
+                    println!("[Rust] Sink closed. Aborting Qwen loop.");
+                    return Ok(());
+                }
+
+                // Progress
+                let progress = ((task.end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
+                if sink.add(TranscriptionEvent::Progress(progress.clamp(0, 100))).is_err() {
+                    println!("[Rust] Sink closed. Aborting Qwen loop.");
+                    return Ok(());
+                }
+                if sink.add(TranscriptionEvent::ProgressDetail {
+                    processed_ms: task.end_ms,
+                    total_ms: (total_duration * 1000.0) as i64,
+                }).is_err() {
+                    println!("[Rust] Sink closed. Aborting Qwen loop.");
+                    return Ok(());
+                }
             }
 
-            // Progress
-            let progress = ((end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
-            if sink.add(TranscriptionEvent::Progress(progress.clamp(0, 100))).is_err() {
-                println!("[Rust] Sink closed. Aborting Qwen loop.");
-                return Ok(());
-            }
-            if sink.add(TranscriptionEvent::ProgressDetail {
-                processed_ms: end_ms,
-                total_ms: (total_duration * 1000.0) as i64,
-            }).is_err() {
-                println!("[Rust] Sink closed. Aborting Qwen loop.");
-                return Ok(());
-            }
-        }
+            let _ = sink.add(TranscriptionEvent::Success(all_segments));
+            Ok(())
+        })
+    };
 
-        let _ = sink.add(TranscriptionEvent::Success(all_segments));
+    thread::spawn(move || {
+        let enc_res = encoder_handle
+            .join()
+            .map_err(|_| anyhow!("Qwen encoder thread panicked"))?;
+        let dec_res = decoder_handle
+            .join()
+            .map_err(|_| anyhow!("Qwen decoder thread panicked"))?;
+        enc_res?;
+        dec_res?;
         Ok(())
     })
 }
@@ -1286,6 +1481,7 @@ mod tests {
                     let _ = f.flush();
                     println!("[Test Success] Wrote {} segments ({} bytes) to SRT at: {:?}", lock.len(), srt_content.len(), pb);
                 }
+                Err(e) => println!("[Test Error] Failed to write SRT file {:?}: {}", pb, e),
             }
         }
     }

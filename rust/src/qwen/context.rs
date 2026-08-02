@@ -33,13 +33,20 @@ impl QwenContextCache {
     }
 
     pub fn set(&mut self, key: RuntimeCacheKey, runtime: Arc<QwenRuntime>) {
+        if let Some(old_runtime) = self.runtime.take() {
+            println!("[Rust GLOBAL_QWEN_CACHE] Replacing old runtime & releasing VRAM...");
+            drop(old_runtime);
+        }
         self.current_key = Some(key);
         self.runtime = Some(runtime);
     }
 
     pub fn clear(&mut self) {
         self.current_key = None;
-        self.runtime = None;
+        if let Some(old_runtime) = self.runtime.take() {
+            println!("[Rust GLOBAL_QWEN_CACHE] Clearing previous runtime & releasing VRAM...");
+            drop(old_runtime);
+        }
     }
 }
 

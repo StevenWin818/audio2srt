@@ -10,9 +10,9 @@ import 'api/ffmpeg.dart';
 import 'api/hardware.dart';
 import 'api/models.dart';
 import 'api/qwen.dart';
+import 'api/silero_vad.dart';
 import 'api/simple.dart';
 import 'api/stream_pipeline.dart';
-import 'api/whisper.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
@@ -27,8 +27,30 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     required super.portManager,
   });
 
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_SileroVadEnginePtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine;
+
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw);
+
+  @protected
+  SileroVadEngine
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    dynamic raw,
+  );
+
+  @protected
+  SileroVadEngine
+  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    dynamic raw,
+  );
+
+  @protected
+  SileroVadEngine
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    dynamic raw,
+  );
 
   @protected
   RustStreamSink<FfmpegEvent> dco_decode_StreamSink_ffmpeg_event_Sse(
@@ -108,7 +130,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<ComputeDeviceInfo> dco_decode_list_compute_device_info(dynamic raw);
 
   @protected
+  List<double> dco_decode_list_prim_f_32_loose(dynamic raw);
+
+  @protected
+  Float32List dco_decode_list_prim_f_32_strict(dynamic raw);
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
+
+  @protected
+  List<(BigInt, BigInt)> dco_decode_list_record_usize_usize(dynamic raw);
 
   @protected
   List<TranscriptionSegment> dco_decode_list_transcription_segment(dynamic raw);
@@ -144,6 +175,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   (String, String) dco_decode_record_string_string(dynamic raw);
 
   @protected
+  (BigInt, BigInt) dco_decode_record_usize_usize(dynamic raw);
+
+  @protected
   TimestampMode dco_decode_timestamp_mode(dynamic raw);
 
   @protected
@@ -172,6 +206,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
+
+  @protected
+  SileroVadEngine
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SileroVadEngine
+  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SileroVadEngine
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    SseDeserializer deserializer,
+  );
 
   @protected
   RustStreamSink<FfmpegEvent> sse_decode_StreamSink_ffmpeg_event_Sse(
@@ -262,7 +314,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<double> sse_decode_list_prim_f_32_loose(SseDeserializer deserializer);
+
+  @protected
+  Float32List sse_decode_list_prim_f_32_strict(SseDeserializer deserializer);
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
+
+  @protected
+  List<(BigInt, BigInt)> sse_decode_list_record_usize_usize(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<TranscriptionSegment> sse_decode_list_transcription_segment(
@@ -304,6 +367,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  (BigInt, BigInt) sse_decode_record_usize_usize(SseDeserializer deserializer);
+
+  @protected
   TimestampMode sse_decode_timestamp_mode(SseDeserializer deserializer);
 
   @protected
@@ -337,6 +403,27 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_AnyhowException(
     AnyhowException self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    SileroVadEngine self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    SileroVadEngine self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    SileroVadEngine self,
     SseSerializer serializer,
   );
 
@@ -449,8 +536,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_prim_f_32_loose(
+    List<double> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_prim_f_32_strict(
+    Float32List self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_record_usize_usize(
+    List<(BigInt, BigInt)> self,
     SseSerializer serializer,
   );
 
@@ -506,6 +611,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_record_usize_usize(
+    (BigInt, BigInt) self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_timestamp_mode(TimestampMode self, SseSerializer serializer);
 
   @protected
@@ -546,6 +657,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
 class RustLibWire implements BaseWire {
   RustLibWire.fromExternalLibrary(ExternalLibrary lib);
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+        ptr,
+      );
 }
 
 @JS('wasm_bindgen')
@@ -553,4 +680,14 @@ external RustLibWasmModule get wasmModule;
 
 @JS()
 @anonymous
-extension type RustLibWasmModule._(JSObject _) implements JSObject {}
+extension type RustLibWasmModule._(JSObject _) implements JSObject {
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    int ptr,
+  );
+}

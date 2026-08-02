@@ -43,7 +43,7 @@ class ComputeDeviceInfo {
 
 enum DecoderBackend { auto, vulkan, cuda, cpu }
 
-enum EncoderBackend { auto, directMl, cpu }
+enum EncoderBackend { auto, directMl, cuda, cpu }
 
 class QwenHardwareInfo {
   final bool vulkanAvailable;

@@ -6,31 +6,13 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
-part 'whisper.freezed.dart';
+part 'silero_vad.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `as_ptr`, `calculate_dtw_mem_size`, `calculate_rms`, `check_vulkan_supported_safely`, `get_dtw_model_preset`, `get_or_create_context`, `new`, `progress_callback_trampoline`, `register_thread_as_pro_audio`, `run_transcription_inner`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedContext`, `DISPLAY_DEVICEA`, `ProgressContextGuard`, `ProgressContext`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `check_vulkan_supported_safely`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `DISPLAY_DEVICEA`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
-Future<HardwareAccelerationInfo> getHardwareAccelerationInfo() =>
-    RustLib.instance.api.crateApiWhisperGetHardwareAccelerationInfo();
-
-Future<String> convertChinese({
-  required String text,
-  required bool toSimplified,
-}) => RustLib.instance.api.crateApiWhisperConvertChinese(
-  text: text,
-  toSimplified: toSimplified,
-);
-
-Future<List<String>> convertChineseList({
-  required List<String> texts,
-  required bool toSimplified,
-}) => RustLib.instance.api.crateApiWhisperConvertChineseList(
-  texts: texts,
-  toSimplified: toSimplified,
-);
-
+/// 兼容性存根（底层已升级为 Qwen3-ASR 流式管道）
 Stream<TranscriptionEvent> transcribe({
   required String modelPath,
   required String vadModelPath,
@@ -50,7 +32,7 @@ Stream<TranscriptionEvent> transcribe({
   required double noSpeechThold,
   required bool noContext,
   required bool noStateHistory,
-}) => RustLib.instance.api.crateApiWhisperTranscribe(
+}) => RustLib.instance.api.crateApiSileroVadTranscribe(
   modelPath: modelPath,
   vadModelPath: vadModelPath,
   audioPath: audioPath,
@@ -71,15 +53,53 @@ Stream<TranscriptionEvent> transcribe({
   noStateHistory: noStateHistory,
 );
 
+/// 兼容性存根
 Future<void> warmupWhisperContext({
   required String modelPath,
   required bool useGpu,
   required double totalDuration,
-}) => RustLib.instance.api.crateApiWhisperWarmupWhisperContext(
+}) => RustLib.instance.api.crateApiSileroVadWarmupWhisperContext(
   modelPath: modelPath,
   useGpu: useGpu,
   totalDuration: totalDuration,
 );
+
+Future<HardwareAccelerationInfo> getHardwareAccelerationInfo() =>
+    RustLib.instance.api.crateApiSileroVadGetHardwareAccelerationInfo();
+
+Future<String> convertChinese({
+  required String text,
+  required bool toSimplified,
+}) => RustLib.instance.api.crateApiSileroVadConvertChinese(
+  text: text,
+  toSimplified: toSimplified,
+);
+
+Future<List<String>> convertChineseList({
+  required List<String> texts,
+  required bool toSimplified,
+}) => RustLib.instance.api.crateApiSileroVadConvertChineseList(
+  texts: texts,
+  toSimplified: toSimplified,
+);
+
+Future<void> registerThreadAsProAudio() =>
+    RustLib.instance.api.crateApiSileroVadRegisterThreadAsProAudio();
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SileroVadEngine>>
+abstract class SileroVadEngine implements RustOpaqueInterface {
+  Future<List<(BigInt, BigInt)>> detectSpeechSegments({
+    required List<double> samples,
+    required int minSpeechMs,
+    required int minSilenceMs,
+    required double threshold,
+  });
+
+  static Future<SileroVadEngine> load({required String vadModelPath}) => RustLib
+      .instance
+      .api
+      .crateApiSileroVadSileroVadEngineLoad(vadModelPath: vadModelPath);
+}
 
 class HardwareAccelerationInfo {
   final bool isVulkanAvailable;
@@ -91,7 +111,7 @@ class HardwareAccelerationInfo {
   });
 
   static Future<HardwareAccelerationInfo> default_() =>
-      RustLib.instance.api.crateApiWhisperHardwareAccelerationInfoDefault();
+      RustLib.instance.api.crateApiSileroVadHardwareAccelerationInfoDefault();
 
   @override
   int get hashCode => isVulkanAvailable.hashCode ^ devices.hashCode;
@@ -139,7 +159,7 @@ class TranscriptionSegment {
   });
 
   static Future<TranscriptionSegment> default_() =>
-      RustLib.instance.api.crateApiWhisperTranscriptionSegmentDefault();
+      RustLib.instance.api.crateApiSileroVadTranscriptionSegmentDefault();
 
   @override
   int get hashCode =>
@@ -173,7 +193,7 @@ class VulkanDeviceInfo {
   });
 
   static Future<VulkanDeviceInfo> default_() =>
-      RustLib.instance.api.crateApiWhisperVulkanDeviceInfoDefault();
+      RustLib.instance.api.crateApiSileroVadVulkanDeviceInfoDefault();
 
   @override
   int get hashCode => id.hashCode ^ name.hashCode ^ totalVramBytes.hashCode;
@@ -202,7 +222,7 @@ class WordItem {
   });
 
   static Future<WordItem> default_() =>
-      RustLib.instance.api.crateApiWhisperWordItemDefault();
+      RustLib.instance.api.crateApiSileroVadWordItemDefault();
 
   @override
   int get hashCode =>

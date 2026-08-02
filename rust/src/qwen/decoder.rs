@@ -41,8 +41,35 @@ unsafe impl Sync for QwenDecoder {}
 
 static BACKEND_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
+/// 把 llama.cpp 的内部日志重定向到 stdout，以便观察 `n_gpu_layers` / `offloaded X/Y layers to GPU`
+/// 等关键加载信息 —— 默认 ggml_log_callback 走 stderr，在 Flutter runner 下常被吞掉。
+extern "C" fn llama_log_callback(
+    level: ll::ggml_log_level,
+    text: *const std::os::raw::c_char,
+    _user_data: *mut std::ffi::c_void,
+) {
+    if text.is_null() {
+        return;
+    }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(text) };
+    let s = cstr.to_string_lossy();
+    let tag = match level {
+        ll::GGML_LOG_LEVEL_ERROR => "[llama:ERROR]",
+        ll::GGML_LOG_LEVEL_WARN => "[llama:WARN] ",
+        ll::GGML_LOG_LEVEL_INFO => "[llama]     ",
+        ll::GGML_LOG_LEVEL_DEBUG => "[llama:DBG] ",
+        _ => "[llama]     ",
+    };
+    // 输出每行加前缀。ggml 的 log 通常自带换行；按行处理避免折断显示。
+    print!("{} {}", tag, s);
+    if !s.ends_with('\n') {
+        println!();
+    }
+}
+
 fn ensure_backend_init() {
     BACKEND_INITIALIZED.get_or_init(|| unsafe {
+        ll::llama_log_set(Some(llama_log_callback), std::ptr::null_mut());
         ll::llama_backend_init();
     });
 }
@@ -64,7 +91,20 @@ impl QwenDecoder {
         let chosen_str = chosen.to_string_lossy().to_string();
         println!("[decoder] using model: {}", chosen_str);
 
-        let use_gpu = !matches!(backend, DecoderBackend::Cpu);
+        // 诊断 GPU 后端可达性 —— 反映在 Vulkan / CUDA 后端是否被编译进当前 cdylib。
+        // 如果 `llama_supports_gpu_offload()` 返回 false，说明 build.rs 没启用 GGML_VULKAN
+        // (或 GGML_CUDA 等 GPU 后端)，n_gpu_layers=-1 也会被 llama-model.cpp:1268 在
+        // `devices.empty()` 时归零为 0，模型实际全部跑在 CPU 上。
+        let supports_offload = unsafe { ll::llama_supports_gpu_offload() };
+        println!(
+            "[decoder] llama_supports_gpu_offload()={}  backend={:?}  use_gpu={}",
+            supports_offload, backend, !matches!(backend, DecoderBackend::Cpu)
+        );
+        if !supports_offload && !matches!(backend, DecoderBackend::Cpu) {
+            println!("[decoder] **WARNING** backend requested GPU 但 ggml 未编译进 GPU 后端 —— 模型将走 CPU 路径");
+        }
+
+        let use_gpu = !matches!(backend, DecoderBackend::Cpu) && supports_offload;
 
         let path_c = CString::new(chosen_str.clone())
             .map_err(|e| QwenError::DecoderError(format!("path CString: {}", e)))?;
@@ -95,10 +135,11 @@ impl QwenDecoder {
         let mut ctx_params = unsafe { ll::llama_context_default_params() };
         ctx_params.n_ctx = 4096;
         ctx_params.n_batch = 1024;
-        ctx_params.n_ubatch = 256;
+        ctx_params.n_ubatch = 512;
         ctx_params.n_seq_max = 1;
         ctx_params.n_threads = 4;
         ctx_params.n_threads_batch = 4;
+        ctx_params.flash_attn_type = ll::LLAMA_FLASH_ATTN_TYPE_ENABLED as _;
         // 生成生成式使用：无池化、因果注意力机制
         ctx_params.pooling_type = ll::LLAMA_POOLING_TYPE_NONE as _;
         ctx_params.embeddings = false;
@@ -211,7 +252,14 @@ impl QwenDecoder {
             suffix_tokens.append(&mut tag_tokens);
         }
 
-        let user_suffix_str = "<|im_end|>\n<|im_start|>assistant\n".to_string();
+        // 对齐官方推理 (qwen_asr/inference/qwen3_asr.py `_build_text_prompt`)：
+        // 强制指定语言时，在 assistant 前缀注入 "language X<asr_text>"，
+        // 模型会据此只输出纯文本转写，而不是自己生成 "language X<asr_text>" 元数据头。
+        let forced_language = req.language.and_then(canonical_qwen_language);
+        let mut user_suffix_str = "<|im_end|>\n<|im_start|>assistant\n".to_string();
+        if let Some(language) = forced_language {
+            user_suffix_str.push_str(&format!("language {language}<asr_text>"));
+        }
         let mut user_suffix_tokens = self.tokenize_str(&user_suffix_str)?;
         suffix_tokens.append(&mut user_suffix_tokens);
 
@@ -286,7 +334,6 @@ impl QwenDecoder {
         unsafe { ll::llama_sampler_free(sampler) };
 
         let output = String::from_utf8_lossy(&output_bytes).into_owned();
-        let forced_language = req.language.and_then(canonical_qwen_language);
         let (detected_language, asr_text) =
             parse_qwen_asr_output(&output, forced_language);
         let cleaned = asr_text
@@ -295,6 +342,7 @@ impl QwenDecoder {
             .replace("<|endoftext|>", "")
             .replace("<|audio_start|>", "")
             .replace("<|audio_end|>", "")
+            .replace("<|nospeech|>", "")
             .replace("🎵", "")
             .replace("[音乐]", "")
             .replace("(音乐)", "")
@@ -598,6 +646,22 @@ impl QwenDecoder {
     }
 }
 
+impl Drop for QwenDecoder {
+    fn drop(&mut self) {
+        println!("[decoder] Dropping QwenDecoder: releasing Vulkan GPU memory & llama.cpp context");
+        unsafe {
+            if !self.context.is_null() {
+                ll::llama_free(self.context);
+                self.context = std::ptr::null_mut();
+            }
+            if !self.model.is_null() {
+                ll::llama_model_free(self.model);
+                self.model = std::ptr::null_mut();
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 辅助函数：从 llama.cpp 词汇表中检测音频控制 Token ID
 // ---------------------------------------------------------------------------
@@ -676,7 +740,10 @@ fn parse_qwen_asr_output(
     forced_language: Option<&str>,
 ) -> (Option<String>, String) {
     if let Some(language) = forced_language {
-        return (Some(language.to_string()), output.to_string());
+        // 已把 "language X<asr_text>" 注入 assistant 前缀，预期输出为纯文本。
+        // 若模型未被前缀引导仍自带头部，则剥离，避免元数据混入字幕正文。
+        let text = strip_asr_language_header(output);
+        return (Some(language.to_string()), text);
     }
 
     let Some((metadata, text)) = output.split_once("<asr_text>") else {
@@ -689,6 +756,14 @@ fn parse_qwen_asr_output(
         .map(|idx| metadata[idx + "language ".len()..].trim().to_string())
         .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("none"));
     (language, text.to_string())
+}
+
+fn strip_asr_language_header(output: &str) -> String {
+    let s = output.trim();
+    if let Some((_, text)) = s.split_once("<asr_text>") {
+        return text.trim().to_string();
+    }
+    s.to_string()
 }
 
 #[cfg(test)]
@@ -715,5 +790,13 @@ mod tests {
         let (language, text) = parse_qwen_asr_output("hello", Some("English"));
         assert_eq!(language.as_deref(), Some("English"));
         assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn forced_language_strips_residual_header() {
+        let (language, text) =
+            parse_qwen_asr_output("language English<asr_text>hello world", Some("English"));
+        assert_eq!(language.as_deref(), Some("English"));
+        assert_eq!(text, "hello world");
     }
 }

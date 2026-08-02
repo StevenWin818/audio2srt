@@ -16,10 +16,10 @@ zhconv = "0.4.1"
 rubato = "0.15"
 deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", package = "deep_filter", default-features = false }
 deepfilter-rt = { path = "third_party/deepfilter-rt" }
-# Encoder: ONNX Runtime with DirectML (Windows GPU)
-ort = { version = "=2.0.0-rc.11", default-features = false, features = ["download-binaries", "copy-dylibs", "tls-native", "ndarray", "directml"] }
-# Decoder: llama.cpp via Vulkan (GGUF / multimodal LLM)
-llama-cpp-sys-2 = { version = "0.1.152", default-features = false, optional = true, features = ["vulkan"] }
+# Encoder: ONNX Runtime (DirectML / CUDA 可选后端)
+ort = { version = "=2.0.0-rc.11", default-features = false, features = ["download-binaries", "copy-dylibs", "tls-native", "ndarray"] }
+# Decoder: llama.cpp via Vulkan / CUDA (GGUF / multimodal LLM)
+llama-cpp-sys-2 = { version = "0.1.152", default-features = false, optional = true }
 flate2 = "1.0"
 tar = "0.4"
 crossbeam-channel = "0.5"
@@ -35,14 +35,21 @@ realfft = "1"
 
 
 [features]
-# 默认启用 Vulkan 推理 + DirectML ONNX 推理；任一都可在 release 时被覆盖
-default = ["qwen-vulkan", "qwen-dml", "legacy-whisper", "vulkan"]
-qwen-vulkan = ["dep:llama-cpp-sys-2"]
-qwen-dml    = ["ort/directml"]
-qwen-cpu    = []
+# 1. vulkan 特性:
+#    - Windows 平台: GGUF(Vulkan) + ort(DirectML)
+#    - 非 Windows 平台: GGUF(Vulkan) + ort(CPU)
+# 2. cuda 特性:
+#    - 全平台: GGUF(CUDA) + ort(CUDA)
+default = ["cuda"]
+vulkan = ["dep:llama-cpp-sys-2", "llama-cpp-sys-2/vulkan", "qwen-dml-win", "legacy-whisper"]
+cuda   = ["dep:llama-cpp-sys-2", "llama-cpp-sys-2/cuda", "ort/cuda", "legacy-whisper"]
+
+qwen-dml-win = ["ort/directml"]
+qwen-vulkan  = ["dep:llama-cpp-sys-2", "llama-cpp-sys-2/vulkan"]
+qwen-dml     = ["ort/directml"]
+qwen-cuda    = ["dep:llama-cpp-sys-2", "llama-cpp-sys-2/cuda", "ort/cuda"]
+qwen-cpu     = []
 legacy-whisper = ["dep:whisper-rs"]
-vulkan = ["legacy-whisper", "whisper-rs/vulkan"]
-cuda = ["legacy-whisper", "whisper-rs/cuda", "ort/cuda"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
@@ -52,7 +59,7 @@ opt-level = 0
 debug = true
 debug-assertions = true
 overflow-checks = true
-codegen-units = 32
+codegen-units = 256
 incremental = true
 
 [profile.dev.package."*"]

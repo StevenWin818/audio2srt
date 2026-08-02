@@ -25,6 +25,7 @@
 
 // Section: imports
 
+use crate::api::silero_vad::*;
 use flutter_rust_bridge::for_generated::byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
 use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, Lockable};
 use flutter_rust_bridge::{Handler, IntoIntoDart};
@@ -37,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1386116060;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -196990829;
 
 // Section: executor
 
@@ -45,6 +46,100 @@ flutter_rust_bridge::frb_generated_default_handler!();
 
 // Section: wire_funcs
 
+fn wire__crate__api__silero_vad__SileroVadEngine_detect_speech_segments_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "SileroVadEngine_detect_speech_segments",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SileroVadEngine>,
+            >>::sse_decode(&mut deserializer);
+            let api_samples = <Vec<f32>>::sse_decode(&mut deserializer);
+            let api_min_speech_ms = <i32>::sse_decode(&mut deserializer);
+            let api_min_silence_ms = <i32>::sse_decode(&mut deserializer);
+            let api_threshold = <f32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, true,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref_mut()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let mut api_that_guard = api_that_guard.unwrap();
+                    let output_ok =
+                        crate::api::silero_vad::SileroVadEngine::detect_speech_segments(
+                            &mut *api_that_guard,
+                            &api_samples,
+                            api_min_speech_ms,
+                            api_min_silence_ms,
+                            api_threshold,
+                        )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__silero_vad__SileroVadEngine_load_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "SileroVadEngine_load",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_vad_model_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::silero_vad::SileroVadEngine::load(&api_vad_model_path)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__stream_pipeline__cancel_transcription_backend_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -76,7 +171,7 @@ fn wire__crate__api__stream_pipeline__cancel_transcription_backend_impl(
         },
     )
 }
-fn wire__crate__api__whisper__convert_chinese_impl(
+fn wire__crate__api__silero_vad__convert_chinese_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -103,7 +198,7 @@ fn wire__crate__api__whisper__convert_chinese_impl(
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok(crate::api::whisper::convert_chinese(
+                    let output_ok = Result::<_, ()>::Ok(crate::api::silero_vad::convert_chinese(
                         api_text,
                         api_to_simplified,
                     ))?;
@@ -113,7 +208,7 @@ fn wire__crate__api__whisper__convert_chinese_impl(
         },
     )
 }
-fn wire__crate__api__whisper__convert_chinese_list_impl(
+fn wire__crate__api__silero_vad__convert_chinese_list_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -141,7 +236,7 @@ fn wire__crate__api__whisper__convert_chinese_list_impl(
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok = Result::<_, ()>::Ok(
-                        crate::api::whisper::convert_chinese_list(api_texts, api_to_simplified),
+                        crate::api::silero_vad::convert_chinese_list(api_texts, api_to_simplified),
                     )?;
                     Ok(output_ok)
                 })())
@@ -227,7 +322,7 @@ fn wire__crate__api__ffmpeg__extract_audio_from_media_impl(
         },
     )
 }
-fn wire__crate__api__whisper__get_hardware_acceleration_info_impl(
+fn wire__crate__api__silero_vad__get_hardware_acceleration_info_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -252,8 +347,9 @@ fn wire__crate__api__whisper__get_hardware_acceleration_info_impl(
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
-                    let output_ok =
-                        Result::<_, ()>::Ok(crate::api::whisper::get_hardware_acceleration_info())?;
+                    let output_ok = Result::<_, ()>::Ok(
+                        crate::api::silero_vad::get_hardware_acceleration_info(),
+                    )?;
                     Ok(output_ok)
                 })())
             }
@@ -355,7 +451,7 @@ fn wire__crate__api__simple__greet_impl(
         },
     )
 }
-fn wire__crate__api__whisper__hardware_acceleration_info_default_impl(
+fn wire__crate__api__silero_vad__hardware_acceleration_info_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -381,7 +477,7 @@ fn wire__crate__api__whisper__hardware_acceleration_info_default_impl(
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok = Result::<_, ()>::Ok(
-                        crate::api::whisper::HardwareAccelerationInfo::default(),
+                        crate::api::silero_vad::HardwareAccelerationInfo::default(),
                     )?;
                     Ok(output_ok)
                 })())
@@ -471,6 +567,40 @@ fn wire__crate__api__ffmpeg__mux_srt_to_video_impl(
         },
     )
 }
+fn wire__crate__api__stream_pipeline__preload_qwen_model_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "preload_qwen_model",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_asr_model_dir = <String>::sse_decode(&mut deserializer);
+            let api_aligner_model_dir = <Option<String>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, String>((move || {
+                let output_ok = crate::api::stream_pipeline::preload_qwen_model(
+                    api_asr_model_dir,
+                    api_aligner_model_dir,
+                )?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__ffmpeg__probe_audio_tracks_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -502,6 +632,40 @@ fn wire__crate__api__ffmpeg__probe_audio_tracks_impl(
                         api_ffmpeg_path,
                         api_file_path,
                     ))?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__silero_vad__register_thread_as_pro_audio_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "register_thread_as_pro_audio",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok({
+                        crate::api::silero_vad::register_thread_as_pro_audio();
+                    })?;
                     Ok(output_ok)
                 })())
             }
@@ -540,7 +704,7 @@ fn wire__crate__api__stream_pipeline__set_rust_perf_logging_impl(
         },
     )
 }
-fn wire__crate__api__whisper__transcribe_impl(
+fn wire__crate__api__silero_vad__transcribe_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -563,7 +727,7 @@ fn wire__crate__api__whisper__transcribe_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_sink = <StreamSink<
-                crate::api::whisper::TranscriptionEvent,
+                crate::api::silero_vad::TranscriptionEvent,
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
             let api_model_path = <String>::sse_decode(&mut deserializer);
@@ -588,7 +752,7 @@ fn wire__crate__api__whisper__transcribe_impl(
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok = Result::<_, ()>::Ok({
-                        crate::api::whisper::transcribe(
+                        crate::api::silero_vad::transcribe(
                             api_sink,
                             api_model_path,
                             api_vad_model_path,
@@ -639,7 +803,7 @@ fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_sink = <StreamSink<
-                crate::api::whisper::TranscriptionEvent,
+                crate::api::silero_vad::TranscriptionEvent,
                 flutter_rust_bridge::for_generated::SseCodec,
             >>::sse_decode(&mut deserializer);
             let api_config =
@@ -656,7 +820,7 @@ fn wire__crate__api__stream_pipeline__transcribe_stream_impl(
         },
     )
 }
-fn wire__crate__api__whisper__transcription_segment_default_impl(
+fn wire__crate__api__silero_vad__transcription_segment_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -681,8 +845,9 @@ fn wire__crate__api__whisper__transcription_segment_default_impl(
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
-                    let output_ok =
-                        Result::<_, ()>::Ok(crate::api::whisper::TranscriptionSegment::default())?;
+                    let output_ok = Result::<_, ()>::Ok(
+                        crate::api::silero_vad::TranscriptionSegment::default(),
+                    )?;
                     Ok(output_ok)
                 })())
             }
@@ -718,6 +883,37 @@ fn wire__crate__api__qwen__unload_qwen_runtime_impl(
                     Ok(output_ok)
                 })())
             }
+        },
+    )
+}
+fn wire__crate__api__stream_pipeline__unload_qwen_runtime_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "unload_qwen_runtime",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok({
+                    crate::api::stream_pipeline::unload_qwen_runtime();
+                })?;
+                Ok(output_ok)
+            })())
         },
     )
 }
@@ -787,7 +983,7 @@ fn wire__crate__api__qwen__validate_qwen_model_dir_impl(
         },
     )
 }
-fn wire__crate__api__whisper__vulkan_device_info_default_impl(
+fn wire__crate__api__silero_vad__vulkan_device_info_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -813,7 +1009,7 @@ fn wire__crate__api__whisper__vulkan_device_info_default_impl(
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok =
-                        Result::<_, ()>::Ok(crate::api::whisper::VulkanDeviceInfo::default())?;
+                        Result::<_, ()>::Ok(crate::api::silero_vad::VulkanDeviceInfo::default())?;
                     Ok(output_ok)
                 })())
             }
@@ -853,7 +1049,7 @@ fn wire__crate__api__qwen__warmup_qwen_runtime_impl(
         },
     )
 }
-fn wire__crate__api__whisper__warmup_whisper_context_impl(
+fn wire__crate__api__silero_vad__warmup_whisper_context_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -880,21 +1076,19 @@ fn wire__crate__api__whisper__warmup_whisper_context_impl(
             let api_total_duration = <f64>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
-                transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok({
-                        crate::api::whisper::warmup_whisper_context(
-                            api_model_path,
-                            api_use_gpu,
-                            api_total_duration,
-                        );
-                    })?;
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::silero_vad::warmup_whisper_context(
+                        api_model_path,
+                        api_use_gpu,
+                        api_total_duration,
+                    )?;
                     Ok(output_ok)
                 })())
             }
         },
     )
 }
-fn wire__crate__api__whisper__word_item_default_impl(
+fn wire__crate__api__silero_vad__word_item_default_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -919,13 +1113,20 @@ fn wire__crate__api__whisper__word_item_default_impl(
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok(crate::api::whisper::WordItem::default())?;
+                    let output_ok =
+                        Result::<_, ()>::Ok(crate::api::silero_vad::WordItem::default())?;
                     Ok(output_ok)
                 })())
             }
         },
     )
 }
+
+// Section: related_funcs
+
+flutter_rust_bridge::frb_generated_moi_arc_impl_value!(
+    flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SileroVadEngine>
+);
 
 // Section: dart2rust
 
@@ -934,6 +1135,26 @@ impl SseDecode for flutter_rust_bridge::for_generated::anyhow::Error {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut inner = <String>::sse_decode(deserializer);
         return flutter_rust_bridge::for_generated::anyhow::anyhow!("{}", inner);
+    }
+}
+
+impl SseDecode for SileroVadEngine {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <RustOpaqueMoi<
+            flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SileroVadEngine>,
+        >>::sse_decode(deserializer);
+        return flutter_rust_bridge::for_generated::rust_auto_opaque_decode_owned(inner);
+    }
+}
+
+impl SseDecode
+    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SileroVadEngine>>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <usize>::sse_decode(deserializer);
+        return decode_rust_opaque_moi(inner);
     }
 }
 
@@ -949,7 +1170,7 @@ impl SseDecode
 
 impl SseDecode
     for StreamSink<
-        crate::api::whisper::TranscriptionEvent,
+        crate::api::silero_vad::TranscriptionEvent,
         flutter_rust_bridge::for_generated::SseCodec,
     >
 {
@@ -1030,7 +1251,8 @@ impl SseDecode for crate::qwen::backend::EncoderBackend {
         return match inner {
             0 => crate::qwen::backend::EncoderBackend::Auto,
             1 => crate::qwen::backend::EncoderBackend::DirectMl,
-            2 => crate::qwen::backend::EncoderBackend::Cpu,
+            2 => crate::qwen::backend::EncoderBackend::Cuda,
+            3 => crate::qwen::backend::EncoderBackend::Cpu,
             _ => unreachable!("Invalid variant for EncoderBackend: {}", inner),
         };
     }
@@ -1064,13 +1286,13 @@ impl SseDecode for crate::api::ffmpeg::FfmpegEvent {
     }
 }
 
-impl SseDecode for crate::api::whisper::HardwareAccelerationInfo {
+impl SseDecode for crate::api::silero_vad::HardwareAccelerationInfo {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_isVulkanAvailable = <bool>::sse_decode(deserializer);
         let mut var_devices =
-            <Vec<crate::api::whisper::VulkanDeviceInfo>>::sse_decode(deserializer);
-        return crate::api::whisper::HardwareAccelerationInfo {
+            <Vec<crate::api::silero_vad::VulkanDeviceInfo>>::sse_decode(deserializer);
+        return crate::api::silero_vad::HardwareAccelerationInfo {
             is_vulkan_available: var_isVulkanAvailable,
             devices: var_devices,
         };
@@ -1131,6 +1353,18 @@ impl SseDecode for Vec<crate::qwen::backend::ComputeDeviceInfo> {
     }
 }
 
+impl SseDecode for Vec<f32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(<f32>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1143,13 +1377,25 @@ impl SseDecode for Vec<u8> {
     }
 }
 
-impl SseDecode for Vec<crate::api::whisper::TranscriptionSegment> {
+impl SseDecode for Vec<(usize, usize)> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = vec![];
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::whisper::TranscriptionSegment>::sse_decode(
+            ans_.push(<(usize, usize)>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::silero_vad::TranscriptionSegment> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::silero_vad::TranscriptionSegment>::sse_decode(
                 deserializer,
             ));
         }
@@ -1157,13 +1403,13 @@ impl SseDecode for Vec<crate::api::whisper::TranscriptionSegment> {
     }
 }
 
-impl SseDecode for Vec<crate::api::whisper::VulkanDeviceInfo> {
+impl SseDecode for Vec<crate::api::silero_vad::VulkanDeviceInfo> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = vec![];
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::whisper::VulkanDeviceInfo>::sse_decode(
+            ans_.push(<crate::api::silero_vad::VulkanDeviceInfo>::sse_decode(
                 deserializer,
             ));
         }
@@ -1171,13 +1417,13 @@ impl SseDecode for Vec<crate::api::whisper::VulkanDeviceInfo> {
     }
 }
 
-impl SseDecode for Vec<crate::api::whisper::WordItem> {
+impl SseDecode for Vec<crate::api::silero_vad::WordItem> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut len_ = <i32>::sse_decode(deserializer);
         let mut ans_ = vec![];
         for idx_ in 0..len_ {
-            ans_.push(<crate::api::whisper::WordItem>::sse_decode(deserializer));
+            ans_.push(<crate::api::silero_vad::WordItem>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -1345,6 +1591,15 @@ impl SseDecode for (String, String) {
     }
 }
 
+impl SseDecode for (usize, usize) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_field0 = <usize>::sse_decode(deserializer);
+        let mut var_field1 = <usize>::sse_decode(deserializer);
+        return (var_field0, var_field1);
+    }
+}
+
 impl SseDecode for crate::api::stream_pipeline::TimestampMode {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1357,36 +1612,36 @@ impl SseDecode for crate::api::stream_pipeline::TimestampMode {
     }
 }
 
-impl SseDecode for crate::api::whisper::TranscriptionEvent {
+impl SseDecode for crate::api::silero_vad::TranscriptionEvent {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut tag_ = <i32>::sse_decode(deserializer);
         match tag_ {
             0 => {
                 let mut var_field0 = <i32>::sse_decode(deserializer);
-                return crate::api::whisper::TranscriptionEvent::Progress(var_field0);
+                return crate::api::silero_vad::TranscriptionEvent::Progress(var_field0);
             }
             1 => {
                 let mut var_processedMs = <i64>::sse_decode(deserializer);
                 let mut var_totalMs = <i64>::sse_decode(deserializer);
-                return crate::api::whisper::TranscriptionEvent::ProgressDetail {
+                return crate::api::silero_vad::TranscriptionEvent::ProgressDetail {
                     processed_ms: var_processedMs,
                     total_ms: var_totalMs,
                 };
             }
             2 => {
                 let mut var_field0 =
-                    <Vec<crate::api::whisper::TranscriptionSegment>>::sse_decode(deserializer);
-                return crate::api::whisper::TranscriptionEvent::Success(var_field0);
+                    <Vec<crate::api::silero_vad::TranscriptionSegment>>::sse_decode(deserializer);
+                return crate::api::silero_vad::TranscriptionEvent::Success(var_field0);
             }
             3 => {
                 let mut var_field0 = <String>::sse_decode(deserializer);
-                return crate::api::whisper::TranscriptionEvent::Failure(var_field0);
+                return crate::api::silero_vad::TranscriptionEvent::Failure(var_field0);
             }
             4 => {
                 let mut var_field0 =
-                    <crate::api::whisper::TranscriptionSegment>::sse_decode(deserializer);
-                return crate::api::whisper::TranscriptionEvent::Segment(var_field0);
+                    <crate::api::silero_vad::TranscriptionSegment>::sse_decode(deserializer);
+                return crate::api::silero_vad::TranscriptionEvent::Segment(var_field0);
             }
             _ => {
                 unimplemented!("");
@@ -1395,15 +1650,15 @@ impl SseDecode for crate::api::whisper::TranscriptionEvent {
     }
 }
 
-impl SseDecode for crate::api::whisper::TranscriptionSegment {
+impl SseDecode for crate::api::silero_vad::TranscriptionSegment {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_startMs = <i64>::sse_decode(deserializer);
         let mut var_endMs = <i64>::sse_decode(deserializer);
         let mut var_text = <String>::sse_decode(deserializer);
-        let mut var_words = <Vec<crate::api::whisper::WordItem>>::sse_decode(deserializer);
+        let mut var_words = <Vec<crate::api::silero_vad::WordItem>>::sse_decode(deserializer);
         let mut var_timestampQuality = <String>::sse_decode(deserializer);
-        return crate::api::whisper::TranscriptionSegment {
+        return crate::api::silero_vad::TranscriptionSegment {
             start_ms: var_startMs,
             end_ms: var_endMs,
             text: var_text,
@@ -1439,13 +1694,13 @@ impl SseDecode for usize {
     }
 }
 
-impl SseDecode for crate::api::whisper::VulkanDeviceInfo {
+impl SseDecode for crate::api::silero_vad::VulkanDeviceInfo {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_id = <i32>::sse_decode(deserializer);
         let mut var_name = <String>::sse_decode(deserializer);
         let mut var_totalVramBytes = <u64>::sse_decode(deserializer);
-        return crate::api::whisper::VulkanDeviceInfo {
+        return crate::api::silero_vad::VulkanDeviceInfo {
             id: var_id,
             name: var_name,
             total_vram_bytes: var_totalVramBytes,
@@ -1453,14 +1708,14 @@ impl SseDecode for crate::api::whisper::VulkanDeviceInfo {
     }
 }
 
-impl SseDecode for crate::api::whisper::WordItem {
+impl SseDecode for crate::api::silero_vad::WordItem {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_text = <String>::sse_decode(deserializer);
         let mut var_startMs = <i64>::sse_decode(deserializer);
         let mut var_endMs = <i64>::sse_decode(deserializer);
         let mut var_confidence = <f32>::sse_decode(deserializer);
-        return crate::api::whisper::WordItem {
+        return crate::api::silero_vad::WordItem {
             text: var_text,
             start_ms: var_startMs,
             end_ms: var_endMs,
@@ -1478,71 +1733,94 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        3 => wire__crate__api__whisper__convert_chinese_impl(port, ptr, rust_vec_len, data_len),
-        4 => {
-            wire__crate__api__whisper__convert_chinese_list_impl(port, ptr, rust_vec_len, data_len)
-        }
-        5 => wire__crate__api__ffmpeg__convert_iso639_2_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__ffmpeg__extract_audio_from_media_impl(
+        1 => wire__crate__api__silero_vad__SileroVadEngine_detect_speech_segments_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        7 => wire__crate__api__whisper__get_hardware_acceleration_info_impl(
+        2 => wire__crate__api__silero_vad__SileroVadEngine_load_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        8 => wire__crate__api__hardware__get_qwen_hardware_info_impl(
+        5 => wire__crate__api__silero_vad__convert_chinese_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__silero_vad__convert_chinese_list_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        9 => wire__crate__api__qwen__get_qwen_runtime_info_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__whisper__hardware_acceleration_info_default_impl(
+        7 => wire__crate__api__ffmpeg__convert_iso639_2_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__ffmpeg__extract_audio_from_media_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        12 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__ffmpeg__mux_srt_to_video_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__ffmpeg__probe_audio_tracks_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__whisper__transcribe_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__stream_pipeline__transcribe_stream_impl(
+        9 => wire__crate__api__silero_vad__get_hardware_acceleration_info_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        18 => wire__crate__api__whisper__transcription_segment_default_impl(
+        10 => wire__crate__api__hardware__get_qwen_hardware_info_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        19 => wire__crate__api__qwen__unload_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__models__validate_qwen_model_impl(port, ptr, rust_vec_len, data_len),
-        21 => {
+        11 => wire__crate__api__qwen__get_qwen_runtime_info_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__silero_vad__hardware_acceleration_info_default_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        14 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__ffmpeg__mux_srt_to_video_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__ffmpeg__probe_audio_tracks_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__silero_vad__register_thread_as_pro_audio_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        20 => wire__crate__api__silero_vad__transcribe_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__stream_pipeline__transcribe_stream_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        22 => wire__crate__api__silero_vad__transcription_segment_default_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        23 => wire__crate__api__qwen__unload_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__models__validate_qwen_model_impl(port, ptr, rust_vec_len, data_len),
+        26 => {
             wire__crate__api__qwen__validate_qwen_model_dir_impl(port, ptr, rust_vec_len, data_len)
         }
-        22 => wire__crate__api__whisper__vulkan_device_info_default_impl(
+        27 => wire__crate__api__silero_vad__vulkan_device_info_default_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        23 => wire__crate__api__qwen__warmup_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__whisper__warmup_whisper_context_impl(
+        28 => wire__crate__api__qwen__warmup_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__silero_vad__warmup_whisper_context_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        25 => wire__crate__api__whisper__word_item_default_impl(port, ptr, rust_vec_len, data_len),
+        30 => {
+            wire__crate__api__silero_vad__word_item_default_impl(port, ptr, rust_vec_len, data_len)
+        }
         _ => unreachable!(),
     }
 }
@@ -1555,22 +1833,43 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        2 => wire__crate__api__stream_pipeline__cancel_transcription_backend_impl(
+        4 => wire__crate__api__stream_pipeline__cancel_transcription_backend_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        10 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__stream_pipeline__set_rust_perf_logging_impl(
+        12 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
+        16 => {
+            wire__crate__api__stream_pipeline__preload_qwen_model_impl(ptr, rust_vec_len, data_len)
+        }
+        19 => wire__crate__api__stream_pipeline__set_rust_perf_logging_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
+        24 => {
+            wire__crate__api__stream_pipeline__unload_qwen_runtime_impl(ptr, rust_vec_len, data_len)
+        }
         _ => unreachable!(),
     }
 }
 
 // Section: rust2dart
+
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<SileroVadEngine> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        flutter_rust_bridge::for_generated::rust_auto_opaque_encode::<_, MoiArc<_>>(self.0)
+            .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for FrbWrapper<SileroVadEngine> {}
+
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<SileroVadEngine>> for SileroVadEngine {
+    fn into_into_dart(self) -> FrbWrapper<SileroVadEngine> {
+        self.into()
+    }
+}
 
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::ffmpeg::AudioTrackInfo {
@@ -1648,7 +1947,8 @@ impl flutter_rust_bridge::IntoDart for crate::qwen::backend::EncoderBackend {
         match self {
             Self::Auto => 0.into_dart(),
             Self::DirectMl => 1.into_dart(),
-            Self::Cpu => 2.into_dart(),
+            Self::Cuda => 2.into_dart(),
+            Self::Cpu => 3.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -1687,7 +1987,7 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::ffmpeg::FfmpegEvent>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::whisper::HardwareAccelerationInfo {
+impl flutter_rust_bridge::IntoDart for crate::api::silero_vad::HardwareAccelerationInfo {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.is_vulkan_available.into_into_dart().into_dart(),
@@ -1697,13 +1997,13 @@ impl flutter_rust_bridge::IntoDart for crate::api::whisper::HardwareAcceleration
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::whisper::HardwareAccelerationInfo
+    for crate::api::silero_vad::HardwareAccelerationInfo
 {
 }
-impl flutter_rust_bridge::IntoIntoDart<crate::api::whisper::HardwareAccelerationInfo>
-    for crate::api::whisper::HardwareAccelerationInfo
+impl flutter_rust_bridge::IntoIntoDart<crate::api::silero_vad::HardwareAccelerationInfo>
+    for crate::api::silero_vad::HardwareAccelerationInfo
 {
-    fn into_into_dart(self) -> crate::api::whisper::HardwareAccelerationInfo {
+    fn into_into_dart(self) -> crate::api::silero_vad::HardwareAccelerationInfo {
         self
     }
 }
@@ -1846,13 +2146,13 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::stream_pipeline::TimestampMod
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::whisper::TranscriptionEvent {
+impl flutter_rust_bridge::IntoDart for crate::api::silero_vad::TranscriptionEvent {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
-            crate::api::whisper::TranscriptionEvent::Progress(field0) => {
+            crate::api::silero_vad::TranscriptionEvent::Progress(field0) => {
                 [0.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::whisper::TranscriptionEvent::ProgressDetail {
+            crate::api::silero_vad::TranscriptionEvent::ProgressDetail {
                 processed_ms,
                 total_ms,
             } => [
@@ -1861,13 +2161,13 @@ impl flutter_rust_bridge::IntoDart for crate::api::whisper::TranscriptionEvent {
                 total_ms.into_into_dart().into_dart(),
             ]
             .into_dart(),
-            crate::api::whisper::TranscriptionEvent::Success(field0) => {
+            crate::api::silero_vad::TranscriptionEvent::Success(field0) => {
                 [2.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::whisper::TranscriptionEvent::Failure(field0) => {
+            crate::api::silero_vad::TranscriptionEvent::Failure(field0) => {
                 [3.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::whisper::TranscriptionEvent::Segment(field0) => {
+            crate::api::silero_vad::TranscriptionEvent::Segment(field0) => {
                 [4.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
             _ => {
@@ -1877,18 +2177,18 @@ impl flutter_rust_bridge::IntoDart for crate::api::whisper::TranscriptionEvent {
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::whisper::TranscriptionEvent
+    for crate::api::silero_vad::TranscriptionEvent
 {
 }
-impl flutter_rust_bridge::IntoIntoDart<crate::api::whisper::TranscriptionEvent>
-    for crate::api::whisper::TranscriptionEvent
+impl flutter_rust_bridge::IntoIntoDart<crate::api::silero_vad::TranscriptionEvent>
+    for crate::api::silero_vad::TranscriptionEvent
 {
-    fn into_into_dart(self) -> crate::api::whisper::TranscriptionEvent {
+    fn into_into_dart(self) -> crate::api::silero_vad::TranscriptionEvent {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::whisper::TranscriptionSegment {
+impl flutter_rust_bridge::IntoDart for crate::api::silero_vad::TranscriptionSegment {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.start_ms.into_into_dart().into_dart(),
@@ -1901,18 +2201,18 @@ impl flutter_rust_bridge::IntoDart for crate::api::whisper::TranscriptionSegment
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::whisper::TranscriptionSegment
+    for crate::api::silero_vad::TranscriptionSegment
 {
 }
-impl flutter_rust_bridge::IntoIntoDart<crate::api::whisper::TranscriptionSegment>
-    for crate::api::whisper::TranscriptionSegment
+impl flutter_rust_bridge::IntoIntoDart<crate::api::silero_vad::TranscriptionSegment>
+    for crate::api::silero_vad::TranscriptionSegment
 {
-    fn into_into_dart(self) -> crate::api::whisper::TranscriptionSegment {
+    fn into_into_dart(self) -> crate::api::silero_vad::TranscriptionSegment {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::whisper::VulkanDeviceInfo {
+impl flutter_rust_bridge::IntoDart for crate::api::silero_vad::VulkanDeviceInfo {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.id.into_into_dart().into_dart(),
@@ -1923,18 +2223,18 @@ impl flutter_rust_bridge::IntoDart for crate::api::whisper::VulkanDeviceInfo {
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::whisper::VulkanDeviceInfo
+    for crate::api::silero_vad::VulkanDeviceInfo
 {
 }
-impl flutter_rust_bridge::IntoIntoDart<crate::api::whisper::VulkanDeviceInfo>
-    for crate::api::whisper::VulkanDeviceInfo
+impl flutter_rust_bridge::IntoIntoDart<crate::api::silero_vad::VulkanDeviceInfo>
+    for crate::api::silero_vad::VulkanDeviceInfo
 {
-    fn into_into_dart(self) -> crate::api::whisper::VulkanDeviceInfo {
+    fn into_into_dart(self) -> crate::api::silero_vad::VulkanDeviceInfo {
         self
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::whisper::WordItem {
+impl flutter_rust_bridge::IntoDart for crate::api::silero_vad::WordItem {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.text.into_into_dart().into_dart(),
@@ -1945,11 +2245,14 @@ impl flutter_rust_bridge::IntoDart for crate::api::whisper::WordItem {
         .into_dart()
     }
 }
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::whisper::WordItem {}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::whisper::WordItem>
-    for crate::api::whisper::WordItem
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::silero_vad::WordItem
 {
-    fn into_into_dart(self) -> crate::api::whisper::WordItem {
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::silero_vad::WordItem>
+    for crate::api::silero_vad::WordItem
+{
+    fn into_into_dart(self) -> crate::api::silero_vad::WordItem {
         self
     }
 }
@@ -1958,6 +2261,24 @@ impl SseEncode for flutter_rust_bridge::for_generated::anyhow::Error {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(format!("{:?}", self), serializer);
+    }
+}
+
+impl SseEncode for SileroVadEngine {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SileroVadEngine>>>::sse_encode(flutter_rust_bridge::for_generated::rust_auto_opaque_encode::<_, MoiArc<_>>(self), serializer);
+    }
+}
+
+impl SseEncode
+    for RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SileroVadEngine>>
+{
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        let (ptr, size) = self.sse_encode_raw();
+        <usize>::sse_encode(ptr, serializer);
+        <i32>::sse_encode(size, serializer);
     }
 }
 
@@ -1972,7 +2293,7 @@ impl SseEncode
 
 impl SseEncode
     for StreamSink<
-        crate::api::whisper::TranscriptionEvent,
+        crate::api::silero_vad::TranscriptionEvent,
         flutter_rust_bridge::for_generated::SseCodec,
     >
 {
@@ -2042,7 +2363,8 @@ impl SseEncode for crate::qwen::backend::EncoderBackend {
             match self {
                 crate::qwen::backend::EncoderBackend::Auto => 0,
                 crate::qwen::backend::EncoderBackend::DirectMl => 1,
-                crate::qwen::backend::EncoderBackend::Cpu => 2,
+                crate::qwen::backend::EncoderBackend::Cuda => 2,
+                crate::qwen::backend::EncoderBackend::Cpu => 3,
                 _ => {
                     unimplemented!("");
                 }
@@ -2075,11 +2397,11 @@ impl SseEncode for crate::api::ffmpeg::FfmpegEvent {
     }
 }
 
-impl SseEncode for crate::api::whisper::HardwareAccelerationInfo {
+impl SseEncode for crate::api::silero_vad::HardwareAccelerationInfo {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <bool>::sse_encode(self.is_vulkan_available, serializer);
-        <Vec<crate::api::whisper::VulkanDeviceInfo>>::sse_encode(self.devices, serializer);
+        <Vec<crate::api::silero_vad::VulkanDeviceInfo>>::sse_encode(self.devices, serializer);
     }
 }
 
@@ -2127,6 +2449,16 @@ impl SseEncode for Vec<crate::qwen::backend::ComputeDeviceInfo> {
     }
 }
 
+impl SseEncode for Vec<f32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <f32>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2137,32 +2469,42 @@ impl SseEncode for Vec<u8> {
     }
 }
 
-impl SseEncode for Vec<crate::api::whisper::TranscriptionSegment> {
+impl SseEncode for Vec<(usize, usize)> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::whisper::TranscriptionSegment>::sse_encode(item, serializer);
+            <(usize, usize)>::sse_encode(item, serializer);
         }
     }
 }
 
-impl SseEncode for Vec<crate::api::whisper::VulkanDeviceInfo> {
+impl SseEncode for Vec<crate::api::silero_vad::TranscriptionSegment> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::whisper::VulkanDeviceInfo>::sse_encode(item, serializer);
+            <crate::api::silero_vad::TranscriptionSegment>::sse_encode(item, serializer);
         }
     }
 }
 
-impl SseEncode for Vec<crate::api::whisper::WordItem> {
+impl SseEncode for Vec<crate::api::silero_vad::VulkanDeviceInfo> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
-            <crate::api::whisper::WordItem>::sse_encode(item, serializer);
+            <crate::api::silero_vad::VulkanDeviceInfo>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::silero_vad::WordItem> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::silero_vad::WordItem>::sse_encode(item, serializer);
         }
     }
 }
@@ -2275,6 +2617,14 @@ impl SseEncode for (String, String) {
     }
 }
 
+impl SseEncode for (usize, usize) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <usize>::sse_encode(self.0, serializer);
+        <usize>::sse_encode(self.1, serializer);
+    }
+}
+
 impl SseEncode for crate::api::stream_pipeline::TimestampMode {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2291,15 +2641,15 @@ impl SseEncode for crate::api::stream_pipeline::TimestampMode {
     }
 }
 
-impl SseEncode for crate::api::whisper::TranscriptionEvent {
+impl SseEncode for crate::api::silero_vad::TranscriptionEvent {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         match self {
-            crate::api::whisper::TranscriptionEvent::Progress(field0) => {
+            crate::api::silero_vad::TranscriptionEvent::Progress(field0) => {
                 <i32>::sse_encode(0, serializer);
                 <i32>::sse_encode(field0, serializer);
             }
-            crate::api::whisper::TranscriptionEvent::ProgressDetail {
+            crate::api::silero_vad::TranscriptionEvent::ProgressDetail {
                 processed_ms,
                 total_ms,
             } => {
@@ -2307,17 +2657,17 @@ impl SseEncode for crate::api::whisper::TranscriptionEvent {
                 <i64>::sse_encode(processed_ms, serializer);
                 <i64>::sse_encode(total_ms, serializer);
             }
-            crate::api::whisper::TranscriptionEvent::Success(field0) => {
+            crate::api::silero_vad::TranscriptionEvent::Success(field0) => {
                 <i32>::sse_encode(2, serializer);
-                <Vec<crate::api::whisper::TranscriptionSegment>>::sse_encode(field0, serializer);
+                <Vec<crate::api::silero_vad::TranscriptionSegment>>::sse_encode(field0, serializer);
             }
-            crate::api::whisper::TranscriptionEvent::Failure(field0) => {
+            crate::api::silero_vad::TranscriptionEvent::Failure(field0) => {
                 <i32>::sse_encode(3, serializer);
                 <String>::sse_encode(field0, serializer);
             }
-            crate::api::whisper::TranscriptionEvent::Segment(field0) => {
+            crate::api::silero_vad::TranscriptionEvent::Segment(field0) => {
                 <i32>::sse_encode(4, serializer);
-                <crate::api::whisper::TranscriptionSegment>::sse_encode(field0, serializer);
+                <crate::api::silero_vad::TranscriptionSegment>::sse_encode(field0, serializer);
             }
             _ => {
                 unimplemented!("");
@@ -2326,13 +2676,13 @@ impl SseEncode for crate::api::whisper::TranscriptionEvent {
     }
 }
 
-impl SseEncode for crate::api::whisper::TranscriptionSegment {
+impl SseEncode for crate::api::silero_vad::TranscriptionSegment {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i64>::sse_encode(self.start_ms, serializer);
         <i64>::sse_encode(self.end_ms, serializer);
         <String>::sse_encode(self.text, serializer);
-        <Vec<crate::api::whisper::WordItem>>::sse_encode(self.words, serializer);
+        <Vec<crate::api::silero_vad::WordItem>>::sse_encode(self.words, serializer);
         <String>::sse_encode(self.timestamp_quality, serializer);
     }
 }
@@ -2366,7 +2716,7 @@ impl SseEncode for usize {
     }
 }
 
-impl SseEncode for crate::api::whisper::VulkanDeviceInfo {
+impl SseEncode for crate::api::silero_vad::VulkanDeviceInfo {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i32>::sse_encode(self.id, serializer);
@@ -2375,7 +2725,7 @@ impl SseEncode for crate::api::whisper::VulkanDeviceInfo {
     }
 }
 
-impl SseEncode for crate::api::whisper::WordItem {
+impl SseEncode for crate::api::silero_vad::WordItem {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.text, serializer);
@@ -2393,6 +2743,7 @@ mod io {
     // Section: imports
 
     use super::*;
+    use crate::api::silero_vad::*;
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
     };
@@ -2402,6 +2753,20 @@ mod io {
     // Section: boilerplate
 
     flutter_rust_bridge::frb_generated_boilerplate_io!();
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn frbgen_audio2srt_rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SileroVadEngine>>::increment_strong_count(ptr as _);
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn frbgen_audio2srt_rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SileroVadEngine>>::decrement_strong_count(ptr as _);
+    }
 }
 #[cfg(not(target_family = "wasm"))]
 pub use io::*;
@@ -2415,6 +2780,7 @@ mod web {
     // Section: imports
 
     use super::*;
+    use crate::api::silero_vad::*;
     use flutter_rust_bridge::for_generated::byteorder::{
         NativeEndian, ReadBytesExt, WriteBytesExt,
     };
@@ -2426,6 +2792,20 @@ mod web {
     // Section: boilerplate
 
     flutter_rust_bridge::frb_generated_boilerplate_web!();
+
+    #[wasm_bindgen]
+    pub fn rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SileroVadEngine>>::increment_strong_count(ptr as _);
+    }
+
+    #[wasm_bindgen]
+    pub fn rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+        ptr: *const std::ffi::c_void,
+    ) {
+        MoiArc::<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SileroVadEngine>>::decrement_strong_count(ptr as _);
+    }
 }
 #[cfg(target_family = "wasm")]
 pub use web::*;

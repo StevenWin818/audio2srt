@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub enum EncoderBackend {
     Auto,
     DirectMl,
+    Cuda,
     Cpu,
 }
 

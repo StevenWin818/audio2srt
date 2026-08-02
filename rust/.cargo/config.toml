@@ -1,4 +1,8 @@
 [build]
 jobs = 8
-# target-dir = "C:/t" # 移至 cargokit.cmake 中按 Windows 条件动态设置，支持 Mac/Linux
+target = "x86_64-pc-windows-msvc"
 rustflags = ["-C", "target-cpu=native"]
+
+[env]
+# 强制 CMake 使用 Ninja 构建，不受 MAX_PATH 限制
+CMAKE_GENERATOR = "Ninja"

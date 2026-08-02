@@ -151,27 +151,17 @@ pub fn get_hardware_acceleration_info() -> HardwareAccelerationInfo {
     #[cfg(feature = "vulkan")]
     {
         let is_vulkan_safe = check_vulkan_supported_safely();
-
-        if is_vulkan_safe {
-            let devices = whisper_rs::vulkan::list_devices();
-            let is_vulkan_available = !devices.is_empty();
-            let mapped_devices = devices
-                .into_iter()
-                .map(|d| VulkanDeviceInfo {
-                    id: d.id,
-                    name: d.name,
-                    total_vram_bytes: d.vram.total as u64,
-                })
-                .collect();
-            HardwareAccelerationInfo {
-                is_vulkan_available,
-                devices: mapped_devices,
-            }
-        } else {
-            HardwareAccelerationInfo {
-                is_vulkan_available: false,
-                devices: vec![],
-            }
+        HardwareAccelerationInfo {
+            is_vulkan_available: is_vulkan_safe,
+            devices: if is_vulkan_safe {
+                vec![VulkanDeviceInfo {
+                    id: 0,
+                    name: "Vulkan GPU Acceleration".to_string(),
+                    total_vram_bytes: 0,
+                }]
+            } else {
+                vec![]
+            },
         }
     }
     #[cfg(feature = "cuda")]

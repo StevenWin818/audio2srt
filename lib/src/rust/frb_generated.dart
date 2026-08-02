@@ -7,9 +7,9 @@ import 'api/ffmpeg.dart';
 import 'api/hardware.dart';
 import 'api/models.dart';
 import 'api/qwen.dart';
+import 'api/silero_vad.dart';
 import 'api/simple.dart';
 import 'api/stream_pipeline.dart';
-import 'api/whisper.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
@@ -73,7 +73,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1386116060;
+  int get rustContentHash => -196990829;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -84,14 +84,27 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
+  Future<List<(BigInt, BigInt)>>
+  crateApiSileroVadSileroVadEngineDetectSpeechSegments({
+    required SileroVadEngine that,
+    required List<double> samples,
+    required int minSpeechMs,
+    required int minSilenceMs,
+    required double threshold,
+  });
+
+  Future<SileroVadEngine> crateApiSileroVadSileroVadEngineLoad({
+    required String vadModelPath,
+  });
+
   void crateApiStreamPipelineCancelTranscriptionBackend();
 
-  Future<String> crateApiWhisperConvertChinese({
+  Future<String> crateApiSileroVadConvertChinese({
     required String text,
     required bool toSimplified,
   });
 
-  Future<List<String>> crateApiWhisperConvertChineseList({
+  Future<List<String>> crateApiSileroVadConvertChineseList({
     required List<String> texts,
     required bool toSimplified,
   });
@@ -104,7 +117,8 @@ abstract class RustLibApi extends BaseApi {
     required String outputPath,
   });
 
-  Future<HardwareAccelerationInfo> crateApiWhisperGetHardwareAccelerationInfo();
+  Future<HardwareAccelerationInfo>
+  crateApiSileroVadGetHardwareAccelerationInfo();
 
   Future<QwenHardwareInfo> crateApiHardwareGetQwenHardwareInfo();
 
@@ -113,7 +127,7 @@ abstract class RustLibApi extends BaseApi {
   String crateApiSimpleGreet({required String name});
 
   Future<HardwareAccelerationInfo>
-  crateApiWhisperHardwareAccelerationInfoDefault();
+  crateApiSileroVadHardwareAccelerationInfoDefault();
 
   Future<void> crateApiSimpleInitApp();
 
@@ -125,14 +139,21 @@ abstract class RustLibApi extends BaseApi {
     required bool hardBurn,
   });
 
+  void crateApiStreamPipelinePreloadQwenModel({
+    required String asrModelDir,
+    String? alignerModelDir,
+  });
+
   Future<List<AudioTrackInfo>> crateApiFfmpegProbeAudioTracks({
     required String ffmpegPath,
     required String filePath,
   });
 
+  Future<void> crateApiSileroVadRegisterThreadAsProAudio();
+
   void crateApiStreamPipelineSetRustPerfLogging({required bool enable});
 
-  Stream<TranscriptionEvent> crateApiWhisperTranscribe({
+  Stream<TranscriptionEvent> crateApiSileroVadTranscribe({
     required String modelPath,
     required String vadModelPath,
     required String audioPath,
@@ -157,9 +178,11 @@ abstract class RustLibApi extends BaseApi {
     required PipelineConfig config,
   });
 
-  Future<TranscriptionSegment> crateApiWhisperTranscriptionSegmentDefault();
+  Future<TranscriptionSegment> crateApiSileroVadTranscriptionSegmentDefault();
 
   Future<void> crateApiQwenUnloadQwenRuntime();
+
+  void crateApiStreamPipelineUnloadQwenRuntime();
 
   Future<ModelInfo> crateApiModelsValidateQwenModel({required String modelDir});
 
@@ -167,19 +190,28 @@ abstract class RustLibApi extends BaseApi {
     required String modelDir,
   });
 
-  Future<VulkanDeviceInfo> crateApiWhisperVulkanDeviceInfoDefault();
+  Future<VulkanDeviceInfo> crateApiSileroVadVulkanDeviceInfoDefault();
 
   Future<void> crateApiQwenWarmupQwenRuntime({
     required QwenWarmupConfig config,
   });
 
-  Future<void> crateApiWhisperWarmupWhisperContext({
+  Future<void> crateApiSileroVadWarmupWhisperContext({
     required String modelPath,
     required bool useGpu,
     required double totalDuration,
   });
 
-  Future<WordItem> crateApiWhisperWordItemDefault();
+  Future<WordItem> crateApiSileroVadWordItemDefault();
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_SileroVadEngine;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_SileroVadEngine;
+
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_SileroVadEnginePtr;
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -191,12 +223,99 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
+  Future<List<(BigInt, BigInt)>>
+  crateApiSileroVadSileroVadEngineDetectSpeechSegments({
+    required SileroVadEngine that,
+    required List<double> samples,
+    required int minSpeechMs,
+    required int minSilenceMs,
+    required double threshold,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+            that,
+            serializer,
+          );
+          sse_encode_list_prim_f_32_loose(samples, serializer);
+          sse_encode_i_32(minSpeechMs, serializer);
+          sse_encode_i_32(minSilenceMs, serializer);
+          sse_encode_f_32(threshold, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 1,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_record_usize_usize,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta:
+            kCrateApiSileroVadSileroVadEngineDetectSpeechSegmentsConstMeta,
+        argValues: [that, samples, minSpeechMs, minSilenceMs, threshold],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta
+  get kCrateApiSileroVadSileroVadEngineDetectSpeechSegmentsConstMeta =>
+      const TaskConstMeta(
+        debugName: "SileroVadEngine_detect_speech_segments",
+        argNames: [
+          "that",
+          "samples",
+          "minSpeechMs",
+          "minSilenceMs",
+          "threshold",
+        ],
+      );
+
+  @override
+  Future<SileroVadEngine> crateApiSileroVadSileroVadEngineLoad({
+    required String vadModelPath,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(vadModelPath, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 2,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSileroVadSileroVadEngineLoadConstMeta,
+        argValues: [vadModelPath],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSileroVadSileroVadEngineLoadConstMeta =>
+      const TaskConstMeta(
+        debugName: "SileroVadEngine_load",
+        argNames: ["vadModelPath"],
+      );
+
+  @override
   void crateApiStreamPipelineCancelTranscriptionBackend() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 2)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 4)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -217,7 +336,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<String> crateApiWhisperConvertChinese({
+  Future<String> crateApiSileroVadConvertChinese({
     required String text,
     required bool toSimplified,
   }) {
@@ -230,7 +349,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 3,
+            funcId: 5,
             port: port_,
           );
         },
@@ -238,21 +357,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_String,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiWhisperConvertChineseConstMeta,
+        constMeta: kCrateApiSileroVadConvertChineseConstMeta,
         argValues: [text, toSimplified],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiWhisperConvertChineseConstMeta =>
+  TaskConstMeta get kCrateApiSileroVadConvertChineseConstMeta =>
       const TaskConstMeta(
         debugName: "convert_chinese",
         argNames: ["text", "toSimplified"],
       );
 
   @override
-  Future<List<String>> crateApiWhisperConvertChineseList({
+  Future<List<String>> crateApiSileroVadConvertChineseList({
     required List<String> texts,
     required bool toSimplified,
   }) {
@@ -265,7 +384,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 6,
             port: port_,
           );
         },
@@ -273,14 +392,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_list_String,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiWhisperConvertChineseListConstMeta,
+        constMeta: kCrateApiSileroVadConvertChineseListConstMeta,
         argValues: [texts, toSimplified],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiWhisperConvertChineseListConstMeta =>
+  TaskConstMeta get kCrateApiSileroVadConvertChineseListConstMeta =>
       const TaskConstMeta(
         debugName: "convert_chinese_list",
         argNames: ["texts", "toSimplified"],
@@ -298,7 +417,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 7,
             port: port_,
           );
         },
@@ -335,7 +454,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 6,
+              funcId: 8,
               port: port_,
             );
           },
@@ -360,7 +479,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<HardwareAccelerationInfo>
-  crateApiWhisperGetHardwareAccelerationInfo() {
+  crateApiSileroVadGetHardwareAccelerationInfo() {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
@@ -368,7 +487,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 9,
             port: port_,
           );
         },
@@ -376,14 +495,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_hardware_acceleration_info,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiWhisperGetHardwareAccelerationInfoConstMeta,
+        constMeta: kCrateApiSileroVadGetHardwareAccelerationInfoConstMeta,
         argValues: [],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiWhisperGetHardwareAccelerationInfoConstMeta =>
+  TaskConstMeta get kCrateApiSileroVadGetHardwareAccelerationInfoConstMeta =>
       const TaskConstMeta(
         debugName: "get_hardware_acceleration_info",
         argNames: [],
@@ -398,7 +517,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 10,
             port: port_,
           );
         },
@@ -425,7 +544,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 11,
             port: port_,
           );
         },
@@ -450,7 +569,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -468,7 +587,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<HardwareAccelerationInfo>
-  crateApiWhisperHardwareAccelerationInfoDefault() {
+  crateApiSileroVadHardwareAccelerationInfoDefault() {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
@@ -476,7 +595,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 13,
             port: port_,
           );
         },
@@ -484,14 +603,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_hardware_acceleration_info,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiWhisperHardwareAccelerationInfoDefaultConstMeta,
+        constMeta: kCrateApiSileroVadHardwareAccelerationInfoDefaultConstMeta,
         argValues: [],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiWhisperHardwareAccelerationInfoDefaultConstMeta =>
+  TaskConstMeta
+  get kCrateApiSileroVadHardwareAccelerationInfoDefaultConstMeta =>
       const TaskConstMeta(
         debugName: "hardware_acceleration_info_default",
         argNames: [],
@@ -506,7 +626,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 14,
             port: port_,
           );
         },
@@ -547,7 +667,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 13,
+              funcId: 15,
               port: port_,
             );
           },
@@ -585,6 +705,36 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  void crateApiStreamPipelinePreloadQwenModel({
+    required String asrModelDir,
+    String? alignerModelDir,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(asrModelDir, serializer);
+          sse_encode_opt_String(alignerModelDir, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiStreamPipelinePreloadQwenModelConstMeta,
+        argValues: [asrModelDir, alignerModelDir],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiStreamPipelinePreloadQwenModelConstMeta =>
+      const TaskConstMeta(
+        debugName: "preload_qwen_model",
+        argNames: ["asrModelDir", "alignerModelDir"],
+      );
+
+  @override
   Future<List<AudioTrackInfo>> crateApiFfmpegProbeAudioTracks({
     required String ffmpegPath,
     required String filePath,
@@ -598,7 +748,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 17,
             port: port_,
           );
         },
@@ -620,13 +770,43 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiSileroVadRegisterThreadAsProAudio() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 18,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSileroVadRegisterThreadAsProAudioConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSileroVadRegisterThreadAsProAudioConstMeta =>
+      const TaskConstMeta(
+        debugName: "register_thread_as_pro_audio",
+        argNames: [],
+      );
+
+  @override
   void crateApiStreamPipelineSetRustPerfLogging({required bool enable}) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_bool(enable, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -646,7 +826,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Stream<TranscriptionEvent> crateApiWhisperTranscribe({
+  Stream<TranscriptionEvent> crateApiSileroVadTranscribe({
     required String modelPath,
     required String vadModelPath,
     required String audioPath,
@@ -694,7 +874,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 16,
+              funcId: 20,
               port: port_,
             );
           },
@@ -702,7 +882,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             decodeSuccessData: sse_decode_unit,
             decodeErrorData: null,
           ),
-          constMeta: kCrateApiWhisperTranscribeConstMeta,
+          constMeta: kCrateApiSileroVadTranscribeConstMeta,
           argValues: [
             sink,
             modelPath,
@@ -731,30 +911,31 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return sink.stream;
   }
 
-  TaskConstMeta get kCrateApiWhisperTranscribeConstMeta => const TaskConstMeta(
-    debugName: "transcribe",
-    argNames: [
-      "sink",
-      "modelPath",
-      "vadModelPath",
-      "audioPath",
-      "language",
-      "translate",
-      "threads",
-      "useGpu",
-      "vadEnabled",
-      "vadThreshold",
-      "vadMinSpeechMs",
-      "vadMinSilenceMs",
-      "temperature",
-      "temperatureInc",
-      "entropyThold",
-      "logprobThold",
-      "noSpeechThold",
-      "noContext",
-      "noStateHistory",
-    ],
-  );
+  TaskConstMeta get kCrateApiSileroVadTranscribeConstMeta =>
+      const TaskConstMeta(
+        debugName: "transcribe",
+        argNames: [
+          "sink",
+          "modelPath",
+          "vadModelPath",
+          "audioPath",
+          "language",
+          "translate",
+          "threads",
+          "useGpu",
+          "vadEnabled",
+          "vadThreshold",
+          "vadMinSpeechMs",
+          "vadMinSilenceMs",
+          "temperature",
+          "temperatureInc",
+          "entropyThold",
+          "logprobThold",
+          "noSpeechThold",
+          "noContext",
+          "noStateHistory",
+        ],
+      );
 
   @override
   Stream<TranscriptionEvent> crateApiStreamPipelineTranscribeStream({
@@ -771,7 +952,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 17,
+              funcId: 21,
               port: port_,
             );
           },
@@ -795,7 +976,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<TranscriptionSegment> crateApiWhisperTranscriptionSegmentDefault() {
+  Future<TranscriptionSegment> crateApiSileroVadTranscriptionSegmentDefault() {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
@@ -803,7 +984,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 22,
             port: port_,
           );
         },
@@ -811,14 +992,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_transcription_segment,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiWhisperTranscriptionSegmentDefaultConstMeta,
+        constMeta: kCrateApiSileroVadTranscriptionSegmentDefaultConstMeta,
         argValues: [],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiWhisperTranscriptionSegmentDefaultConstMeta =>
+  TaskConstMeta get kCrateApiSileroVadTranscriptionSegmentDefaultConstMeta =>
       const TaskConstMeta(
         debugName: "transcription_segment_default",
         argNames: [],
@@ -833,7 +1014,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 23,
             port: port_,
           );
         },
@@ -852,6 +1033,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "unload_qwen_runtime", argNames: []);
 
   @override
+  void crateApiStreamPipelineUnloadQwenRuntime() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 24)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiStreamPipelineUnloadQwenRuntimeConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiStreamPipelineUnloadQwenRuntimeConstMeta =>
+      const TaskConstMeta(debugName: "unload_qwen_runtime", argNames: []);
+
+  @override
   Future<ModelInfo> crateApiModelsValidateQwenModel({
     required String modelDir,
   }) {
@@ -863,7 +1066,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 25,
             port: port_,
           );
         },
@@ -896,7 +1099,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 26,
             port: port_,
           );
         },
@@ -918,7 +1121,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<VulkanDeviceInfo> crateApiWhisperVulkanDeviceInfoDefault() {
+  Future<VulkanDeviceInfo> crateApiSileroVadVulkanDeviceInfoDefault() {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
@@ -926,7 +1129,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 27,
             port: port_,
           );
         },
@@ -934,14 +1137,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_vulkan_device_info,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiWhisperVulkanDeviceInfoDefaultConstMeta,
+        constMeta: kCrateApiSileroVadVulkanDeviceInfoDefaultConstMeta,
         argValues: [],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiWhisperVulkanDeviceInfoDefaultConstMeta =>
+  TaskConstMeta get kCrateApiSileroVadVulkanDeviceInfoDefaultConstMeta =>
       const TaskConstMeta(
         debugName: "vulkan_device_info_default",
         argNames: [],
@@ -959,7 +1162,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 28,
             port: port_,
           );
         },
@@ -981,7 +1184,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<void> crateApiWhisperWarmupWhisperContext({
+  Future<void> crateApiSileroVadWarmupWhisperContext({
     required String modelPath,
     required bool useGpu,
     required double totalDuration,
@@ -996,29 +1199,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 29,
             port: port_,
           );
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
-          decodeErrorData: null,
+          decodeErrorData: sse_decode_String,
         ),
-        constMeta: kCrateApiWhisperWarmupWhisperContextConstMeta,
+        constMeta: kCrateApiSileroVadWarmupWhisperContextConstMeta,
         argValues: [modelPath, useGpu, totalDuration],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiWhisperWarmupWhisperContextConstMeta =>
+  TaskConstMeta get kCrateApiSileroVadWarmupWhisperContextConstMeta =>
       const TaskConstMeta(
         debugName: "warmup_whisper_context",
         argNames: ["modelPath", "useGpu", "totalDuration"],
       );
 
   @override
-  Future<WordItem> crateApiWhisperWordItemDefault() {
+  Future<WordItem> crateApiSileroVadWordItemDefault() {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
@@ -1026,7 +1229,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1034,20 +1237,55 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_word_item,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiWhisperWordItemDefaultConstMeta,
+        constMeta: kCrateApiSileroVadWordItemDefaultConstMeta,
         argValues: [],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiWhisperWordItemDefaultConstMeta =>
+  TaskConstMeta get kCrateApiSileroVadWordItemDefaultConstMeta =>
       const TaskConstMeta(debugName: "word_item_default", argNames: []);
+
+  RustArcIncrementStrongCountFnType
+  get rust_arc_increment_strong_count_SileroVadEngine => wire
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine;
+
+  RustArcDecrementStrongCountFnType
+  get rust_arc_decrement_strong_count_SileroVadEngine => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine;
 
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return AnyhowException(raw as String);
+  }
+
+  @protected
+  SileroVadEngine
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SileroVadEngineImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  SileroVadEngine
+  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SileroVadEngineImpl.frbInternalDcoDecode(raw as List<dynamic>);
+  }
+
+  @protected
+  SileroVadEngine
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return SileroVadEngineImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -1230,9 +1468,27 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<double> dco_decode_list_prim_f_32_loose(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as List<double>;
+  }
+
+  @protected
+  Float32List dco_decode_list_prim_f_32_strict(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as Float32List;
+  }
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
+  }
+
+  @protected
+  List<(BigInt, BigInt)> dco_decode_list_record_usize_usize(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_record_usize_usize).toList();
   }
 
   @protected
@@ -1366,6 +1622,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  (BigInt, BigInt) dco_decode_record_usize_usize(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2) {
+      throw Exception('Expected 2 elements, got ${arr.length}');
+    }
+    return (dco_decode_usize(arr[0]), dco_decode_usize(arr[1]));
+  }
+
+  @protected
   TimestampMode dco_decode_timestamp_mode(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return TimestampMode.values[raw as int];
@@ -1468,6 +1734,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_String(deserializer);
     return AnyhowException(inner);
+  }
+
+  @protected
+  SileroVadEngine
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SileroVadEngineImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  SileroVadEngine
+  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SileroVadEngineImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
+  }
+
+  @protected
+  SileroVadEngine
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return SileroVadEngineImpl.frbInternalSseDecode(
+      sse_decode_usize(deserializer),
+      sse_decode_i_32(deserializer),
+    );
   }
 
   @protected
@@ -1681,10 +1983,38 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<double> sse_decode_list_prim_f_32_loose(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var len_ = sse_decode_i_32(deserializer);
+    return deserializer.buffer.getFloat32List(len_);
+  }
+
+  @protected
+  Float32List sse_decode_list_prim_f_32_strict(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var len_ = sse_decode_i_32(deserializer);
+    return deserializer.buffer.getFloat32List(len_);
+  }
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
+  }
+
+  @protected
+  List<(BigInt, BigInt)> sse_decode_list_record_usize_usize(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <(BigInt, BigInt)>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_record_usize_usize(deserializer));
+    }
+    return ans_;
   }
 
   @protected
@@ -1883,6 +2213,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  (BigInt, BigInt) sse_decode_record_usize_usize(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_field0 = sse_decode_usize(deserializer);
+    var var_field1 = sse_decode_usize(deserializer);
+    return (var_field0, var_field1);
+  }
+
+  @protected
   TimestampMode sse_decode_timestamp_mode(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
@@ -2000,6 +2338,45 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.message, serializer);
+  }
+
+  @protected
+  void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    SileroVadEngine self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as SileroVadEngineImpl).frbInternalSseEncode(move: true),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    SileroVadEngine self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as SileroVadEngineImpl).frbInternalSseEncode(move: false),
+      serializer,
+    );
+  }
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
+    SileroVadEngine self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(
+      (self as SileroVadEngineImpl).frbInternalSseEncode(move: null),
+      serializer,
+    );
   }
 
   @protected
@@ -2215,6 +2592,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_prim_f_32_loose(
+    List<double> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    serializer.buffer.putFloat32List(
+      self is Float32List ? self : Float32List.fromList(self),
+    );
+  }
+
+  @protected
+  void sse_encode_list_prim_f_32_strict(
+    Float32List self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    serializer.buffer.putFloat32List(self);
+  }
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
     SseSerializer serializer,
@@ -2222,6 +2621,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
+  }
+
+  @protected
+  void sse_encode_list_record_usize_usize(
+    List<(BigInt, BigInt)> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_record_usize_usize(item, serializer);
+    }
   }
 
   @protected
@@ -2373,6 +2784,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_record_usize_usize(
+    (BigInt, BigInt) self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_usize(self.$1, serializer);
+    sse_encode_usize(self.$2, serializer);
+  }
+
+  @protected
   void sse_encode_timestamp_mode(TimestampMode self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
@@ -2462,4 +2883,38 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_64(self.endMs, serializer);
     sse_encode_f_32(self.confidence, serializer);
   }
+}
+
+@sealed
+class SileroVadEngineImpl extends RustOpaque implements SileroVadEngine {
+  // Not to be used by end users
+  SileroVadEngineImpl.frbInternalDcoDecode(List<dynamic> wire)
+    : super.frbInternalDcoDecode(wire, _kStaticData);
+
+  // Not to be used by end users
+  SileroVadEngineImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+    : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
+
+  static final _kStaticData = RustArcStaticData(
+    rustArcIncrementStrongCount:
+        RustLib.instance.api.rust_arc_increment_strong_count_SileroVadEngine,
+    rustArcDecrementStrongCount:
+        RustLib.instance.api.rust_arc_decrement_strong_count_SileroVadEngine,
+    rustArcDecrementStrongCountPtr:
+        RustLib.instance.api.rust_arc_decrement_strong_count_SileroVadEnginePtr,
+  );
+
+  Future<List<(BigInt, BigInt)>> detectSpeechSegments({
+    required List<double> samples,
+    required int minSpeechMs,
+    required int minSilenceMs,
+    required double threshold,
+  }) =>
+      RustLib.instance.api.crateApiSileroVadSileroVadEngineDetectSpeechSegments(
+        that: this,
+        samples: samples,
+        minSpeechMs: minSpeechMs,
+        minSilenceMs: minSilenceMs,
+        threshold: threshold,
+      );
 }

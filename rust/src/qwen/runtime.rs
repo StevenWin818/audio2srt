@@ -1,7 +1,7 @@
 use crate::qwen::aligner::{AlignmentResult, QwenAligner};
 use crate::qwen::backend::{DecoderBackend, EncoderBackend};
 use crate::qwen::decoder::{DecodeRequest, DecodeResult, QwenDecoder};
-use crate::qwen::encoder::QwenEncoder;
+use crate::qwen::encoder::{EncoderOutput, QwenEncoder};
 use crate::qwen::error::QwenError;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -51,15 +51,26 @@ impl QwenRuntime {
         language: Option<&str>,
         context_prompt: Option<&str>,
     ) -> Result<DecodeResult, QwenError> {
-        // 1) ONNX 编码器前向传播 — 生成声学 Embedding / 特征向量。
-        let enc_out = {
-            let mut enc = self.asr_encoder.lock();
-            enc.encode(samples_16k, &self.cancel)?
-        };
+        let enc_out = self.encode_segment(samples_16k)?;
+        self.decode_segment(&enc_out, language, context_prompt)
+    }
 
-        // 2) GGUF/llama.cpp 解码器前向传播 — 从 Logits 采样自回归生成文本。
+    /// 仅执行 ONNX 编码器前向传播。与 `decode_segment` 拆分后，
+    /// 编码线程和解码线程可在不同阶段重叠运行（段 N 解码时，段 N+1 编码）。
+    pub fn encode_segment(&self, samples_16k: &[f32]) -> Result<EncoderOutput, QwenError> {
+        let mut enc = self.asr_encoder.lock();
+        enc.encode(samples_16k, &self.cancel)
+    }
+
+    /// 仅执行 GGUF/llama.cpp 解码器前向传播。
+    pub fn decode_segment(
+        &self,
+        encoder_output: &EncoderOutput,
+        language: Option<&str>,
+        context_prompt: Option<&str>,
+    ) -> Result<DecodeResult, QwenError> {
         let req = DecodeRequest {
-            encoder_output: &enc_out,
+            encoder_output,
             language,
             context: context_prompt,
         };
@@ -117,11 +128,11 @@ impl QwenRuntime {
         }
     }
 
-    pub fn cancel(&mut self) {
+    pub fn cancel(&self) {
         self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn reset_cancel(&mut self) {
+    pub fn reset_cancel(&self) {
         self.cancel.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 }

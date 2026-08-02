@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -8,7 +9,7 @@ import 'package:local_notifier/local_notifier.dart';
 import 'package:ffi/ffi.dart';
 import 'package:window_manager/window_manager.dart';
 import '../src/rust/api/ffmpeg.dart' as rust_ffmpeg;
-import '../src/rust/api/whisper.dart' as rust_whisper;
+import '../src/rust/api/silero_vad.dart' as rust_whisper;
 import '../src/rust/api/stream_pipeline.dart' as rust_stream;
 import '../src/rust/qwen/backend.dart' as rust_qwen_backend;
 import '../services/ffmpeg_service.dart';
@@ -170,6 +171,12 @@ class TranscriptionProvider with ChangeNotifier {
 
   bool _isGpuAvailable = false;
   bool get isGpuAvailable => _isGpuAvailable;
+
+  bool _isModelLoading = false;
+  bool get isModelLoading => _isModelLoading;
+
+  String? _loadingModelName;
+  String? get loadingModelName => _loadingModelName;
 
   List<rust_whisper.VulkanDeviceInfo> _vulkanDevices = [];
   List<rust_whisper.VulkanDeviceInfo> get vulkanDevices => _vulkanDevices;
@@ -352,15 +359,52 @@ class TranscriptionProvider with ChangeNotifier {
       debugPrint('[TranscriptionProvider] Failed to load Vulkan hardware info: $e');
     }
     
-    // 加载已下载模型
+    // 加载已下载模型与持久化模型偏好
     _downloadedModels = await _modelService.getDownloadedModels();
     
-    if (_downloadedModels.isNotEmpty) {
+    final savedModel = await _loadSelectedModelPref();
+    if (savedModel != null && await _modelService.isModelDownloaded(savedModel)) {
+      _selectedModel = savedModel;
+    } else if (_downloadedModels.contains('qwen3-asr-0.6b')) {
+      _selectedModel = 'qwen3-asr-0.6b';
+    } else if (_downloadedModels.isNotEmpty) {
       _selectedModel = _downloadedModels.first;
     } else {
       _selectedModel = ModelService.availableQwenModels.first.dirName;
     }
     notifyListeners();
+    _preloadWhisperContext();
+  }
+
+  Future<void> _saveSelectedModelPref(String modelDirName) async {
+    try {
+      final dir = await getApplicationSupportDirectory();
+      final file = File(p.join(dir.path, 'app_settings.json'));
+      Map<String, dynamic> map = {};
+      if (await file.exists()) {
+        try {
+          map = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        } catch (_) {}
+      }
+      map['selected_model'] = modelDirName;
+      await file.writeAsString(jsonEncode(map));
+    } catch (e) {
+      debugPrint('[TranscriptionProvider] Save model pref error: $e');
+    }
+  }
+
+  Future<String?> _loadSelectedModelPref() async {
+    try {
+      final dir = await getApplicationSupportDirectory();
+      final file = File(p.join(dir.path, 'app_settings.json'));
+      if (await file.exists()) {
+        final map = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        return map['selected_model'] as String?;
+      }
+    } catch (e) {
+      debugPrint('[TranscriptionProvider] Load model pref error: $e');
+    }
+    return null;
   }
 
   /// 获取当前活跃的计算设备描述
@@ -547,7 +591,9 @@ class TranscriptionProvider with ChangeNotifier {
   }
 
   void setSelectedModel(String filename) {
+    if (_selectedModel == filename) return;
     _selectedModel = filename;
+    _saveSelectedModelPref(filename);
     _safeNotifyListeners();
     _preloadWhisperContext();
   }
@@ -572,7 +618,7 @@ class TranscriptionProvider with ChangeNotifier {
 
   Future<void> _preloadWhisperContext() async {
     _preloadTimer?.cancel();
-    _preloadTimer = Timer(const Duration(milliseconds: 800), () async {
+    _preloadTimer = Timer(const Duration(milliseconds: 200), () async {
       if (_selectedModel == null) return;
       try {
         final modelExists = await _modelService.isModelDownloaded(_selectedModel!);
@@ -581,8 +627,13 @@ class TranscriptionProvider with ChangeNotifier {
           _safeNotifyListeners();
           return;
         }
+
+        final modelDir = await _modelService.getModelPath(_selectedModel!);
+        final alignerDir = _selectedAlignerModel != null ? await _modelService.getModelPath(_selectedAlignerModel!) : null;
+        debugPrint('[TranscriptionProvider] Preloading model into GPU VRAM (async background): $modelDir (Aligner: $alignerDir)');
+        rust_stream.preloadQwenModel(asrModelDir: modelDir, alignerModelDir: alignerDir);
       } catch (e) {
-        debugPrint('[TranscriptionProvider] Model pre-check error: $e');
+        debugPrint('[TranscriptionProvider] Qwen ASR model preload error: $e');
       }
     });
   }
@@ -747,21 +798,20 @@ class TranscriptionProvider with ChangeNotifier {
 
       await _transcriptionSub?.cancel();
       _transcriptionSub = eventStream.listen(
-        (event) {
-          event.when(
-            progress: (val) {
-              _progress = val;
+        (event) async {
+          switch (event) {
+            case rust_whisper.TranscriptionEvent_Progress(:final field0):
+              _progress = field0;
               _statusMessage = '正在生成字幕...';
               _syncHighFreqNotifiers();
 
-              // 在推理过程中实时更新状态栏进度条
               try {
-                windowManager.setProgressBar(val / 100.0);
+                windowManager.setProgressBar(field0 / 100.0);
               } catch (e) {
                 debugPrint('Failed to set taskbar progress: $e');
               }
-            },
-            progressDetail: (processedMs, totalMs) {
+
+            case rust_whisper.TranscriptionEvent_ProgressDetail(:final processedMs, :final totalMs):
               _processedMs = processedMs.toInt();
               _totalMs = totalMs.toInt();
               if (_transcribeStartTime != null) {
@@ -777,20 +827,20 @@ class TranscriptionProvider with ChangeNotifier {
               }
               _statusMessage = '正在生成字幕...';
               _syncHighFreqNotifiers();
-            },
-            segment: (seg) {
+
+            case rust_whisper.TranscriptionEvent_Segment(:final field0):
               _subtitles = [
                 ..._subtitles,
                 SubtitleItem(
-                  startMs: seg.startMs.toInt(),
-                  endMs: seg.endMs.toInt(),
-                  text: seg.text,
+                  startMs: field0.startMs.toInt(),
+                  endMs: field0.endMs.toInt(),
+                  text: field0.text,
                 )
               ];
               _safeNotifyListeners();
-            },
-            success: (segments) {
-              _subtitles = segments
+
+            case rust_whisper.TranscriptionEvent_Success(:final field0):
+              _subtitles = field0
                   .map((seg) => SubtitleItem(
                         startMs: seg.startMs.toInt(),
                         endMs: seg.endMs.toInt(),
@@ -802,17 +852,14 @@ class TranscriptionProvider with ChangeNotifier {
               _syncHighFreqNotifiers();
               _safeNotifyListeners();
 
-              // 清除状态栏进度条
               try {
                 windowManager.setProgressBar(-1.0);
               } catch (e) {
                 debugPrint('Failed to clear taskbar progress: $e');
               }
 
-              // 推理结束时状态栏图标闪烁提醒用户
               _flashTaskbarIcon();
 
-              // 推理成功发送本地通知
               try {
                 final filename = _inputMediaFile != null ? p.basename(_inputMediaFile!.path) : '音视频文件';
                 final notification = LocalNotification(
@@ -831,13 +878,13 @@ class TranscriptionProvider with ChangeNotifier {
               } catch (e) {
                 debugPrint('[TranscriptionProvider] 发送成功通知异常: $e');
               }
-            },
-            failure: (err) async {
-              if (err.contains('Failed to load Qwen runtime') ||
-                  err.contains('model not found') ||
-                  err.contains('Corrupt') ||
-                  err.contains('ONNX') ||
-                  err.contains('manifest')) {
+
+            case rust_whisper.TranscriptionEvent_Failure(:final field0):
+              if (field0.contains('Failed to load Qwen runtime') ||
+                  field0.contains('model not found') ||
+                  field0.contains('Corrupt') ||
+                  field0.contains('ONNX') ||
+                  field0.contains('manifest')) {
                 if (_selectedModel != null) {
                   await checkAndRepairModel(_selectedModel!);
                 }
@@ -846,7 +893,7 @@ class TranscriptionProvider with ChangeNotifier {
                 }
                 _setError('模型加载失败（检测到文件已损毁），已自动清除损坏缓存！请在模型管理器中重新下载。');
               } else {
-                _setError('转写失败: $err');
+                _setError('转写失败: $field0');
               }
 
               // 清除状态栏进度条
@@ -864,22 +911,13 @@ class TranscriptionProvider with ChangeNotifier {
                 final filename = _inputMediaFile != null ? p.basename(_inputMediaFile!.path) : '音视频文件';
                 final notification = LocalNotification(
                   title: '语音识别失败',
-                  body: '文件: $filename\n错误信息: $err',
+                  body: '文件: $filename\n转换出错: $field0',
                 );
-                notification.onClick = () async {
-                  try {
-                    await windowManager.show();
-                    await windowManager.focus();
-                  } catch (e) {
-                    debugPrint('Failed to show window on notification click: $e');
-                  }
-                };
                 notification.show();
               } catch (e) {
                 debugPrint('[TranscriptionProvider] 发送失败通知异常: $e');
               }
-            },
-          );
+          }
         },
         onError: (err) {
           _setError('桥接通信异常: $err');

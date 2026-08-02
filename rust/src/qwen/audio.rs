@@ -109,17 +109,23 @@ impl AudioProcessor {
                 N_FFT
             )));
         }
-        let x = samples.to_vec();
+        // 与参考实现对齐：
+        // 先做左右各 n_fft/2 采样点的 reflect padding，再以 center=False 做 STFT。
+        // 无 padding 会少 2~3 帧，且边界帧与训练分布不一致。
+        let pad = N_FFT / 2;
+        let n_total = samples.len() + 2 * pad;
+        let mut x = vec![0.0f32; n_total];
+        x[pad..pad + samples.len()].copy_from_slice(samples);
+        for i in 0..pad {
+            x[i] = samples[pad - i];
+            x[pad + samples.len() + i] = samples[samples.len() - 2 - i];
+        }
 
         let plan = mel_plan();
         let mut inner = plan.fft.make_input_vec();
         let mut spectrum = plan.fft.make_output_vec();
         let n_freqs = N_FFT / 2 + 1;
-        let n_frames = if x.len() >= N_FFT {
-            (x.len() - N_FFT) / HOP_LENGTH + 1
-        } else {
-            0
-        };
+        let n_frames = (n_total - N_FFT) / HOP_LENGTH + 1;
         if n_frames == 0 {
             return Err(QwenError::AudioError("audio too short for stft".into()));
         }
@@ -148,17 +154,20 @@ impl AudioProcessor {
             }
         }
 
-        // 标准 Whisper Feature Extractor 绝对功率归一化：
-        // 截断 log10 功率于 -8.0 处，随后通过 (v + 4.0) / 4.0 映射至 [-1.0, 1.0]
+        // 标准 Whisper Feature Extractor 归一化：
+        // 以整段频谱的最大值截断 log10 功率于 (max - 8.0)，随后映射至 [-1.0, 1.0]。
+        // (参考实现为相对截断 log_spec.max() - 8.0，而非固定的 -8.0)
+        let max_f = feats.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+        let floor = max_f - 8.0;
         for v in feats.iter_mut() {
-            let clamped = (*v).max(-8.0);
+            let clamped = (*v).max(floor);
             *v = (clamped + 4.0) / 4.0;
         }
 
         let min_f = feats.iter().fold(f32::INFINITY, |a, &b| a.min(b));
-        let max_f = feats.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+        let max_f2 = feats.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
         let mean_f: f32 = feats.iter().sum::<f32>() / feats.len() as f32;
-        println!("[audio] Mel features: n_frames={} min={:.4} max={:.4} mean={:.4}", n_frames, min_f, max_f, mean_f);
+        println!("[audio] Mel features: n_frames={} min={:.4} max={:.4} mean={:.4}", n_frames, min_f, max_f2, mean_f);
 
         Ok((feats, n_frames))
     }

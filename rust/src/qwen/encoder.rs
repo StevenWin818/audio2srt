@@ -4,7 +4,7 @@ use crate::qwen::error::QwenError;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor;
-use ort::{ep::DirectML, inputs};
+use ort::inputs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -57,21 +57,49 @@ impl QwenEncoder {
         builder = builder
             .with_intra_threads(2)
             .map_err(|e| QwenError::OnnxError(format!("intra_threads: {}", e)))?;
+        
+        builder = builder
+            .with_config_entry("session.use_device_allocator_for_initializers", "1")
+            .map_err(|e| QwenError::OnnxError(format!("config_entry: {}", e)))?;
 
-        // Windows 系统下配置 DirectML 执行提供程序 (EP)
-        #[cfg(all(target_os = "windows", feature = "qwen-dml"))]
+        // 1. CUDA 后端分支 (当启用了 cuda / qwen-cuda 特性时)
+        #[cfg(any(feature = "cuda", feature = "qwen-cuda"))]
+        {
+            if matches!(backend, EncoderBackend::Cuda | EncoderBackend::Auto) {
+                use ort::ep::CUDA;
+                match builder.clone().with_execution_providers([CUDA::default().build()]) {
+                    Ok(b) => {
+                        builder = b;
+                        println!("[encoder] CUDA EP 注册成功 (全全链路 CUDA GPU 加速)");
+                    }
+                    Err(e) => {
+                        println!("[encoder] CUDA EP 注册失败 ({:?}); 降级处理", e);
+                    }
+                }
+            }
+        }
+
+        // 2. Windows 平台下的 Vulkan / DirectML 后端分支 (GGUF-Vulkan + ort-DirectML)
+        #[cfg(all(target_os = "windows", any(feature = "vulkan", feature = "qwen-dml", feature = "qwen-dml-win")))]
         {
             if matches!(backend, EncoderBackend::DirectMl | EncoderBackend::Auto) {
+                use ort::ep::DirectML;
                 match builder.clone().with_execution_providers([DirectML::default().build()]) {
                     Ok(b) => {
                         builder = b;
-                        println!("[encoder] DirectML EP 注册成功");
+                        println!("[encoder] Windows DirectML EP 注册成功 (GGUF-Vulkan + ort-DirectML 组合)");
                     }
                     Err(e) => {
                         println!("[encoder] DirectML EP 注册失败 ({:?}); 降级至 CPU", e);
                     }
                 }
             }
+        }
+
+        // 3. 非 Windows 平台下的 Vulkan 后端分支 (GGUF-Vulkan + ort-CPU)
+        #[cfg(all(not(target_os = "windows"), feature = "vulkan"))]
+        {
+            println!("[encoder] 非 Windows 平台 (Vulkan 方案): ONNX Runtime 使用 CPU，解码器使用 Vulkan");
         }
 
         let session = builder
@@ -195,6 +223,12 @@ impl QwenEncoder {
             };
             return Err(QwenError::OnnxError(msg));
         }
+
+        println!(
+            "[ONNX Encoder] ONNX 前向传播计算成功完成: 音频时长 {:.2}s -> 生成声学 Embedding 形状 {:?}",
+            samples.len() as f64 / SAMPLE_RATE as f64,
+            shape_vec
+        );
 
         Ok(EncoderOutput {
             embeddings,

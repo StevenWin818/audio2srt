@@ -122,12 +122,12 @@ class ModelService {
         ),
         QwenModelFile(
           filename: 'encoder.onnx',
-          urlPath: 'andrewleech/qwen3-asr-1.7b-onnx/resolve/main/encoder.int4.onnx',
+          urlPath: 'andrewleech/qwen3-asr-1.7b-onnx/resolve/main/encoder.onnx',
           sizeMB: 1270.0,
         ),
         QwenModelFile(
           filename: 'decoder.gguf',
-          urlPath: 'mradermacher/Qwen3-ASR-1.7B-GGUF/resolve/main/Qwen3-ASR-1.7B.Q4_K_M.gguf',
+          urlPath: 'mradermacher/Qwen3-ASR-1.7B-GGUF/resolve/main/Qwen3-ASR-1.7B.Q6_K.gguf',
           sizeMB: 461.0,
         ),
       ],

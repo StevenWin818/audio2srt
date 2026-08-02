@@ -6,15 +6,25 @@
 import '../frb_generated.dart';
 import '../qwen/backend.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
-import 'whisper.dart';
+import 'silero_vad.dart';
 
-// These functions are ignored because they are not marked as `pub`: `add_perf_record`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_media_duration_secs`, `get_physical_pcore_mask`, `join`, `lock_high_priority`, `parse_duration_str`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_vad_worker`, `spawn_whisper_worker`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `FfmpegPumpHandle`, `WhisperTask`
+// These functions are ignored because they are not marked as `pub`: `add_perf_record`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_media_duration_secs`, `get_physical_pcore_mask`, `is_qwen_model_dir`, `join`, `lock_high_priority`, `parse_duration_str`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_qwen_worker`, `spawn_vad_worker`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AsrTask`, `FfmpegPumpHandle`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `eq`, `fmt`, `fmt`
+// These functions are ignored (category: IgnoreBecauseExplicitAttribute): `get_or_create_qwen_runtime`
 // These functions are ignored (category: IgnoreBecauseNotAllowedOwner): `add`
 
 void setRustPerfLogging({required bool enable}) => RustLib.instance.api
     .crateApiStreamPipelineSetRustPerfLogging(enable: enable);
+
+void unloadQwenRuntime() =>
+    RustLib.instance.api.crateApiStreamPipelineUnloadQwenRuntime();
+
+void preloadQwenModel({required String asrModelDir, String? alignerModelDir}) =>
+    RustLib.instance.api.crateApiStreamPipelinePreloadQwenModel(
+      asrModelDir: asrModelDir,
+      alignerModelDir: alignerModelDir,
+    );
 
 void cancelTranscriptionBackend() =>
     RustLib.instance.api.crateApiStreamPipelineCancelTranscriptionBackend();

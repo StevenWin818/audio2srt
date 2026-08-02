@@ -25,11 +25,8 @@ function(apply_cargokit target manifest_dir lib_name any_symbol_name)
         set(CARGOKIT_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}")
         set(OUTPUT_LIB "${CMAKE_CURRENT_BINARY_DIR}/${CARGOKIT_LIB_FULL_NAME}")
     endif()
-    if(CMAKE_HOST_WIN32)
-        set(CARGOKIT_TEMP_DIR "C:/t") # 防止超过 260 字符长度限制
-    else()
-        set(CARGOKIT_TEMP_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargokit_temp")
-    endif()
+    get_filename_component(CARGOKIT_MANIFEST_ABS "${CMAKE_CURRENT_SOURCE_DIR}/${manifest_dir}" REALPATH)
+    set(CARGOKIT_TEMP_DIR "${CARGOKIT_MANIFEST_ABS}/target")
 
     if (FLUTTER_TARGET_PLATFORM)
         set(CARGOKIT_TARGET_PLATFORM "${FLUTTER_TARGET_PLATFORM}")
@@ -51,6 +48,9 @@ function(apply_cargokit target manifest_dir lib_name any_symbol_name)
         "CARGOKIT_TOOL_TEMP_DIR=${CARGOKIT_TEMP_DIR}/tool"
         "CARGOKIT_ROOT_PROJECT_DIR=${CMAKE_SOURCE_DIR}"
         "CMAKE_GENERATOR_PLATFORM=" # 阻止 Ninja 下平台 x64 规格报错
+        # 注意：不要在这里使用分号分隔的 CUDA 架构列表 (如 $<...>:70;75;80;86;89;90>)。
+        "CMAKE_CUDA_ARCHITECTURES=native"
+        "CUDA_ARCHITECTURES=native"
         "CMAKE_GENERATOR_TOOLSET="
     )
 
