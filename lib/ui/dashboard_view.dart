@@ -361,7 +361,8 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
   }
 
   Widget _buildLeftColumn(TranscriptionProvider provider) {
-    final selectedModel = provider.selectedModel;
+    final selectedBase = provider.selectedModelBase;
+    final selectedQuant = provider.selectedQuant;
     final downloadedModels = provider.downloadedModels;
     final showLowPowerWarning = provider.showLowPowerWarning;
     final enableDenoise = provider.enableDenoise;
@@ -371,6 +372,7 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
       children: [
         const Text('识别模型 (Qwen3-ASR)', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.grey)),
         const SizedBox(height: 8),
+        // 模型版本选择
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(
@@ -381,19 +383,19 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
               isExpanded: true,
-              value: selectedModel,
+              value: selectedBase,
               dropdownColor: const Color(0xFF1E1E2C),
               focusColor: Colors.transparent,
-              items: ModelService.availableQwenModels.where((m) => m.type == ModelType.asr).map((m) {
-                final isDl = downloadedModels.contains(m.dirName);
+              items: ModelService.availableBaseModels.map((m) {
+                final isDl = downloadedModels.contains(m.id);
                 return DropdownMenuItem<String>(
-                  value: m.dirName,
+                  value: m.id,
                   child: Row(
                     children: [
                       Text(m.name),
                       const SizedBox(width: 8),
                       Text(
-                        '(${m.size})',
+                        '(${m.baseSizeText})',
                         style: const TextStyle(fontSize: 11, color: Colors.grey),
                       ),
                       const Spacer(),
@@ -418,11 +420,18 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
                 );
               }).toList(),
               onChanged: (val) {
-                if (val != null) provider.setSelectedModel(val);
+                if (val != null) provider.setSelectedModelBase(val);
               },
             ),
           ),
         ),
+        const SizedBox(height: 8),
+        // 量化等级: 横向拖动数轴 (左=快速, 右=精确; 未下载档位灰色不可选)
+        Builder(builder: (context) {
+          final base = ModelService.baseById(selectedBase ?? '');
+          if (base == null) return const SizedBox.shrink();
+          return _buildQuantSlider(context, provider, base);
+        }),
         if (showLowPowerWarning) ...[
           const SizedBox(height: 12),
           Container(
@@ -663,20 +672,142 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
     );
   }
 
+  /// 量化等级横向数轴: 左=快速(低精度低体积), 右=精确(全精度)。
+  /// 未下载档位灰色显示且不可选中 (拖动/点击被忽略并提示)。
+  Widget _buildQuantSlider(BuildContext context, TranscriptionProvider provider, QwenBaseModel base) {
+    // 数轴顺序: 快速 -> 精确 (reversed: q4_k_m/q6_k 在左, f16 在右)
+    final quants = base.quants.reversed.toList();
+    final currentQuant = provider.selectedQuant;
+    final currentIdx = quants.indexWhere((q) => q.id == currentQuant);
+    final selIdx = currentIdx < 0 ? 0 : currentIdx;
+
+    // thumb 位置: 当前选中档若未下载, 吸附到最近的已下载档
+    int thumbIdx = selIdx;
+    if (!provider.isQuantReady(base.id, quants[selIdx].id)) {
+      final downloaded = <int>[];
+      for (int i = 0; i < quants.length; i++) {
+        if (provider.isQuantReady(base.id, quants[i].id)) downloaded.add(i);
+      }
+      if (downloaded.isNotEmpty) {
+        thumbIdx = downloaded.reduce((a, b) =>
+            (a - selIdx).abs() <= (b - selIdx).abs() ? a : b);
+      }
+    }
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final w = constraints.maxWidth;
+      final n = quants.length;
+      final slot = n > 1 ? w / (n - 1) : 0.0;
+      const labelWidth = 88.0;
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 两端标记
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('快速', style: TextStyle(fontSize: 11, color: Colors.grey.shade400)),
+                Text('精确', style: TextStyle(fontSize: 11, color: Colors.grey.shade400)),
+              ],
+            ),
+          ),
+          // 数轴 (padding 归零, 档位点与下方标签按同一几何对齐)
+          Slider(
+            value: thumbIdx.toDouble(),
+            min: 0,
+            max: (n - 1).toDouble(),
+            divisions: n - 1,
+            padding: EdgeInsets.zero,
+            activeColor: const Color(0xFF8B5CF6),
+            inactiveColor: const Color(0x33FFFFFF),
+            onChanged: (v) {
+              final idx = v.round();
+              final q = quants[idx];
+              if (provider.isQuantReady(base.id, q.id)) {
+                provider.setSelectedQuant(q.id);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('${q.label} 尚未下载，请前往模型管理器下载'),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              }
+            },
+          ),
+          // 档位标签: 每档中心 x = i/(n-1)*w, 与 Slider 档位点精确对齐
+          SizedBox(
+            height: 46,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                for (int i = 0; i < n; i++)
+                  Positioned(
+                    left: i * slot - labelWidth / 2,
+                    width: labelWidth,
+                    child: GestureDetector(
+                      onTap: provider.isQuantReady(base.id, quants[i].id)
+                          ? () => provider.setSelectedQuant(quants[i].id)
+                          : () {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('${quants[i].label} 尚未下载，请前往模型管理器下载'),
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                            },
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.circle,
+                            size: 10,
+                            color: provider.isQuantReady(base.id, quants[i].id)
+                                ? (i == selIdx
+                                    ? const Color(0xFF8B5CF6)
+                                    : Colors.grey.shade300)
+                                : Colors.grey.shade700,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            quants[i].label,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: provider.isQuantReady(base.id, quants[i].id)
+                                  ? (i == selIdx ? const Color(0xFFA78BFA) : Colors.white)
+                                  : Colors.grey.shade600,
+                              fontWeight: i == selIdx ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                          Text(
+                            quants[i].sizeText,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 9, color: Colors.grey.shade600),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      );
+    });
+  }
+
   Widget _buildBackConfigSummary(TranscriptionProvider provider) {
-    final modelName = ModelService.availableQwenModels.firstWhere(
-      (m) => m.dirName == provider.selectedModel,
-      orElse: () => QwenModelInfo(
-        id: 'unknown',
-        name: '未知模型',
-        description: '',
-        dirName: '',
-        size: '',
-        sizeMB: 0,
-        type: ModelType.asr,
-        files: [],
-      ),
-    ).name;
+    final base = ModelService.baseById(provider.selectedModelBase ?? '');
+    final quant = base?.quantById(provider.selectedQuant);
+    final modelName = base == null
+        ? '未知模型'
+        : quant == null
+            ? base.name
+            : '${base.name} · ${quant.label}';
 
     final langLabel = {
       'auto': '自动检测',

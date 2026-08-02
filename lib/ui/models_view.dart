@@ -1,17 +1,65 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/transcription_provider.dart';
 import '../services/model_service.dart';
 
-class ModelsView extends StatelessWidget {
+class ModelsView extends StatefulWidget {
   const ModelsView({super.key});
 
-  Future<void> _deleteModel(BuildContext context, String dirName, TranscriptionProvider provider) async {
+  @override
+  State<ModelsView> createState() => _ModelsViewState();
+}
+
+class _ModelsViewState extends State<ModelsView> {
+  /// 各量化版本的本地实际体积缓存: "<baseId>|<quantId>" -> bytes
+  final Map<String, int> _localSizes = {};
+
+  /// 基础模型总占用缓存
+  final Map<String, int> _baseSizes = {};
+
+  DateTime _lastSizeRefresh = DateTime.fromMillisecondsSinceEpoch(0);
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshSizes();
+  }
+
+  /// 防抖刷新本地体积: 下载/删除完成后 UI 重新 build 时自动更新
+  Future<void> _refreshSizesDebounced() async {
+    if (DateTime.now().difference(_lastSizeRefresh).inSeconds < 3) return;
+    await _refreshSizes();
+  }
+
+  Future<void> _refreshSizes() async {
+    final service = ModelService();
+    final updated = <String, int>{};
+    for (final m in ModelService.availableBaseModels) {
+      for (final q in m.quants) {
+        updated['${m.id}|${q.id}'] = await service.getQuantLocalBytes(m.id, q.id);
+      }
+      updated['base:${m.id}'] = await service.getBaseLocalBytes(m.id);
+    }
+    updated['base:${ModelService.alignerModel.dirName}'] =
+        await service.getBaseLocalBytes(ModelService.alignerModel.dirName);
+    if (mounted) {
+      setState(() {
+        _localSizes
+          ..clear()
+          ..addAll(updated);
+        _lastSizeRefresh = DateTime.now();
+      });
+    }
+  }
+
+  Future<void> _deleteQuant(
+      BuildContext context, String baseId, QwenQuantVersion quant, TranscriptionProvider provider) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('删除模型组件'),
-        content: Text('确定要删除模型 $dirName 吗？这将释放磁盘空间，之后如果需要需重新下载。'),
+        title: const Text('删除量化版本'),
+        content: Text('确定要删除 ${quant.label} (${quant.ggufName}) 吗？这将释放磁盘空间。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
           TextButton(
@@ -24,18 +72,72 @@ class ModelsView extends StatelessWidget {
     );
 
     if (confirm == true) {
-      await provider.deleteModel(dirName);
+      await provider.deleteQuant(baseId, quant.id);
+      await _refreshSizes();
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('模型 $dirName 已成功删除')),
+          SnackBar(content: Text('已删除 ${quant.label} 量化版本')),
         );
       }
+    }
+  }
+
+  Future<void> _deleteBase(
+      BuildContext context, String baseId, TranscriptionProvider provider) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除整个模型'),
+        content: Text('确定要删除模型 $baseId 吗？将删除 encoder 与全部量化版本，释放磁盘空间。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await provider.deleteBaseModel(baseId);
+      await _refreshSizes();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('模型 $baseId 已删除')),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteAligner(BuildContext context, TranscriptionProvider provider) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除 ForcedAligner'),
+        content: const Text('确定要删除 ForcedAligner 组件吗？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await provider.deleteAlignerModel();
+      await _refreshSizes();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<TranscriptionProvider>(context);
+    _refreshSizesDebounced();
 
     return Padding(
       padding: const EdgeInsets.all(24.0),
@@ -44,7 +146,7 @@ class ModelsView extends StatelessWidget {
         children: [
           _buildHeader(),
           const SizedBox(height: 16),
-          _buildMirrorSelector(context, provider),
+          _buildMirrorSelector(provider),
           const SizedBox(height: 24),
           Expanded(
             child: _buildModelsGrid(context, provider),
@@ -71,55 +173,51 @@ class ModelsView extends StatelessWidget {
     );
   }
 
-  Widget _buildMirrorSelector(BuildContext context, TranscriptionProvider provider) {
+  /// 下载源选择: 自动 (测速) / 官方 / HF-Mirror，紧凑单行
+  Widget _buildMirrorSelector(TranscriptionProvider provider) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: const Color(0x0CFFFFFF),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(color: const Color(0x1FFFFFFF)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.cloud_download_outlined, color: Color(0xFF8B5CF6)),
-          const SizedBox(width: 12),
-          const Text('下载源 (镜像站):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-          const SizedBox(width: 12),
+          const Icon(Icons.cloud_download_outlined, size: 16, color: Color(0xFF8B5CF6)),
+          const SizedBox(width: 8),
+          const Text('下载源:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+          const SizedBox(width: 8),
           Expanded(
             child: DropdownButtonHideUnderline(
-              child: DropdownButton<ModelMirror>(
-                value: provider.selectedMirror,
+              child: DropdownButton<String>(
+                value: provider.selectedMirrorId,
                 isExpanded: true,
                 dropdownColor: const Color(0xFF1E1E2C),
-                items: ModelService.availableMirrors.map((mirror) {
-                  final lat = mirror.latencyMs;
-                  final latText = lat != null ? ' (${lat}ms)' : '';
-                  return DropdownMenuItem<ModelMirror>(
-                    value: mirror,
-                    child: Text('${mirror.name}$latText'),
-                  );
-                }).toList(),
+                style: const TextStyle(fontSize: 13, color: Colors.white),
+                // 按钮 (选中态) 显示完整标签, 如 "自动（当前：HF-Mirror 国内镜像站）"
+                selectedItemBuilder: (context) => [
+                  for (final mirror in [ModelService.autoMirror, ...ModelService.availableMirrors])
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        mirror.id == 'auto' ? provider.selectedMirrorLabel : mirror.name,
+                        style: const TextStyle(fontSize: 13, color: Colors.white),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                items: [
+                  for (final mirror in [ModelService.autoMirror, ...ModelService.availableMirrors])
+                    DropdownMenuItem<String>(
+                      value: mirror.id,
+                      child: Text(mirror.name),
+                    ),
+                ],
                 onChanged: (val) {
-                  if (val != null) provider.setSelectedMirror(val);
+                  if (val != null) provider.setSelectedMirrorId(val);
                 },
               ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          ElevatedButton.icon(
-            onPressed: provider.isTestingMirrors ? null : () => provider.testMirrorsSpeed(),
-            icon: provider.isTestingMirrors
-                ? const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                  )
-                : const Icon(Icons.speed, size: 16),
-            label: Text(provider.isTestingMirrors ? '测速中...' : '一键测速'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF8B5CF6),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
           ),
         ],
@@ -128,160 +226,313 @@ class ModelsView extends StatelessWidget {
   }
 
   Widget _buildModelsGrid(BuildContext context, TranscriptionProvider provider) {
-    return GridView.builder(
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 20,
-        mainAxisSpacing: 20,
-        childAspectRatio: 1.6,
-      ),
-      itemCount: ModelService.availableQwenModels.length,
-      itemBuilder: (context, index) {
-        final model = ModelService.availableQwenModels[index];
-        final isDownloaded = provider.downloadedModels.contains(model.dirName);
-        final isDownloading = provider.downloadingModelFile == model.dirName;
-        final downloadProgress = provider.downloadProgress;
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 24),
+      children: [
+        // ===== Qwen3-ASR 基础模型卡片 =====
+        for (final model in ModelService.availableBaseModels) ...[
+          _buildBaseModelCard(context, provider, model),
+          const SizedBox(height: 20),
+        ],
+        // ===== ForcedAligner 卡片 =====
+        _buildAlignerCard(context, provider),
+      ],
+    );
+  }
 
-        return Card(
-          color: const Color(0x0CFFFFFF),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: BorderSide(
-              color: isDownloaded
-                  ? const Color(0x3A00FF00)
-                  : isDownloading
-                      ? const Color(0xFF8B5CF6)
-                      : const Color(0x1FFFFFFF),
-              width: 1.5,
-            ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(20.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildBaseModelCard(
+      BuildContext context, TranscriptionProvider provider, QwenBaseModel model) {
+    final isBaseDl = provider.downloadedModels.contains(model.id);
+    final isDownloadingBase = provider.downloadingModelFile?.startsWith('${model.id}|') ?? false;
+    final downloadProgress = provider.downloadProgress;
+    final baseLocalBytes = _baseSizes['base:${model.id}'] ?? 0;
+
+    return Card(
+      color: const Color(0x0CFFFFFF),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: isBaseDl ? const Color(0x3A00FF00) : const Color(0x1FFFFFFF),
+          width: 1.5,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                Row(
-                  children: [
-                    Text(
-                      model.name,
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
-                    const Spacer(),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: isDownloaded ? const Color(0x1A00FF00) : const Color(0x1AFFFFFF),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        isDownloaded ? '已就绪' : '未下载',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: isDownloaded ? Colors.green : Colors.grey,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
                 Text(
-                  model.description,
-                  style: const TextStyle(fontSize: 12, color: Colors.grey),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '组件大小: ${model.size}',
-                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  model.name,
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
                 const Spacer(),
-                if (isDownloading) ...[
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: downloadProgress,
-                      backgroundColor: const Color(0x1FFFFFFF),
-                      color: const Color(0xFF8B5CF6),
-                      minHeight: 6,
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isBaseDl ? const Color(0x1A00FF00) : const Color(0x1AFFFFFF),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    isBaseDl ? 'Encoder 就绪' : 'Encoder 未下载',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isBaseDl ? Colors.green : Colors.grey,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        '正在下载: ${(downloadProgress * 100).toStringAsFixed(1)}%',
-                        style: const TextStyle(fontSize: 11, color: Colors.grey),
-                      ),
-                      TextButton(
-                        onPressed: () => provider.cancelDownload(),
-                        style: TextButton.styleFrom(
-                          padding: EdgeInsets.zero,
-                          minimumSize: const Size(40, 24),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: const Text('取消', style: TextStyle(fontSize: 11, color: Colors.redAccent)),
-                      ),
-                    ],
-                  ),
-                ] else ...[
-                  if (provider.downloadError.isNotEmpty) ...[
-                    Text(
-                      provider.downloadError,
-                      style: const TextStyle(fontSize: 11, color: Colors.redAccent),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 4),
-                  ],
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      if (isDownloaded)
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
-                          onPressed: () => _deleteModel(context, model.dirName, provider),
-                        )
-                      else
-                        const SizedBox(),
-                      ElevatedButton(
-                        onPressed: provider.downloadingModelFile != null
-                            ? null
-                            : isDownloaded
-                                ? () {
-                                    if (model.type == ModelType.asr) {
-                                      provider.setSelectedModel(model.dirName);
-                                    } else {
-                                      provider.setAlignerModel(model.dirName);
-                                    }
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('已成功启用 ${model.name}')),
-                                    );
-                                  }
-                                : () {
-                                    provider.downloadQwenModel(model);
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('开始从 [${provider.selectedMirror.name}] 下载 ${model.name}...')),
-                                    );
-                                  },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: isDownloaded ? const Color(0xFF1E293B) : const Color(0xFF8B5CF6),
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        ),
-                        child: Text(isDownloaded ? '启用组件' : '开始下载'),
-                      ),
-                    ],
+                ),
+                if (baseLocalBytes > 0) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    '本地占用: ${ModelService.formatBytes(baseLocalBytes)}',
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
                   ),
                 ],
               ],
             ),
+            const SizedBox(height: 4),
+            Text(
+              model.description,
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 12),
+            // 量化版本列表
+            ...model.quants.map((q) => _buildQuantRow(context, provider, model, q)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuantRow(
+      BuildContext context, TranscriptionProvider provider, QwenBaseModel model, QwenQuantVersion quant) {
+    final isDownloading = provider.downloadingModelFile == '${model.id}|${quant.id}';
+    final isSelected = provider.selectedModelBase == model.id && provider.selectedQuant == quant.id;
+    final isDl = (_localSizes['${model.id}|${quant.id}'] ?? 0) > 0;
+    final downloadProgress = provider.downloadProgress;
+    final localBytes = _localSizes['${model.id}|${quant.id}'] ?? 0;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0x08FFFFFF),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isSelected ? const Color(0xFF8B5CF6) : const Color(0x14FFFFFF),
+          width: isSelected ? 1.5 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                quant.label,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  color: isSelected ? const Color(0xFFA78BFA) : Colors.white,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '(${quant.sizeText})',
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+              const Spacer(),
+              if (localBytes > 0)
+                Text(
+                  ModelService.formatBytes(localBytes),
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+              const SizedBox(width: 8),
+              if (isDownloading) ...[
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    value: downloadProgress,
+                    color: const Color(0xFF8B5CF6),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${(downloadProgress * 100).toStringAsFixed(0)}%',
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+                TextButton(
+                  onPressed: () => provider.cancelDownload(),
+                  style: TextButton.styleFrom(
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(40, 24),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('取消', style: TextStyle(fontSize: 11, color: Colors.redAccent)),
+                ),
+              ] else ...[
+                if (isDl)
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 18),
+                    onPressed: provider.downloadingModelFile != null
+                        ? null
+                        : () => _deleteQuant(context, model.id, quant, provider),
+                  ),
+                ElevatedButton(
+                  onPressed: provider.downloadingModelFile != null
+                      ? null
+                      : isDl
+                          ? () {
+                              provider.setSelectedModelBase(model.id);
+                              provider.setSelectedQuant(quant.id);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('已启用 ${model.name} · ${quant.label}')),
+                              );
+                            }
+                          : () {
+                              provider.downloadQuant(model, quant);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('开始下载 ${model.name} · ${quant.label} (自动选择最快下载源)...'),
+                                ),
+                              );
+                            },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isDl ? const Color(0xFF1E293B) : const Color(0xFF8B5CF6),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  ),
+                  child: Text(isDl ? '启用' : '下载'),
+                ),
+              ],
+            ],
           ),
-        );
-      },
+          if (isDownloading && provider.downloadError.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              provider.downloadError,
+              style: const TextStyle(fontSize: 11, color: Colors.redAccent),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAlignerCard(BuildContext context, TranscriptionProvider provider) {
+    final model = ModelService.alignerModel;
+    final isDl = provider.selectedAlignerModel != null ||
+        (_localSizes['base:${model.dirName}'] ?? 0) > 0;
+    final isDownloading = provider.downloadingModelFile == model.dirName;
+    final downloadProgress = provider.downloadProgress;
+    final localBytes = _localSizes['base:${model.dirName}'] ?? 0;
+
+    return Card(
+      color: const Color(0x0CFFFFFF),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: isDl ? const Color(0x3A00FF00) : const Color(0x1FFFFFFF),
+          width: 1.5,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(model.name, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                const Spacer(),
+                if (localBytes > 0)
+                  Text(
+                    '本地占用: ${ModelService.formatBytes(localBytes)}',
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(model.description, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                if (isDownloading) ...[
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: downloadProgress,
+                        backgroundColor: const Color(0x1FFFFFFF),
+                        color: const Color(0xFF8B5CF6),
+                        minHeight: 6,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    '${(downloadProgress * 100).toStringAsFixed(1)}%',
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                  TextButton(
+                    onPressed: () => provider.cancelDownload(),
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      minimumSize: const Size(40, 24),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('取消', style: TextStyle(fontSize: 11, color: Colors.redAccent)),
+                  ),
+                ] else ...[
+                  if (isDl)
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                      onPressed: provider.downloadingModelFile != null
+                          ? null
+                          : () => _deleteAligner(context, provider),
+                    ),
+                  ElevatedButton(
+                    onPressed: provider.downloadingModelFile != null
+                        ? null
+                        : isDl
+                            ? () {
+                                provider.setAlignerModel(model.dirName);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('已成功启用 ForcedAligner')),
+                                );
+                              }
+                            : () {
+                                provider.downloadAligner();
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('开始下载 ForcedAligner (自动选择最快下载源)...')),
+                                );
+                              },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isDl ? const Color(0xFF1E293B) : const Color(0xFF8B5CF6),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    ),
+                    child: Text(isDl ? '启用组件' : '开始下载'),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

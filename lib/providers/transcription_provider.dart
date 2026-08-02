@@ -149,8 +149,22 @@ class TranscriptionProvider with ChangeNotifier {
     }
   }
 
-  String? _selectedModel;
-  String? get selectedModel => _selectedModel;
+  /// 模型版本 (基础模型 id，如 'qwen3-asr-0.6b')
+  String? _selectedModelBase;
+  String? get selectedModelBase => _selectedModelBase;
+
+  /// 量化等级 id (如 'f16' / 'q8_0' / 'q4_k_m')
+  String _selectedQuant = 'f16';
+  String get selectedQuant => _selectedQuant;
+
+  /// 兼容旧 getter: 返回模型目录名 (基础模型 id)
+  String? get selectedModel => _selectedModelBase;
+
+  /// 解码器 GGUF 文件名 (传给 Rust)
+  String? get decoderFile {
+    if (_selectedModelBase == null) return null;
+    return 'decoder.$_selectedQuant.gguf';
+  }
 
   String _selectedLanguage = 'auto';
   String get selectedLanguage => _selectedLanguage;
@@ -273,6 +287,7 @@ class TranscriptionProvider with ChangeNotifier {
   }
 
   // 全局模型下载状态
+  /// 下载标识: 基础模型为 "<baseId>|<quantId>"，aligner 为 "forced-aligner-0.6b"
   String? _downloadingModelFile;
   String? get downloadingModelFile => _downloadingModelFile;
 
@@ -282,8 +297,28 @@ class TranscriptionProvider with ChangeNotifier {
   String _downloadError = '';
   String get downloadError => _downloadError;
 
+  /// 已下载的基础模型 id 列表
   List<String> _downloadedModels = [];
   List<String> get downloadedModels => _downloadedModels;
+
+  /// 已下载的量化组合: "<baseId>|<quantId>"
+  Set<String> _readyQuants = {};
+  Set<String> get readyQuants => _readyQuants;
+
+  bool isQuantReady(String baseId, String quantId) =>
+      _readyQuants.contains('$baseId|$quantId');
+
+  Future<void> _refreshReadyQuants() async {
+    final set = <String>{};
+    for (final m in ModelService.availableBaseModels) {
+      for (final q in m.quants) {
+        if (await _modelService.isQuantDownloaded(m.id, q.id)) {
+          set.add('${m.id}|${q.id}');
+        }
+      }
+    }
+    _readyQuants = set;
+  }
 
   StreamSubscription? _transcriptionSub;
 
@@ -295,27 +330,57 @@ class TranscriptionProvider with ChangeNotifier {
     _safeNotifyListeners();
   }
 
-  Future<void> downloadQwenModel(QwenModelInfo model) async {
-    _downloadingModelFile = model.dirName;
+  /// 下载某个基础模型的一个量化版本
+  Future<void> downloadQuant(QwenBaseModel model, QwenQuantVersion quant) async {
+    _downloadingModelFile = '${model.id}|${quant.id}';
     _downloadProgress = 0.0;
     _downloadError = '';
     _safeNotifyListeners();
 
-    await _modelService.downloadModel(
+    final mirror = await _resolveMirror();
+    await _modelService.downloadQuant(
       model: model,
-      mirror: _selectedMirror,
+      quant: quant,
+      mirror: mirror,
       onProgress: (progress) {
         _downloadProgress = progress;
         _safeNotifyListeners();
       },
       onSuccess: () async {
         _downloadingModelFile = null;
-        _downloadedModels = await _modelService.getDownloadedModels();
-        if (model.type == ModelType.asr) {
-          _selectedModel = model.dirName;
-        } else {
-          _selectedAlignerModel = model.dirName;
-        }
+        _downloadedModels = await _modelService.getDownloadedBases();
+        await _refreshReadyQuants();
+        _selectedModelBase = model.id;
+        _selectedQuant = quant.id;
+        await _saveSelectedModelPref('${model.id}|${quant.id}');
+        _safeNotifyListeners();
+        _preloadWhisperContext();
+      },
+      onFailure: (error) {
+        _downloadingModelFile = null;
+        _downloadError = error;
+        _safeNotifyListeners();
+      },
+    );
+  }
+
+  /// 下载 ForcedAligner
+  Future<void> downloadAligner() async {
+    _downloadingModelFile = ModelService.alignerModel.dirName;
+    _downloadProgress = 0.0;
+    _downloadError = '';
+    _safeNotifyListeners();
+
+    final mirror = await _resolveMirror();
+    await _modelService.downloadAligner(
+      mirror: mirror,
+      onProgress: (progress) {
+        _downloadProgress = progress;
+        _safeNotifyListeners();
+      },
+      onSuccess: () async {
+        _downloadingModelFile = null;
+        _selectedAlignerModel = ModelService.alignerModel.dirName;
         _safeNotifyListeners();
       },
       onFailure: (error) {
@@ -327,13 +392,13 @@ class TranscriptionProvider with ChangeNotifier {
   }
 
   Future<bool> checkAndRepairModel(String dirName) async {
-    final isCorrupted = await _modelService.isModelCorrupted(dirName);
+    final isCorrupted = await _modelService.isBaseCorrupted(dirName);
     if (isCorrupted) {
       debugPrint('[TranscriptionProvider] Model $dirName is corrupted. Auto purging...');
-      await _modelService.deleteModel(dirName);
-      _downloadedModels = await _modelService.getDownloadedModels();
-      if (_selectedModel == dirName) {
-        _selectedModel = _downloadedModels.isNotEmpty ? _downloadedModels.first : null;
+      await _modelService.deleteBase(dirName);
+      _downloadedModels = await _modelService.getDownloadedBases();
+      if (_selectedModelBase == dirName) {
+        _selectedModelBase = _downloadedModels.isNotEmpty ? _downloadedModels.first : null;
       }
       if (_selectedAlignerModel == dirName) {
         _selectedAlignerModel = null;
@@ -360,25 +425,52 @@ class TranscriptionProvider with ChangeNotifier {
     }
     
     // 加载已下载模型与持久化模型偏好
-    _downloadedModels = await _modelService.getDownloadedModels();
-    
+    await _modelService.migrateLegacyLayout();
+    _downloadedModels = await _modelService.getDownloadedBases();
+    await _refreshReadyQuants();
+
     final savedModel = await _loadSelectedModelPref();
-    if (savedModel != null && await _modelService.isModelDownloaded(savedModel)) {
-      _selectedModel = savedModel;
-    } else if (_downloadedModels.contains('qwen3-asr-0.6b-f16')) {
-      _selectedModel = 'qwen3-asr-0.6b-f16';
-    } else if (_downloadedModels.contains('qwen3-asr-0.6b')) {
-      _selectedModel = 'qwen3-asr-0.6b';
-    } else if (_downloadedModels.isNotEmpty) {
-      _selectedModel = _downloadedModels.first;
-    } else {
-      _selectedModel = ModelService.availableQwenModels.first.dirName;
+    if (savedModel != null) {
+      // 新格式: "baseId|quantId"
+      final parts = savedModel.split('|');
+      final baseId = parts[0];
+      final quantId = parts.length > 1 ? parts[1] : 'f16';
+      final base = ModelService.baseById(baseId);
+      if (base != null && await _modelService.isBaseDownloaded(baseId)) {
+        _selectedModelBase = baseId;
+        if (base.quantById(quantId) != null) {
+          _selectedQuant = quantId;
+        }
+      }
+    }
+    if (_selectedModelBase == null) {
+      if (_downloadedModels.isNotEmpty) {
+        _selectedModelBase = _downloadedModels.first;
+        // 该模型已下载的量化中优先 f16，否则取第一个
+        final base = ModelService.baseById(_selectedModelBase!);
+        if (base != null) {
+          if (await _modelService.isQuantDownloaded(_selectedModelBase!, 'f16')) {
+            _selectedQuant = 'f16';
+          } else {
+            for (final q in base.quants) {
+              if (await _modelService.isQuantDownloaded(_selectedModelBase!, q.id)) {
+                _selectedQuant = q.id;
+                break;
+              }
+            }
+          }
+        }
+      } else {
+        _selectedModelBase = ModelService.availableBaseModels.first.id;
+        _selectedQuant = ModelService.availableBaseModels.first.quants.first.id;
+      }
     }
     notifyListeners();
     _preloadWhisperContext();
+    _warmupMirrorSpeed();
   }
 
-  Future<void> _saveSelectedModelPref(String modelDirName) async {
+  Future<void> _saveSelectedModelPref(String modelKey) async {
     try {
       final dir = await getApplicationSupportDirectory();
       final file = File(p.join(dir.path, 'app_settings.json'));
@@ -388,7 +480,7 @@ class TranscriptionProvider with ChangeNotifier {
           map = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
         } catch (_) {}
       }
-      map['selected_model'] = modelDirName;
+      map['selected_model'] = modelKey;
       await file.writeAsString(jsonEncode(map));
     } catch (e) {
       debugPrint('[TranscriptionProvider] Save model pref error: $e');
@@ -401,7 +493,25 @@ class TranscriptionProvider with ChangeNotifier {
       final file = File(p.join(dir.path, 'app_settings.json'));
       if (await file.exists()) {
         final map = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-        return map['selected_model'] as String?;
+        final raw = map['selected_model'] as String?;
+        if (raw == null) return null;
+        // 旧格式迁移: "qwen3-asr-0.6b-f16" -> "qwen3-asr-0.6b|f16"
+        if (!raw.contains('|')) {
+          const suffixes = [
+            ('-f16', 'f16'),
+            ('-q8_0', 'q8_0'),
+            ('-q6_k', 'q6_k'),
+            ('-q4_k_m', 'q4_k_m'),
+            ('-q4_k', 'q4_k_m'),
+          ];
+          for (final (suffix, quant) in suffixes) {
+            if (raw.endsWith(suffix)) {
+              return '${raw.substring(0, raw.length - suffix.length)}|$quant';
+            }
+          }
+          return '$raw|f16';
+        }
+        return raw;
       }
     } catch (e) {
       debugPrint('[TranscriptionProvider] Load model pref error: $e');
@@ -437,54 +547,16 @@ class TranscriptionProvider with ChangeNotifier {
     return 'GPU: ${selectedDevice.name}';
   }
 
-  /// 智能低算力预警：未开启加速或开启但没有硬件加速显卡，且模型大小大于 400MB
+  /// 智能低算力预警：未开启加速或开启但没有硬件加速显卡，且模型为 1.7B (大模型)
   bool get showLowPowerWarning {
-    if (_selectedModel == null) return false;
-    final modelInfo = ModelService.availableQwenModels.firstWhere(
-      (m) => m.dirName == _selectedModel,
-      orElse: () => ModelService.availableQwenModels.first,
-    );
-
+    if (_selectedModelBase == null) return false;
+    final isBigModel = _selectedModelBase == 'qwen3-asr-1.7b';
     final isGpuActive = _useGpu && _vulkanDevices.isNotEmpty;
-    return !isGpuActive && modelInfo.sizeMB > 400.0;
+    return !isGpuActive && isBigModel;
   }
 
   void setCurrentTab(int index) {
     _currentTab = index;
-    notifyListeners();
-  }
-
-  ModelMirror _selectedMirror = ModelService.availableMirrors.first;
-  ModelMirror get selectedMirror => _selectedMirror;
-
-  bool _isTestingMirrors = false;
-  bool get isTestingMirrors => _isTestingMirrors;
-
-  void setSelectedMirror(ModelMirror mirror) {
-    _selectedMirror = mirror;
-    notifyListeners();
-  }
-
-  Future<void> testMirrorsSpeed() async {
-    _isTestingMirrors = true;
-    notifyListeners();
-
-    final results = await _modelService.testMirrorsSpeed();
-
-    ModelMirror? fastest;
-    int minLatency = 99999;
-    for (final mirror in ModelService.availableMirrors) {
-      final lat = results[mirror.id];
-      if (lat != null && lat < minLatency) {
-        minLatency = lat;
-        fastest = mirror;
-      }
-    }
-    if (fastest != null) {
-      _selectedMirror = fastest;
-    }
-
-    _isTestingMirrors = false;
     notifyListeners();
   }
 
@@ -496,12 +568,70 @@ class TranscriptionProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> deleteModel(String filename) async {
-    await _modelService.deleteModel(filename);
-    _downloadedModels = await _modelService.getDownloadedModels();
-    if (_selectedModel == filename) {
-      _selectedModel = _downloadedModels.isNotEmpty ? _downloadedModels.first : null;
+  // ===== 下载源选择 =====
+  /// 'auto' 表示下载前自动测速选择最快源
+  String _selectedMirrorId = 'auto';
+  String get selectedMirrorId => _selectedMirrorId;
+
+  /// 当前实际生效的镜像 (auto 模式下为最近一次测速结果)
+  ModelMirror? _activeMirror;
+  ModelMirror? get activeMirror => _activeMirror;
+
+  /// 显示文本: "自动（当前：HF-Mirror 国内镜像站）" 或源名
+  String get selectedMirrorLabel {
+    if (_selectedMirrorId == 'auto') {
+      final name = _activeMirror?.name;
+      return name == null ? '自动（待测速）' : '自动（当前：$name）';
     }
+    return ModelService.mirrorById(_selectedMirrorId)?.name ?? _selectedMirrorId;
+  }
+
+  void setSelectedMirrorId(String id) {
+    if (ModelService.mirrorById(id) == null) return;
+    _selectedMirrorId = id;
+    notifyListeners();
+  }
+
+  /// 解析下载源: auto 时测速并记住当前生效源
+  Future<ModelMirror> _resolveMirror() async {
+    if (_selectedMirrorId == 'auto') {
+      final picked = await _modelService.pickFastestMirror();
+      _activeMirror = picked;
+      _safeNotifyListeners();
+      return picked;
+    }
+    return ModelService.mirrorById(_selectedMirrorId)!;
+  }
+
+  /// 后台预热一次自动测速 (仅 auto 模式, 不阻塞 UI)
+  Future<void> _warmupMirrorSpeed() async {
+    if (_selectedMirrorId != 'auto') return;
+    try {
+      await _resolveMirror();
+    } catch (e) {
+      debugPrint('[TranscriptionProvider] Mirror speed warmup error: $e');
+    }
+  }
+
+  Future<void> deleteQuant(String baseId, String quantId) async {
+    await _modelService.deleteQuant(baseId, quantId);
+    _downloadedModels = await _modelService.getDownloadedBases();
+    await _refreshReadyQuants();
+    notifyListeners();
+  }
+
+  Future<void> deleteBaseModel(String baseId) async {
+    await _modelService.deleteBase(baseId);
+    _downloadedModels = await _modelService.getDownloadedBases();
+    if (_selectedModelBase == baseId) {
+      _selectedModelBase = _downloadedModels.isNotEmpty ? _downloadedModels.first : null;
+    }
+    notifyListeners();
+  }
+
+  Future<void> deleteAlignerModel() async {
+    await _modelService.deleteAligner();
+    _selectedAlignerModel = null;
     notifyListeners();
   }
 
@@ -592,10 +722,20 @@ class TranscriptionProvider with ChangeNotifier {
     }
   }
 
-  void setSelectedModel(String filename) {
-    if (_selectedModel == filename) return;
-    _selectedModel = filename;
-    _saveSelectedModelPref(filename);
+  void setSelectedModelBase(String baseId) {
+    if (_selectedModelBase == baseId) return;
+    _selectedModelBase = baseId;
+    _saveSelectedModelPref('$baseId|$_selectedQuant');
+    _safeNotifyListeners();
+    _preloadWhisperContext();
+  }
+
+  void setSelectedQuant(String quantId) {
+    if (_selectedQuant == quantId) return;
+    _selectedQuant = quantId;
+    if (_selectedModelBase != null) {
+      _saveSelectedModelPref('$_selectedModelBase|$quantId');
+    }
     _safeNotifyListeners();
     _preloadWhisperContext();
   }
@@ -621,19 +761,27 @@ class TranscriptionProvider with ChangeNotifier {
   Future<void> _preloadWhisperContext() async {
     _preloadTimer?.cancel();
     _preloadTimer = Timer(const Duration(milliseconds: 200), () async {
-      if (_selectedModel == null) return;
+      final baseId = _selectedModelBase;
+      final quant = _selectedQuant;
+      if (baseId == null) return;
       try {
-        final modelExists = await _modelService.isModelDownloaded(_selectedModel!);
-        if (!modelExists) {
-          _downloadedModels = await _modelService.getDownloadedModels();
+        final baseExists = await _modelService.isBaseDownloaded(baseId);
+        final quantExists = await _modelService.isQuantDownloaded(baseId, quant);
+        if (!baseExists || !quantExists) {
+          _downloadedModels = await _modelService.getDownloadedBases();
           _safeNotifyListeners();
           return;
         }
 
-        final modelDir = await _modelService.getModelPath(_selectedModel!);
+        final modelDir = await _modelService.getModelPath(baseId);
         final alignerDir = _selectedAlignerModel != null ? await _modelService.getModelPath(_selectedAlignerModel!) : null;
-        debugPrint('[TranscriptionProvider] Preloading model into GPU VRAM (async background): $modelDir (Aligner: $alignerDir)');
-        rust_stream.preloadQwenModel(asrModelDir: modelDir, alignerModelDir: alignerDir);
+        final decoderFile = 'decoder.$quant.gguf';
+        debugPrint('[TranscriptionProvider] Preloading model into GPU VRAM (async background): $modelDir (decoder=$decoderFile)');
+        rust_stream.preloadQwenModel(
+          asrModelDir: modelDir,
+          alignerModelDir: alignerDir,
+          decoderFile: decoderFile,
+        );
       } catch (e) {
         debugPrint('[TranscriptionProvider] Qwen ASR model preload error: $e');
       }
@@ -702,21 +850,29 @@ class TranscriptionProvider with ChangeNotifier {
       return;
     }
 
-    if (_selectedModel == null) {
+    if (_selectedModelBase == null) {
       _setError('请先选择推理模型');
       return;
     }
 
+    final baseId = _selectedModelBase!;
+    final quant = _selectedQuant;
+
     // 检查模型文件是否存在与完整性
-    final modelExists = await _modelService.isModelDownloaded(_selectedModel!);
-    if (!modelExists) {
+    final baseExists = await _modelService.isBaseDownloaded(baseId);
+    if (!baseExists) {
       _setError('所选模型未下载，请先前往模型管理面板进行下载');
       return;
     }
+    final quantExists = await _modelService.isQuantDownloaded(baseId, quant);
+    if (!quantExists) {
+      _setError('所选量化版本 ($quant) 未下载，请先前往模型管理面板下载');
+      return;
+    }
 
-    final isCorrupted = await _modelService.isModelCorrupted(_selectedModel!);
+    final isCorrupted = await _modelService.isBaseCorrupted(baseId);
     if (isCorrupted) {
-      await checkAndRepairModel(_selectedModel!);
+      await checkAndRepairModel(baseId);
       _setError('检测到所选模型已损坏，已自动为您清除损坏缓存！请前往模型管理器重新下载。');
       return;
     }
@@ -767,7 +923,8 @@ class TranscriptionProvider with ChangeNotifier {
       _syncHighFreqNotifiers();
       _safeNotifyListeners();
 
-      final modelPath = await _modelService.getModelPath(_selectedModel!);
+      final modelPath = await _modelService.getModelPath(baseId);
+      final decoderFile = 'decoder.$quant.gguf';
 
       final eventStream = rust_stream.transcribeStream(
         config: rust_stream.PipelineConfig(
@@ -776,6 +933,7 @@ class TranscriptionProvider with ChangeNotifier {
           modelPath: modelPath,
           asrModelDir: modelPath,
           alignerModelDir: _selectedAlignerModel != null ? await _modelService.getModelPath(_selectedAlignerModel!) : null,
+          decoderFile: decoderFile,
           contextPrompt: null,
           encoderBackend: _useGpu
               ? rust_qwen_backend.EncoderBackend.auto
@@ -891,8 +1049,8 @@ class TranscriptionProvider with ChangeNotifier {
                   field0.contains('Corrupt') ||
                   field0.contains('ONNX') ||
                   field0.contains('manifest')) {
-                if (_selectedModel != null) {
-                  await checkAndRepairModel(_selectedModel!);
+                if (_selectedModelBase != null) {
+                  await checkAndRepairModel(_selectedModelBase!);
                 }
                 if (_selectedAlignerModel != null) {
                   await checkAndRepairModel(_selectedAlignerModel!);

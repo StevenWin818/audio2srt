@@ -35,6 +35,7 @@ pub fn get_or_create_qwen_runtime(
     aligner_dir: Option<&str>,
     encoder_backend: crate::qwen::backend::EncoderBackend,
     decoder_backend: crate::qwen::backend::DecoderBackend,
+    decoder_file: Option<&str>,
 ) -> Result<Arc<crate::qwen::runtime::QwenRuntime>> {
     let enc_backend_resolved = match encoder_backend {
         crate::qwen::backend::EncoderBackend::Auto => {
@@ -63,12 +64,14 @@ pub fn get_or_create_qwen_runtime(
 
     let norm_asr = qwen_dir.replace('\\', "/").trim_end_matches('/').to_lowercase();
     let norm_aligner = aligner_dir.map(|s| s.replace('\\', "/").trim_end_matches('/').to_lowercase());
+    let norm_decoder_file = decoder_file.map(|s| s.replace('\\', "/").to_lowercase());
 
     let key = crate::qwen::context::RuntimeCacheKey {
         asr_model_id: norm_asr,
         aligner_model_id: norm_aligner,
         encoder_backend: enc_backend_resolved,
         decoder_backend: dec_backend_resolved,
+        decoder_file: norm_decoder_file,
     };
 
     let mut cache = crate::qwen::context::GLOBAL_QWEN_CACHE.lock();
@@ -89,6 +92,7 @@ pub fn get_or_create_qwen_runtime(
             aligner_dir,
             encoder_backend,
             decoder_backend,
+            decoder_file,
         )
         .map_err(|e| anyhow!("Failed to load Qwen runtime: {:?}", e))?,
     );
@@ -108,8 +112,9 @@ pub fn unload_qwen_runtime() {
 pub fn preload_qwen_model(
     asr_model_dir: String,
     aligner_model_dir: Option<String>,
+    decoder_file: Option<String>,
 ) -> Result<(), String> {
-    println!("[Rust] Spawning background thread for preloading Qwen model: {}", asr_model_dir);
+    println!("[Rust] Spawning background thread for preloading Qwen model: {} (decoder={:?})", asr_model_dir, decoder_file);
     std::thread::spawn(move || {
         let app_data = std::env::var("APPDATA").unwrap_or_default();
         let default_qwen = format!("{}/com.audio2srt/audio2srt/models/qwen3-asr-0.6b", app_data.replace('\\', "/"));
@@ -128,6 +133,7 @@ pub fn preload_qwen_model(
             aligner_model_dir.as_deref(),
             crate::qwen::backend::EncoderBackend::Auto,
             crate::qwen::backend::DecoderBackend::Auto,
+            decoder_file.as_deref(),
         ) {
             Ok(_) => println!("[Rust Preload] Successfully preloaded model into VRAM: {}", qwen_dir),
             Err(e) => println!("[Rust Preload] Preload model error: {:?}", e),
@@ -267,6 +273,8 @@ pub struct PipelineConfig {
     pub df_model_path: String,
     pub asr_model_dir: String,
     pub aligner_model_dir: Option<String>,
+    /// 解码器 GGUF 文件名 (量化选择)，如 "decoder.q4_k_m.gguf"；None 时按优先级自动扫描
+    pub decoder_file: Option<String>,
     pub context_prompt: Option<String>,
     pub encoder_backend: crate::qwen::backend::EncoderBackend,
     pub decoder_backend: crate::qwen::backend::DecoderBackend,
@@ -346,6 +354,7 @@ fn run_stream_pipeline_inner(
         config.aligner_model_dir.as_deref(),
         config.encoder_backend,
         config.decoder_backend,
+        config.decoder_file.as_deref(),
     )?;
 
     let (tx_raw_48k, rx_raw_48k) = sync_channel::<Vec<f32>>(16);
@@ -1277,11 +1286,22 @@ fn is_qwen_model_dir(dir_or_file: &str) -> bool {
         if path.join("encoder.onnx").exists()
             || path.join("encoder.int4.onnx").exists()
             || path.join("asr_encoder_frontend.int4.onnx").exists()
-            || path.join("decoder.gguf").exists()
-            || path.join("decoder.q4_k.gguf").exists()
-            || path.join("asr_decoder.q4_k.gguf").exists()
         {
-            return true;
+            // decoder 任一量化命名均可
+            let decoder_names = [
+                "decoder.bf16.gguf",
+                "decoder.f16.gguf",
+                "decoder.q8_0.gguf",
+                "decoder.q6_k.gguf",
+                "decoder.q5_k_m.gguf",
+                "decoder.q4_k_m.gguf",
+                "decoder.q4_k.gguf",
+                "decoder.gguf",
+                "asr_decoder.q4_k.gguf",
+            ];
+            if decoder_names.iter().any(|f| path.join(f).exists()) {
+                return true;
+            }
         }
     }
     false
@@ -1339,6 +1359,7 @@ mod tests {
             df_model_path,
             asr_model_dir: model_path,
             aligner_model_dir: None,
+            decoder_file: None,
             context_prompt: None,
             encoder_backend: crate::qwen::backend::EncoderBackend::Cpu,
             decoder_backend: crate::qwen::backend::DecoderBackend::Cpu,
@@ -1447,6 +1468,7 @@ mod tests {
                 df_model_path: "".to_string(),
                 asr_model_dir: model_path.clone(),
                 aligner_model_dir: None,
+                decoder_file: None,
                 context_prompt: None,
                 encoder_backend: crate::qwen::backend::EncoderBackend::Cpu,
                 decoder_backend: crate::qwen::backend::DecoderBackend::Cpu,

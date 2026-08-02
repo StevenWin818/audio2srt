@@ -142,6 +142,7 @@ abstract class RustLibApi extends BaseApi {
   void crateApiStreamPipelinePreloadQwenModel({
     required String asrModelDir,
     String? alignerModelDir,
+    String? decoderFile,
   });
 
   Future<List<AudioTrackInfo>> crateApiFfmpegProbeAudioTracks({
@@ -708,6 +709,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void crateApiStreamPipelinePreloadQwenModel({
     required String asrModelDir,
     String? alignerModelDir,
+    String? decoderFile,
   }) {
     return handler.executeSync(
       SyncTask(
@@ -715,6 +717,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(asrModelDir, serializer);
           sse_encode_opt_String(alignerModelDir, serializer);
+          sse_encode_opt_String(decoderFile, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
         },
         codec: SseCodec(
@@ -722,7 +725,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiStreamPipelinePreloadQwenModelConstMeta,
-        argValues: [asrModelDir, alignerModelDir],
+        argValues: [asrModelDir, alignerModelDir, decoderFile],
         apiImpl: this,
       ),
     );
@@ -731,7 +734,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStreamPipelinePreloadQwenModelConstMeta =>
       const TaskConstMeta(
         debugName: "preload_qwen_model",
-        argNames: ["asrModelDir", "alignerModelDir"],
+        argNames: ["asrModelDir", "alignerModelDir", "decoderFile"],
       );
 
   @override
@@ -1550,8 +1553,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PipelineConfig dco_decode_pipeline_config(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 24)
-      throw Exception('unexpected arr length: expect 24 but see ${arr.length}');
+    if (arr.length != 25)
+      throw Exception('unexpected arr length: expect 25 but see ${arr.length}');
     return PipelineConfig(
       ffmpegPath: dco_decode_String(arr[0]),
       inputPath: dco_decode_String(arr[1]),
@@ -1560,23 +1563,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       dfModelPath: dco_decode_String(arr[4]),
       asrModelDir: dco_decode_String(arr[5]),
       alignerModelDir: dco_decode_opt_String(arr[6]),
-      contextPrompt: dco_decode_opt_String(arr[7]),
-      encoderBackend: dco_decode_encoder_backend(arr[8]),
-      decoderBackend: dco_decode_decoder_backend(arr[9]),
-      timestampMode: dco_decode_timestamp_mode(arr[10]),
-      language: dco_decode_opt_String(arr[11]),
-      translate: dco_decode_bool(arr[12]),
-      threads: dco_decode_opt_box_autoadd_i_32(arr[13]),
-      useGpu: dco_decode_bool(arr[14]),
-      toSimplified: dco_decode_bool(arr[15]),
-      noContext: dco_decode_bool(arr[16]),
-      noStateHistory: dco_decode_bool(arr[17]),
-      enableDenoise: dco_decode_bool(arr[18]),
-      vadEnabled: dco_decode_bool(arr[19]),
-      vadThreshold: dco_decode_f_64(arr[20]),
-      vadMinSpeechMs: dco_decode_i_32(arr[21]),
-      vadMinSilenceMs: dco_decode_i_32(arr[22]),
-      selectedAudioTrack: dco_decode_opt_box_autoadd_usize(arr[23]),
+      decoderFile: dco_decode_opt_String(arr[7]),
+      contextPrompt: dco_decode_opt_String(arr[8]),
+      encoderBackend: dco_decode_encoder_backend(arr[9]),
+      decoderBackend: dco_decode_decoder_backend(arr[10]),
+      timestampMode: dco_decode_timestamp_mode(arr[11]),
+      language: dco_decode_opt_String(arr[12]),
+      translate: dco_decode_bool(arr[13]),
+      threads: dco_decode_opt_box_autoadd_i_32(arr[14]),
+      useGpu: dco_decode_bool(arr[15]),
+      toSimplified: dco_decode_bool(arr[16]),
+      noContext: dco_decode_bool(arr[17]),
+      noStateHistory: dco_decode_bool(arr[18]),
+      enableDenoise: dco_decode_bool(arr[19]),
+      vadEnabled: dco_decode_bool(arr[20]),
+      vadThreshold: dco_decode_f_64(arr[21]),
+      vadMinSpeechMs: dco_decode_i_32(arr[22]),
+      vadMinSilenceMs: dco_decode_i_32(arr[23]),
+      selectedAudioTrack: dco_decode_opt_box_autoadd_usize(arr[24]),
     );
   }
 
@@ -2117,6 +2121,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_dfModelPath = sse_decode_String(deserializer);
     var var_asrModelDir = sse_decode_String(deserializer);
     var var_alignerModelDir = sse_decode_opt_String(deserializer);
+    var var_decoderFile = sse_decode_opt_String(deserializer);
     var var_contextPrompt = sse_decode_opt_String(deserializer);
     var var_encoderBackend = sse_decode_encoder_backend(deserializer);
     var var_decoderBackend = sse_decode_decoder_backend(deserializer);
@@ -2142,6 +2147,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       dfModelPath: var_dfModelPath,
       asrModelDir: var_asrModelDir,
       alignerModelDir: var_alignerModelDir,
+      decoderFile: var_decoderFile,
       contextPrompt: var_contextPrompt,
       encoderBackend: var_encoderBackend,
       decoderBackend: var_decoderBackend,
@@ -2727,6 +2733,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.dfModelPath, serializer);
     sse_encode_String(self.asrModelDir, serializer);
     sse_encode_opt_String(self.alignerModelDir, serializer);
+    sse_encode_opt_String(self.decoderFile, serializer);
     sse_encode_opt_String(self.contextPrompt, serializer);
     sse_encode_encoder_backend(self.encoderBackend, serializer);
     sse_encode_decoder_backend(self.decoderBackend, serializer);

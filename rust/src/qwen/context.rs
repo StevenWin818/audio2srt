@@ -9,6 +9,8 @@ pub struct RuntimeCacheKey {
     pub aligner_model_id: Option<String>,
     pub encoder_backend: EncoderBackend,
     pub decoder_backend: DecoderBackend,
+    /// 解码器 GGUF 文件名 (量化选择)
+    pub decoder_file: Option<String>,
 }
 
 pub struct QwenContextCache {

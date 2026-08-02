@@ -28,6 +28,7 @@ pub fn warmup_qwen_runtime(config: QwenWarmupConfig) -> Result<(), String> {
         aligner_model_id: config.aligner_model_dir.clone(),
         encoder_backend: config.encoder_backend,
         decoder_backend: config.decoder_backend,
+        decoder_file: None,
     };
 
     let runtime = QwenRuntime::load(
@@ -35,6 +36,7 @@ pub fn warmup_qwen_runtime(config: QwenWarmupConfig) -> Result<(), String> {
         config.aligner_model_dir.as_deref(),
         config.encoder_backend,
         config.decoder_backend,
+        None,
     )
     .map_err(|e| e.to_string())?;
 

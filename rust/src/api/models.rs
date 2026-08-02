@@ -65,8 +65,18 @@ pub fn validate_qwen_model(model_dir: String) -> Result<ModelInfo, String> {
         let mut missing_files = Vec::new();
         let enc_exists = dir.join("asr_encoder_frontend.int4.onnx").exists()
             || dir.join("encoder.onnx").exists();
-        let dec_exists = dir.join("asr_decoder.q4_k.gguf").exists()
-            || dir.join("decoder.gguf").exists();
+        let decoder_names = [
+            "decoder.bf16.gguf",
+            "decoder.f16.gguf",
+            "decoder.q8_0.gguf",
+            "decoder.q6_k.gguf",
+            "decoder.q5_k_m.gguf",
+            "decoder.q4_k_m.gguf",
+            "decoder.q4_k.gguf",
+            "decoder.gguf",
+            "asr_decoder.q4_k.gguf",
+        ];
+        let dec_exists = decoder_names.iter().any(|f| dir.join(f).exists());
 
         if !enc_exists {
             missing_files.push("Encoder ONNX model".into());

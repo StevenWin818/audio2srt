@@ -590,11 +590,13 @@ fn wire__crate__api__stream_pipeline__preload_qwen_model_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_asr_model_dir = <String>::sse_decode(&mut deserializer);
             let api_aligner_model_dir = <Option<String>>::sse_decode(&mut deserializer);
+            let api_decoder_file = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, String>((move || {
                 let output_ok = crate::api::stream_pipeline::preload_qwen_model(
                     api_asr_model_dir,
                     api_aligner_model_dir,
+                    api_decoder_file,
                 )?;
                 Ok(output_ok)
             })())
@@ -1490,6 +1492,7 @@ impl SseDecode for crate::api::stream_pipeline::PipelineConfig {
         let mut var_dfModelPath = <String>::sse_decode(deserializer);
         let mut var_asrModelDir = <String>::sse_decode(deserializer);
         let mut var_alignerModelDir = <Option<String>>::sse_decode(deserializer);
+        let mut var_decoderFile = <Option<String>>::sse_decode(deserializer);
         let mut var_contextPrompt = <Option<String>>::sse_decode(deserializer);
         let mut var_encoderBackend =
             <crate::qwen::backend::EncoderBackend>::sse_decode(deserializer);
@@ -1518,6 +1521,7 @@ impl SseDecode for crate::api::stream_pipeline::PipelineConfig {
             df_model_path: var_dfModelPath,
             asr_model_dir: var_asrModelDir,
             aligner_model_dir: var_alignerModelDir,
+            decoder_file: var_decoderFile,
             context_prompt: var_contextPrompt,
             encoder_backend: var_encoderBackend,
             decoder_backend: var_decoderBackend,
@@ -2039,6 +2043,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::stream_pipeline::PipelineConf
             self.df_model_path.into_into_dart().into_dart(),
             self.asr_model_dir.into_into_dart().into_dart(),
             self.aligner_model_dir.into_into_dart().into_dart(),
+            self.decoder_file.into_into_dart().into_dart(),
             self.context_prompt.into_into_dart().into_dart(),
             self.encoder_backend.into_into_dart().into_dart(),
             self.decoder_backend.into_into_dart().into_dart(),
@@ -2560,6 +2565,7 @@ impl SseEncode for crate::api::stream_pipeline::PipelineConfig {
         <String>::sse_encode(self.df_model_path, serializer);
         <String>::sse_encode(self.asr_model_dir, serializer);
         <Option<String>>::sse_encode(self.aligner_model_dir, serializer);
+        <Option<String>>::sse_encode(self.decoder_file, serializer);
         <Option<String>>::sse_encode(self.context_prompt, serializer);
         <crate::qwen::backend::EncoderBackend>::sse_encode(self.encoder_backend, serializer);
         <crate::qwen::backend::DecoderBackend>::sse_encode(self.decoder_backend, serializer);

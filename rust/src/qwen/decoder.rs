@@ -75,19 +75,56 @@ fn ensure_backend_init() {
 }
 
 impl QwenDecoder {
-    pub fn load(model_dir: &str, backend: DecoderBackend) -> Result<Self, QwenError> {
+    /// 加载解码器 GGUF。
+    ///
+    /// `decoder_file`: 调用方 (UI 量化选择) 指定的文件名 (如 "decoder.q4_k_m.gguf")。
+    /// 为 None 时按优先级自动扫描所有量化命名。
+    pub fn load(
+        model_dir: &str,
+        backend: DecoderBackend,
+        decoder_file: Option<&str>,
+    ) -> Result<Self, QwenError> {
         ensure_backend_init();
 
         let dir = Path::new(model_dir);
-        let candidates = [
-            dir.join("asr_decoder.q4_k.gguf"),
-            dir.join("decoder.q4_k.gguf"),
-            dir.join("decoder.gguf"),
+        let scan_names = [
+            "decoder.bf16.gguf",
+            "decoder.f16.gguf",
+            "decoder.q8_0.gguf",
+            "decoder.q6_k.gguf",
+            "decoder.q5_k_m.gguf",
+            "decoder.q4_k_m.gguf",
+            "decoder.q4_k.gguf",
+            "decoder.gguf",
+            "asr_decoder.q4_k.gguf",
         ];
-        let chosen = candidates
-            .iter()
-            .find(|p| p.exists())
-            .ok_or_else(|| QwenError::ModelNotFound(format!("No decoder.gguf in {}", model_dir)))?;
+        let chosen = if let Some(file) = decoder_file {
+            let exact = dir.join(file);
+            if exact.exists() {
+                exact
+            } else {
+                // 指定量化文件缺失 (旧版本目录命名): 回退到自动扫描
+                println!(
+                    "[decoder] WARNING: requested decoder file '{}' not found, falling back to auto-scan",
+                    file
+                );
+                scan_names
+                    .iter()
+                    .map(|f| dir.join(f))
+                    .find(|p| p.exists())
+                    .ok_or_else(|| {
+                        QwenError::ModelNotFound(format!("No decoder GGUF in {}", model_dir))
+                    })?
+            }
+        } else {
+            scan_names
+                .iter()
+                .map(|f| dir.join(f))
+                .find(|p| p.exists())
+                .ok_or_else(|| {
+                    QwenError::ModelNotFound(format!("No decoder GGUF in {}", model_dir))
+                })?
+        };
         let chosen_str = chosen.to_string_lossy().to_string();
         println!("[decoder] using model: {}", chosen_str);
 

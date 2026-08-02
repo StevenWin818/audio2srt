@@ -75,7 +75,8 @@ void main() {
 
       // Set options in provider
       provider.setInputFile(fileToTest);
-      provider.setSelectedModel(selectedModel);
+      provider.setSelectedModelBase('qwen3-asr-0.6b');
+      provider.setSelectedQuant('f16');
       provider.setSelectedLanguage('zh');
       provider.setEnableDenoise(true);
       provider.setUseGpu(true);

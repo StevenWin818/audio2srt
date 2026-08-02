@@ -9,7 +9,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'silero_vad.dart';
 
 // These functions are ignored because they are not marked as `pub`: `add_perf_record`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_media_duration_secs`, `get_physical_pcore_mask`, `is_qwen_model_dir`, `join`, `lock_high_priority`, `parse_duration_str`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_qwen_worker`, `spawn_vad_worker`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AsrTask`, `FfmpegPumpHandle`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AsrTask`, `EncodedTask`, `FfmpegPumpHandle`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `eq`, `fmt`, `fmt`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `get_or_create_qwen_runtime`
 // These functions are ignored (category: IgnoreBecauseNotAllowedOwner): `add`
@@ -20,11 +20,15 @@ void setRustPerfLogging({required bool enable}) => RustLib.instance.api
 void unloadQwenRuntime() =>
     RustLib.instance.api.crateApiStreamPipelineUnloadQwenRuntime();
 
-void preloadQwenModel({required String asrModelDir, String? alignerModelDir}) =>
-    RustLib.instance.api.crateApiStreamPipelinePreloadQwenModel(
-      asrModelDir: asrModelDir,
-      alignerModelDir: alignerModelDir,
-    );
+void preloadQwenModel({
+  required String asrModelDir,
+  String? alignerModelDir,
+  String? decoderFile,
+}) => RustLib.instance.api.crateApiStreamPipelinePreloadQwenModel(
+  asrModelDir: asrModelDir,
+  alignerModelDir: alignerModelDir,
+  decoderFile: decoderFile,
+);
 
 void cancelTranscriptionBackend() =>
     RustLib.instance.api.crateApiStreamPipelineCancelTranscriptionBackend();
@@ -44,6 +48,9 @@ class PipelineConfig {
   final String dfModelPath;
   final String asrModelDir;
   final String? alignerModelDir;
+
+  /// 解码器 GGUF 文件名 (量化选择)，如 "decoder.q4_k_m.gguf"；None 时按优先级自动扫描
+  final String? decoderFile;
   final String? contextPrompt;
   final EncoderBackend encoderBackend;
   final DecoderBackend decoderBackend;
@@ -70,6 +77,7 @@ class PipelineConfig {
     required this.dfModelPath,
     required this.asrModelDir,
     this.alignerModelDir,
+    this.decoderFile,
     this.contextPrompt,
     required this.encoderBackend,
     required this.decoderBackend,
@@ -98,6 +106,7 @@ class PipelineConfig {
       dfModelPath.hashCode ^
       asrModelDir.hashCode ^
       alignerModelDir.hashCode ^
+      decoderFile.hashCode ^
       contextPrompt.hashCode ^
       encoderBackend.hashCode ^
       decoderBackend.hashCode ^
@@ -128,6 +137,7 @@ class PipelineConfig {
           dfModelPath == other.dfModelPath &&
           asrModelDir == other.asrModelDir &&
           alignerModelDir == other.alignerModelDir &&
+          decoderFile == other.decoderFile &&
           contextPrompt == other.contextPrompt &&
           encoderBackend == other.encoderBackend &&
           decoderBackend == other.decoderBackend &&

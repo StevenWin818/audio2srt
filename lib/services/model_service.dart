@@ -1,42 +1,9 @@
 import 'dart:io';
-import 'dart:ffi';
 import 'package:dio/dio.dart';
-import 'package:ffi/ffi.dart' show malloc;
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:flutter/services.dart' show rootBundle;
-
-// dart:io 的 File 在此 SDK 中没有 hard link API，直接调用 kernel32.CreateHardLinkW
-// 创建 NTFS 硬链接 (无需管理员权限，同卷不占额外磁盘空间)。
-typedef _CreateHardLinkWNative = Int32 Function(
-    Pointer<Uint16> linkPath, Pointer<Uint16> existingPath, Pointer<Void> securityAttributes);
-typedef _CreateHardLinkWDart = int Function(
-    Pointer<Uint16> linkPath, Pointer<Uint16> existingPath, Pointer<Void> securityAttributes);
-
-final _createHardLinkW = DynamicLibrary.open('kernel32.dll')
-    .lookupFunction<_CreateHardLinkWNative, _CreateHardLinkWDart>('CreateHardLinkW');
-
-Pointer<Uint16> _toNativeUtf16(String s) {
-  final units = s.codeUnits;
-  final ptr = malloc<Uint16>(units.length + 1);
-  for (var i = 0; i < units.length; i++) {
-    ptr[i] = units[i];
-  }
-  ptr[units.length] = 0;
-  return ptr;
-}
-
-bool _hardLink(String existingPath, String linkPath) {
-  final existing = _toNativeUtf16(existingPath);
-  final link = _toNativeUtf16(linkPath);
-  try {
-    return _createHardLinkW(link, existing, nullptr) != 0;
-  } finally {
-    malloc.free(existing);
-    malloc.free(link);
-  }
-}
 
 enum ModelType { asr, aligner }
 
@@ -56,6 +23,7 @@ class ModelMirror {
   });
 }
 
+/// 单个模型文件描述
 class QwenModelFile {
   final String filename;
   final String urlPath;
@@ -68,6 +36,7 @@ class QwenModelFile {
   });
 }
 
+/// 独立组件模型 (ForcedAligner 等)
 class QwenModelInfo {
   final String id;
   final String name;
@@ -78,11 +47,6 @@ class QwenModelInfo {
   final ModelType type;
   final List<QwenModelFile> files;
 
-  /// 同一基础模型的量化变体共享同一个 encoder。
-  /// 例如 0.6B 的三个变体 encoderGroup 均为 'qwen3-asr-0.6b'，
-  /// encoder.onnx / config.json 只在组内首次下载时下载一次，其余变体硬链接复用。
-  final String? encoderGroup;
-
   QwenModelInfo({
     required this.id,
     required this.name,
@@ -92,18 +56,69 @@ class QwenModelInfo {
     required this.sizeMB,
     required this.type,
     required this.files,
-    this.encoderGroup,
   });
 }
 
+/// 解码器量化版本。文件名约定: decoder.<id>.gguf (如 decoder.q4_k_m.gguf)
+class QwenQuantVersion {
+  final String id; // 'f16' | 'q8_0' | 'q6_k' | 'q4_k_m'
+  final String label; // 显示名，如 '全量 F16'
+  final String description;
+  final String urlPath; // GGUF 完整 urlPath
+  final double sizeMB; // 固定编码 (UI 兜底显示/进度估算)
+  final String sizeText;
+
+  QwenQuantVersion({
+    required this.id,
+    required this.label,
+    required this.description,
+    required this.urlPath,
+    required this.sizeMB,
+    required this.sizeText,
+  });
+
+  String get ggufName => 'decoder.$id.gguf';
+}
+
+/// 一个基础模型目录: encoder + config 共享，多个量化 decoder 并存。
+/// 存储结构:
+///   models/<id>/
+///     config.json
+///     encoder.onnx
+///     decoder.f16.gguf
+///     decoder.q8_0.gguf
+///     ...
+class QwenBaseModel {
+  final String id; // 目录名，如 'qwen3-asr-0.6b'
+  final String name;
+  final String description;
+  final List<QwenModelFile> baseFiles; // config.json + encoder.onnx
+  final List<QwenQuantVersion> quants;
+  final double baseSizeMB; // encoder + config
+  final String baseSizeText;
+
+  QwenBaseModel({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.baseFiles,
+    required this.quants,
+    required this.baseSizeMB,
+    required this.baseSizeText,
+  });
+
+  QwenQuantVersion? quantById(String id) {
+    for (final q in quants) {
+      if (q.id == id) return q;
+    }
+    return null;
+  }
+}
+
 class ModelService {
+  /// 下载源: 官方 + HF-Mirror。另有虚拟的"自动"选项 (autoMirror)，
+  /// 下载前自动测速选择最快源。
   static final List<ModelMirror> availableMirrors = [
-    ModelMirror(
-      id: 'hf-mirror',
-      name: 'HF-Mirror 国内镜像站 (推荐)',
-      baseUrl: 'https://hf-mirror.com',
-      description: '国内高速 CDN 加速镜像，适合国内网络环境',
-    ),
     ModelMirror(
       id: 'huggingface',
       name: 'HuggingFace 官方源',
@@ -111,26 +126,35 @@ class ModelService {
       description: '官方直连源，海外网络环境推荐',
     ),
     ModelMirror(
-      id: 'modelscope',
-      name: 'ModelScope 魔搭社区',
-      baseUrl: 'https://modelscope.cn',
-      description: '阿里魔搭社区镜像节点',
+      id: 'hf-mirror',
+      name: 'HF-Mirror 国内镜像站',
+      baseUrl: 'https://hf-mirror.com',
+      description: '国内高速 CDN 加速镜像，适合国内网络环境',
     ),
   ];
 
-  static final List<QwenModelInfo> availableQwenModels = [
-    // ===== Qwen3-ASR 0.6B =====
-    // 默认: 全量 F16 (未量化，最高精度)
-    QwenModelInfo(
-      id: 'qwen3-asr-0.6b-f16',
-      name: 'Qwen3-ASR 0.6B · 全量 F16',
-      description: '官方全精度解码器 · 最高识别精度 (默认推荐)',
-      dirName: 'qwen3-asr-0.6b-f16',
-      encoderGroup: 'qwen3-asr-0.6b',
-      size: '2.15 GB',
-      sizeMB: 2150.0,
-      type: ModelType.asr,
-      files: [
+  /// 虚拟"自动"源: 下载前自动测速选择最快源
+  static ModelMirror get autoMirror => ModelMirror(
+        id: 'auto',
+        name: '自动',
+        baseUrl: '',
+        description: '每次下载前自动测速，选择官方源 / HF-Mirror 中更快的一个',
+      );
+
+  static ModelMirror? mirrorById(String id) {
+    if (id == 'auto') return autoMirror;
+    for (final m in availableMirrors) {
+      if (m.id == id) return m;
+    }
+    return null;
+  }
+
+  static final List<QwenBaseModel> availableBaseModels = [
+    QwenBaseModel(
+      id: 'qwen3-asr-0.6b',
+      name: 'Qwen3-ASR 0.6B',
+      description: '极速 · 低内存占用 (推荐显存 < 4GB)',
+      baseFiles: [
         QwenModelFile(
           filename: 'config.json',
           urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/config.json',
@@ -141,78 +165,41 @@ class ModelService {
           urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/encoder.onnx',
           sizeMB: 711.0,
         ),
-        QwenModelFile(
-          filename: 'decoder.gguf',
+      ],
+      baseSizeMB: 711.1,
+      baseSizeText: '711 MB',
+      quants: [
+        QwenQuantVersion(
+          id: 'f16',
+          label: '全量 F16',
+          description: '官方全精度解码器 · 最高识别精度 (默认推荐)',
           urlPath: 'mradermacher/Qwen3-ASR-0.6B-GGUF/resolve/main/Qwen3-ASR-0.6B.f16.gguf',
           sizeMB: 1439.0,
+          sizeText: '1.4 GB',
         ),
-      ],
-    ),
-    QwenModelInfo(
-      id: 'qwen3-asr-0.6b-q8',
-      name: 'Qwen3-ASR 0.6B · 量化 Q8_0',
-      description: '8-bit 量化 · 高精度与速度均衡 (显存 ≥ 4GB)',
-      dirName: 'qwen3-asr-0.6b-q8',
-      encoderGroup: 'qwen3-asr-0.6b',
-      size: '1.48 GB',
-      sizeMB: 1478.0,
-      type: ModelType.asr,
-      files: [
-        QwenModelFile(
-          filename: 'config.json',
-          urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/config.json',
-          sizeMB: 0.1,
-        ),
-        QwenModelFile(
-          filename: 'encoder.onnx',
-          urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/encoder.onnx',
-          sizeMB: 711.0,
-        ),
-        QwenModelFile(
-          filename: 'decoder.gguf',
+        QwenQuantVersion(
+          id: 'q8_0',
+          label: 'Q8_0',
+          description: '8-bit 量化 · 高精度与速度均衡 (显存 ≥ 4GB)',
           urlPath: 'mradermacher/Qwen3-ASR-0.6B-GGUF/resolve/main/Qwen3-ASR-0.6B.Q8_0.gguf',
           sizeMB: 767.0,
+          sizeText: '767 MB',
         ),
-      ],
-    ),
-    QwenModelInfo(
-      id: 'qwen3-asr-0.6b',
-      name: 'Qwen3-ASR 0.6B · 量化 Q4_K_M',
-      description: '4-bit 量化 · 极速低内存 (推荐显存 < 4GB)',
-      dirName: 'qwen3-asr-0.6b',
-      encoderGroup: 'qwen3-asr-0.6b',
-      size: '1.17 GB',
-      sizeMB: 1173.0,
-      type: ModelType.asr,
-      files: [
-        QwenModelFile(
-          filename: 'config.json',
-          urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/config.json',
-          sizeMB: 0.1,
-        ),
-        QwenModelFile(
-          filename: 'encoder.onnx',
-          urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/encoder.onnx',
-          sizeMB: 711.0,
-        ),
-        QwenModelFile(
-          filename: 'decoder.gguf',
+        QwenQuantVersion(
+          id: 'q4_k_m',
+          label: 'Q4_K_M',
+          description: '4-bit 量化 · 极速低内存 (推荐显存 < 4GB)',
           urlPath: 'mradermacher/Qwen3-ASR-0.6B-GGUF/resolve/main/Qwen3-ASR-0.6B.Q4_K_M.gguf',
           sizeMB: 462.0,
+          sizeText: '462 MB',
         ),
       ],
     ),
-    // ===== Qwen3-ASR 1.7B =====
-    QwenModelInfo(
-      id: 'qwen3-asr-1.7b-f16',
-      name: 'Qwen3-ASR 1.7B · 全量 F16',
-      description: '官方全精度解码器 · 最高识别精度 (默认推荐)',
-      dirName: 'qwen3-asr-1.7b-f16',
-      encoderGroup: 'qwen3-asr-1.7b',
-      size: '5.1 GB',
-      sizeMB: 5150.0,
-      type: ModelType.asr,
-      files: [
+    QwenBaseModel(
+      id: 'qwen3-asr-1.7b',
+      name: 'Qwen3-ASR 1.7B',
+      description: '高精度 · 推荐 (更高识别准确率)',
+      baseFiles: [
         QwenModelFile(
           filename: 'config.json',
           urlPath: 'andrewleech/qwen3-asr-1.7b-onnx/resolve/main/config.json',
@@ -223,89 +210,66 @@ class ModelService {
           urlPath: 'andrewleech/qwen3-asr-1.7b-onnx/resolve/main/encoder.onnx',
           sizeMB: 1270.0,
         ),
-        QwenModelFile(
-          filename: 'decoder.gguf',
+      ],
+      baseSizeMB: 1270.1,
+      baseSizeText: '1.3 GB',
+      quants: [
+        QwenQuantVersion(
+          id: 'f16',
+          label: '全量 F16',
+          description: '官方全精度解码器 · 最高识别精度 (默认推荐)',
           urlPath: 'mradermacher/Qwen3-ASR-1.7B-GGUF/resolve/main/Qwen3-ASR-1.7B.f16.gguf',
           sizeMB: 3880.0,
+          sizeText: '3.9 GB',
         ),
-      ],
-    ),
-    QwenModelInfo(
-      id: 'qwen3-asr-1.7b-q8',
-      name: 'Qwen3-ASR 1.7B · 量化 Q8_0',
-      description: '8-bit 量化 · 高精度与速度均衡 (显存 ≥ 6GB)',
-      dirName: 'qwen3-asr-1.7b-q8',
-      encoderGroup: 'qwen3-asr-1.7b',
-      size: '3.3 GB',
-      sizeMB: 3335.0,
-      type: ModelType.asr,
-      files: [
-        QwenModelFile(
-          filename: 'config.json',
-          urlPath: 'andrewleech/qwen3-asr-1.7b-onnx/resolve/main/config.json',
-          sizeMB: 0.1,
-        ),
-        QwenModelFile(
-          filename: 'encoder.onnx',
-          urlPath: 'andrewleech/qwen3-asr-1.7b-onnx/resolve/main/encoder.onnx',
-          sizeMB: 1270.0,
-        ),
-        QwenModelFile(
-          filename: 'decoder.gguf',
+        QwenQuantVersion(
+          id: 'q8_0',
+          label: 'Q8_0',
+          description: '8-bit 量化 · 高精度与速度均衡 (显存 ≥ 6GB)',
           urlPath: 'mradermacher/Qwen3-ASR-1.7B-GGUF/resolve/main/Qwen3-ASR-1.7B.Q8_0.gguf',
           sizeMB: 2065.0,
+          sizeText: '2.1 GB',
         ),
-      ],
-    ),
-    QwenModelInfo(
-      id: 'qwen3-asr-1.7b',
-      name: 'Qwen3-ASR 1.7B · 量化 Q6_K',
-      description: '6-bit 量化 · 高精度 (显存 ≥ 6GB)',
-      dirName: 'qwen3-asr-1.7b',
-      encoderGroup: 'qwen3-asr-1.7b',
-      size: '2.9 GB',
-      sizeMB: 2865.0,
-      type: ModelType.asr,
-      files: [
-        QwenModelFile(
-          filename: 'config.json',
-          urlPath: 'andrewleech/qwen3-asr-1.7b-onnx/resolve/main/config.json',
-          sizeMB: 0.1,
-        ),
-        QwenModelFile(
-          filename: 'encoder.onnx',
-          urlPath: 'andrewleech/qwen3-asr-1.7b-onnx/resolve/main/encoder.onnx',
-          sizeMB: 1270.0,
-        ),
-        QwenModelFile(
-          filename: 'decoder.gguf',
+        QwenQuantVersion(
+          id: 'q6_k',
+          label: 'Q6_K',
+          description: '6-bit 量化 · 高精度 (显存 ≥ 6GB)',
           urlPath: 'mradermacher/Qwen3-ASR-1.7B-GGUF/resolve/main/Qwen3-ASR-1.7B.Q6_K.gguf',
           sizeMB: 1595.0,
-        ),
-      ],
-    ),
-    QwenModelInfo(
-      id: 'forced-aligner-0.6b',
-      name: 'ForcedAligner 0.6B',
-      description: '精准时间轴组件 (词/字级精确对齐)',
-      dirName: 'forced-aligner-0.6b',
-      size: '450 MB',
-      sizeMB: 450.0,
-      type: ModelType.aligner,
-      files: [
-        QwenModelFile(
-          filename: 'config.json',
-          urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/config.json',
-          sizeMB: 0.1,
-        ),
-        QwenModelFile(
-          filename: 'aligner.onnx',
-          urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/encoder.int4.onnx',
-          sizeMB: 450.0,
+          sizeText: '1.6 GB',
         ),
       ],
     ),
   ];
+
+  static final QwenModelInfo alignerModel = QwenModelInfo(
+    id: 'forced-aligner-0.6b',
+    name: 'ForcedAligner 0.6B',
+    description: '精准时间轴组件 (词/字级精确对齐)',
+    dirName: 'forced-aligner-0.6b',
+    size: '450 MB',
+    sizeMB: 450.0,
+    type: ModelType.aligner,
+    files: [
+      QwenModelFile(
+        filename: 'config.json',
+        urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/config.json',
+        sizeMB: 0.1,
+      ),
+      QwenModelFile(
+        filename: 'aligner.onnx',
+        urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/encoder.int4.onnx',
+        sizeMB: 450.0,
+      ),
+    ],
+  );
+
+  static QwenBaseModel? baseById(String id) {
+    for (final m in availableBaseModels) {
+      if (m.id == id) return m;
+    }
+    return null;
+  }
 
   Future<Directory> getModelDir() async {
     final appDir = await getApplicationSupportDirectory();
@@ -316,87 +280,128 @@ class ModelService {
     return modelDir;
   }
 
-  Future<List<String>> getDownloadedModels() async {
-    try {
-      final dir = await getModelDir();
-      final List<String> downloadedDirs = [];
-      for (final model in availableQwenModels) {
-        if (model.type == ModelType.asr) {
-          final path = p.join(dir.path, model.dirName);
-          if (await Directory(path).exists()) {
-            final isDownloaded = await isModelDownloaded(model.dirName);
-            if (isDownloaded) {
-              downloadedDirs.add(model.dirName);
-            }
-          }
-        }
-      }
-      return downloadedDirs;
-    } catch (e) {
-      return [];
-    }
-  }
-
   Future<String> getModelPath(String dirName) async {
     final dir = await getModelDir();
     return p.join(dir.path, dirName);
   }
 
-  Future<bool> isModelDownloaded(String dirName) async {
-    final path = await getModelPath(dirName);
-    final modelFolder = Directory(path);
-    if (!await modelFolder.exists()) return false;
-
-    if (await isModelCorrupted(dirName)) {
-      try {
-        debugPrint('[ModelService] Auto purging corrupted model directory $path');
-        await modelFolder.delete(recursive: true);
-      } catch (e) {
-        debugPrint('[ModelService] Failed to delete corrupted model dir: $e');
-      }
-      return false;
-    }
-
-    return true;
+  Future<File> getQuantFile(String baseId, String quantId) async {
+    final path = await getModelPath(baseId);
+    return File(p.join(path, 'decoder.$quantId.gguf'));
   }
 
-  Future<bool> isModelCorrupted(String dirName) async {
-    final path = await getModelPath(dirName);
-    final modelFolder = Directory(path);
-    if (!await modelFolder.exists()) return true;
-
-    final modelInfoMatch = availableQwenModels.where((m) => m.dirName == dirName);
-    if (modelInfoMatch.isEmpty) {
+  /// 基础模型是否完整下载 (encoder + config 就绪)
+  Future<bool> isBaseDownloaded(String baseId) async {
+    final path = await getModelPath(baseId);
+    final dir = Directory(path);
+    if (!await dir.exists()) return false;
+    final encoder = File(p.join(path, 'encoder.onnx'));
+    final config = File(p.join(path, 'config.json'));
+    try {
+      return await encoder.exists() &&
+          await encoder.length() > 100 * 1024 * 1024 &&
+          await config.exists();
+    } catch (_) {
       return false;
     }
+  }
 
-    final files = await modelFolder.list().toList();
-    if (files.isEmpty) return true;
-
-    // 关键文件必须存在 (ASR 变体的 encoder 可能是与同组变体共享的硬链接)
-    final model = modelInfoMatch.first;
-    final criticalFiles = model.type == ModelType.asr
-        ? ['encoder.onnx', 'decoder.gguf']
-        : ['aligner.onnx'];
-    final presentFiles = files.whereType<File>().map((f) => p.basename(f.path)).toSet();
-    for (final name in criticalFiles) {
-      if (!presentFiles.contains(name)) return true;
+  /// 基础模型是否损坏 (encoder 缺失/过小或 config 缺失)
+  Future<bool> isBaseCorrupted(String baseId) async {
+    final path = await getModelPath(baseId);
+    final dir = Directory(path);
+    if (!await dir.exists()) return false;
+    final encoder = File(p.join(path, 'encoder.onnx'));
+    final config = File(p.join(path, 'config.json'));
+    try {
+      return !(await encoder.exists() &&
+          await encoder.length() > 100 * 1024 * 1024 &&
+          await config.exists());
+    } catch (_) {
+      return true;
     }
+  }
 
-    int validFiles = 0;
-    int totalBytes = 0;
+  /// 指定量化 decoder 是否已下载 (文件存在且 > 50MB)
+  Future<bool> isQuantDownloaded(String baseId, String quantId) async {
+    final f = await getQuantFile(baseId, quantId);
+    try {
+      return await f.exists() && await f.length() > 50 * 1024 * 1024;
+    } catch (_) {
+      return false;
+    }
+  }
 
-    for (final entity in files) {
-      if (entity is File) {
-        final len = await entity.length();
-        totalBytes += len;
-        if (len > 10 * 1024 * 1024) {
-          validFiles++;
+  Future<List<String>> getDownloadedBases() async {
+    final results = <String>[];
+    for (final m in availableBaseModels) {
+      if (await isBaseDownloaded(m.id)) {
+        results.add(m.id);
+      }
+    }
+    return results;
+  }
+
+  Future<bool> isAlignerDownloaded() async {
+    final path = await getModelPath(alignerModel.dirName);
+    if (!await Directory(path).exists()) return false;
+    final f = File(p.join(path, 'aligner.onnx'));
+    try {
+      return await f.exists() && await f.length() > 50 * 1024 * 1024;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 基础模型本地实际占用 (encoder + config + 所有已下载 decoder)
+  Future<int> getBaseLocalBytes(String baseId) async {
+    final path = await getModelPath(baseId);
+    final dir = Directory(path);
+    if (!await dir.exists()) return 0;
+    var total = 0;
+    try {
+      await for (final entity in dir.list(recursive: true)) {
+        if (entity is File) {
+          total += await entity.length();
+        }
+      }
+    } catch (_) {}
+    return total;
+  }
+
+  /// 单个量化 decoder 本地实际大小
+  Future<int> getQuantLocalBytes(String baseId, String quantId) async {
+    final f = await getQuantFile(baseId, quantId);
+    try {
+      return await f.exists() ? await f.length() : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  static String formatBytes(int bytes) {
+    if (bytes <= 0) return '0 MB';
+    final mb = bytes / 1024 / 1024;
+    if (mb < 1024) return '${mb.toStringAsFixed(0)} MB';
+    return '${(mb / 1024).toStringAsFixed(2)} GB';
+  }
+
+  /// 下载前对全部镜像测速，返回最快可用镜像 (全部失败时返回第一个)。
+  Future<ModelMirror> pickFastestMirror() async {
+    await testMirrorsSpeed();
+    ModelMirror? best;
+    for (final m in availableMirrors) {
+      if (m.latencyMs != null) {
+        if (best == null || m.latencyMs! < best.latencyMs!) {
+          best = m;
         }
       }
     }
-
-    return !(validFiles >= 1 && totalBytes > 50 * 1024 * 1024);
+    if (best == null) {
+      best = availableMirrors.first;
+    }
+    debugPrint('[ModelService] Auto-picked mirror: ${best.name} (${best.latencyMs}ms)');
+    return best;
   }
 
   Future<Map<String, int?>> testMirrorsSpeed() async {
@@ -413,9 +418,7 @@ class ModelService {
     await Future.wait(availableMirrors.map((mirror) async {
       final stopwatch = Stopwatch()..start();
       try {
-        final testUrl = mirror.id == 'modelscope'
-            ? 'https://modelscope.cn'
-            : '${mirror.baseUrl}/andrewleech/qwen3-asr-0.6b-onnx/resolve/main/config.json';
+        final testUrl = '${mirror.baseUrl}/andrewleech/qwen3-asr-0.6b-onnx/resolve/main/config.json';
         final response = await dio.head(testUrl);
         stopwatch.stop();
         if (response.statusCode != null && response.statusCode! < 400) {
@@ -436,52 +439,34 @@ class ModelService {
 
   CancelToken? _cancelToken;
 
-  /// 在同组变体目录中查找一个已存在的有效 encoder 副本。
-  /// 找到后即可硬链接复用，避免每个量化变体重复下载/存储 encoder。
-  Future<String?> _findGroupEncoderDir(Directory modelsDir, String group, String selfDirName) async {
-    for (final m in availableQwenModels) {
-      if (m.type != ModelType.asr || m.encoderGroup != group || m.dirName == selfDirName) {
-        continue;
+  /// 获取远程文件真实大小 (HEAD Content-Length)；失败返回 null (调用方用固定估算)
+  Future<int?> _fetchRemoteSize(Dio dio, String url) async {
+    try {
+      final resp = await dio.head(
+        url,
+        options: Options(
+          followRedirects: true,
+          maxRedirects: 10,
+        ),
+      );
+      final len = resp.headers.value(Headers.contentLengthHeader);
+      if (len != null) {
+        final v = int.tryParse(len);
+        if (v != null && v > 0) return v;
       }
-      try {
-        final f = File(p.join(modelsDir.path, m.dirName, 'encoder.onnx'));
-        if (await f.exists() && await f.length() > 100 * 1024 * 1024) {
-          return p.join(modelsDir.path, m.dirName);
-        }
-      } catch (_) {}
+    } catch (e) {
+      debugPrint('[ModelService] HEAD failed for $url: $e');
     }
     return null;
   }
 
-  /// 硬链接复用大文件 (同卷不占额外磁盘空间)；失败时回退为复制。
-  Future<void> _linkOrCopy(File src, File dst) async {
-    try {
-      if (await dst.exists()) {
-        if (await dst.length() > 100 * 1024 * 1024) return;
-        await dst.delete();
-      }
-      if (!_hardLink(src.path, dst.path)) {
-        throw StateError('CreateHardLinkW returned 0');
-      }
-      debugPrint('[ModelService] Hard-linked ${src.path} -> ${dst.path}');
-    } catch (e) {
-      debugPrint('[ModelService] Hard link failed ($e), falling back to copy');
-      try {
-        await src.copy(dst.path);
-      } catch (e2) {
-        debugPrint('[ModelService] Copy failed: $e2');
-        rethrow;
-      }
-    }
-  }
-
-  Future<void> _copyFileIfMissing(File src, File dst) async {
-    if (await dst.exists()) return;
-    await src.copy(dst.path);
-  }
-
-  Future<void> downloadModel({
-    required QwenModelInfo model,
+  /// 下载基础模型的一个量化版本。
+  /// - encoder/config 属于基础模型: 目录内已存在则跳过 (同一目录天然共享)
+  /// - mirror 为空时自动测速选择最快下载源
+  /// - 每个文件下载前 HEAD 获取真实体积，避免进度条错误
+  Future<void> downloadQuant({
+    required QwenBaseModel model,
+    required QwenQuantVersion quant,
     ModelMirror? mirror,
     required Function(double progress) onProgress,
     required Function() onSuccess,
@@ -490,18 +475,17 @@ class ModelService {
     Directory? targetDir;
     try {
       final dir = await getModelDir();
-      targetDir = Directory(p.join(dir.path, model.dirName));
+      targetDir = Directory(p.join(dir.path, model.id));
       if (!await targetDir.exists()) {
         await targetDir.create(recursive: true);
       }
 
       _cancelToken = CancelToken();
 
-      final selectedMirror = mirror ?? availableMirrors.first;
+      // 自动测速选择下载源
+      final selectedMirror = mirror ?? await pickFastestMirror();
       final baseUrl = selectedMirror.baseUrl;
-
-      double totalExpectedBytes = model.sizeMB * 1024 * 1024;
-      double completedFileBytes = 0.0;
+      debugPrint('[ModelService] Downloading via ${selectedMirror.name} ($baseUrl)');
 
       final dio = Dio(BaseOptions(
         followRedirects: true,
@@ -511,64 +495,130 @@ class ModelService {
         },
       ));
 
-      // 同组量化变体共享同一 encoder: 组内已有有效副本则直接复用，不重复下载
-      final groupEncoderDir = model.encoderGroup != null
-          ? await _findGroupEncoderDir(dir, model.encoderGroup!, model.dirName)
-          : null;
+      // 构建待下载文件列表: 基础文件 (缺失才下) + 量化 decoder (缺失才下)
+      final filesToDownload = <QwenModelFile>[];
+      for (final f in model.baseFiles) {
+        final target = File(p.join(targetDir.path, f.filename));
+        final ok = f.filename == 'encoder.onnx'
+            ? (await target.exists() && await target.length() > 100 * 1024 * 1024)
+            : await target.exists();
+        if (!ok) filesToDownload.add(f);
+      }
+      final quantFile = File(p.join(targetDir.path, quant.ggufName));
+      if (!(await quantFile.exists() && await quantFile.length() > 50 * 1024 * 1024)) {
+        filesToDownload.add(QwenModelFile(
+          filename: quant.ggufName,
+          urlPath: quant.urlPath,
+          sizeMB: quant.sizeMB,
+        ));
+      }
 
-      for (int i = 0; i < model.files.length; i++) {
-        final fileInfo = model.files[i];
-        final targetFile = File(p.join(targetDir.path, fileInfo.filename));
-        final fileExpectedBytes = fileInfo.sizeMB * 1024 * 1024;
+      // 动态体积: 先 HEAD 每个文件，拿到真实 Content-Length
+      final realSizes = <String, int>{};
+      for (final f in filesToDownload) {
+        final url = '$baseUrl/${f.urlPath}';
+        final size = await _fetchRemoteSize(dio, url);
+        realSizes[f.filename] = size ?? (f.sizeMB * 1024 * 1024).round();
+      }
+      final totalBytes = realSizes.values.fold<int>(0, (a, b) => a + b);
+      var completedBytes = 0;
 
-        final isSharedFile = model.encoderGroup != null &&
-            (fileInfo.filename == 'encoder.onnx' || fileInfo.filename == 'config.json');
-        if (isSharedFile && groupEncoderDir != null) {
-          final src = File(p.join(groupEncoderDir, fileInfo.filename));
-          if (fileInfo.filename == 'encoder.onnx') {
-            await _linkOrCopy(src, targetFile);
-          } else {
-            await _copyFileIfMissing(src, targetFile);
-          }
-          completedFileBytes += fileExpectedBytes;
-          onProgress((completedFileBytes / totalExpectedBytes).clamp(0.0, 0.99));
-          continue;
-        }
+      for (final f in filesToDownload) {
+        final targetFile = File(p.join(targetDir.path, f.filename));
+        final fileTotal = realSizes[f.filename] ?? (f.sizeMB * 1024 * 1024).round();
+        final url = '$baseUrl/${f.urlPath}';
 
-        final fileDownloadUrl = mirror?.id == 'modelscope'
-            ? 'https://modelscope.cn/api/v1/models/${fileInfo.urlPath}'
-            : '$baseUrl/${fileInfo.urlPath}';
-
-        debugPrint('[ModelService] Downloading from $fileDownloadUrl to ${targetFile.path}');
+        debugPrint('[ModelService] Downloading $url -> ${targetFile.path} (${fileTotal} bytes)');
 
         await dio.download(
-          fileDownloadUrl,
+          url,
           targetFile.path,
           cancelToken: _cancelToken,
           onReceiveProgress: (received, total) {
-            final fileTotal = total > 0 ? total.toDouble() : fileExpectedBytes;
-            final currentProgressBytes = completedFileBytes + (received.toDouble().clamp(0.0, fileTotal));
-            final totalProgress = (currentProgressBytes / totalExpectedBytes).clamp(0.0, 0.99);
-            onProgress(totalProgress);
+            final fileBytes = total > 0 ? total.toDouble() : fileTotal.toDouble();
+            final current = completedBytes + received.toDouble().clamp(0.0, fileBytes);
+            final pct = totalBytes > 0 ? (current / totalBytes).clamp(0.0, 0.99) : 0.0;
+            onProgress(pct);
           },
         );
 
-        completedFileBytes += fileExpectedBytes;
+        completedBytes += fileTotal;
       }
 
       onProgress(1.0);
       onSuccess();
     } catch (e) {
       debugPrint('[ModelService] Download error: $e');
-      if (targetDir != null && await targetDir.exists()) {
-        final isDownloaded = await isModelDownloaded(model.dirName);
-        if (!isDownloaded) {
-          try {
-            await targetDir.delete(recursive: true);
-          } catch (_) {}
-        }
+      if (e is DioException && CancelToken.isCancel(e)) {
+        onFailure('下载已取消');
+      } else {
+        onFailure('下载失败: ${e.toString()}');
+      }
+    }
+  }
+
+  Future<void> downloadAligner({
+    ModelMirror? mirror,
+    required Function(double progress) onProgress,
+    required Function() onSuccess,
+    required Function(String error) onFailure,
+  }) async {
+    final model = alignerModel;
+    Directory? targetDir;
+    try {
+      final dir = await getModelDir();
+      targetDir = Directory(p.join(dir.path, model.dirName));
+      if (!await targetDir.exists()) {
+        await targetDir.create(recursive: true);
+      }
+      _cancelToken = CancelToken();
+      final selectedMirror = mirror ?? await pickFastestMirror();
+      final baseUrl = selectedMirror.baseUrl;
+      final dio = Dio(BaseOptions(
+        followRedirects: true,
+        maxRedirects: 10,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+      ));
+
+      final filesToDownload = <QwenModelFile>[];
+      for (final f in model.files) {
+        final target = File(p.join(targetDir.path, f.filename));
+        if (!await target.exists()) filesToDownload.add(f);
       }
 
+      final realSizes = <String, int>{};
+      for (final f in filesToDownload) {
+        final url = '$baseUrl/${f.urlPath}';
+        final size = await _fetchRemoteSize(dio, url);
+        realSizes[f.filename] = size ?? (f.sizeMB * 1024 * 1024).round();
+      }
+      final totalBytes = realSizes.values.fold<int>(0, (a, b) => a + b);
+      var completedBytes = 0;
+
+      for (final f in filesToDownload) {
+        final targetFile = File(p.join(targetDir.path, f.filename));
+        final fileTotal = realSizes[f.filename] ?? (f.sizeMB * 1024 * 1024).round();
+        final url = '$baseUrl/${f.urlPath}';
+        await dio.download(
+          url,
+          targetFile.path,
+          cancelToken: _cancelToken,
+          onReceiveProgress: (received, total) {
+            final fileBytes = total > 0 ? total.toDouble() : fileTotal.toDouble();
+            final current = completedBytes + received.toDouble().clamp(0.0, fileBytes);
+            final pct = totalBytes > 0 ? (current / totalBytes).clamp(0.0, 0.99) : 0.0;
+            onProgress(pct);
+          },
+        );
+        completedBytes += fileTotal;
+      }
+
+      onProgress(1.0);
+      onSuccess();
+    } catch (e) {
+      debugPrint('[ModelService] Aligner download error: $e');
       if (e is DioException && CancelToken.isCancel(e)) {
         onFailure('下载已取消');
       } else {
@@ -581,16 +631,58 @@ class ModelService {
     _cancelToken?.cancel();
   }
 
-  Future<void> deleteModel(String dirName) async {
-    final path = await getModelPath(dirName);
+  /// 删除单个量化 decoder 文件
+  Future<void> deleteQuant(String baseId, String quantId) async {
+    final f = await getQuantFile(baseId, quantId);
+    if (await f.exists()) {
+      await f.delete();
+    }
+  }
+
+  /// 删除整个基础模型目录 (encoder + 所有量化)
+  Future<void> deleteBase(String baseId) async {
+    final path = await getModelPath(baseId);
     final dir = Directory(path);
     if (await dir.exists()) {
       await dir.delete(recursive: true);
-    } else {
-      final file = File(path);
-      if (await file.exists()) {
-        await file.delete();
+    }
+  }
+
+  Future<void> deleteAligner() async {
+    final path = await getModelPath(alignerModel.dirName);
+    final dir = Directory(path);
+    if (await dir.exists()) {
+      await dir.delete(recursive: true);
+    }
+  }
+
+  /// 迁移旧版存储布局:
+  /// 旧结构每个量化一个目录 (qwen3-asr-0.6b-f16/...)，且 decoder 统一命名为 decoder.gguf。
+  /// 新结构: 一模型一目录 + decoder.<quant>.gguf 多文件。
+  /// 这里把旧目录中已知量化的 decoder.gguf 复制为新命名 (保留原文件，安全)。
+  Future<void> migrateLegacyLayout() async {
+    try {
+      final dir = await getModelDir();
+      // 旧命名 decoder.gguf -> 新命名 (按体积推测量化; 仅复制不删除)
+      final legacyCopies = [
+        ('qwen3-asr-0.6b', 300.0, 600.0, 'q4_k_m'), // ~462MB
+        ('qwen3-asr-1.7b', 1200.0, 2000.0, 'q6_k'), // ~1596MB
+      ];
+      for (final (baseId, minMB, maxMB, quantId) in legacyCopies) {
+        final baseDir = Directory(p.join(dir.path, baseId));
+        if (!await baseDir.exists()) continue;
+        final oldFile = File(p.join(baseDir.path, 'decoder.gguf'));
+        if (!await oldFile.exists()) continue;
+        final newFile = File(p.join(baseDir.path, 'decoder.$quantId.gguf'));
+        if (await newFile.exists()) continue;
+        final sizeMB = (await oldFile.length()) / 1024 / 1024;
+        if (sizeMB < minMB || sizeMB > maxMB) continue;
+        await oldFile.copy(newFile.path);
+        debugPrint('[ModelService] Migrated legacy decoder.gguf ($baseId, $sizeMB MB) -> decoder.$quantId.gguf');
       }
+      // 旧量化变体目录可安全保留 (不迁移，用户可手动删除)
+    } catch (e) {
+      debugPrint('[ModelService] Legacy layout migration error: $e');
     }
   }
 
@@ -600,18 +692,18 @@ class ModelService {
     if (!await modelDir.exists()) {
       await modelDir.create(recursive: true);
     }
-    
+
     final targetPath = p.join(modelDir.path, 'DeepFilterNet3_onnx.tar.gz');
     final targetFile = File(targetPath);
-    
+
     if (await targetFile.exists() && await targetFile.length() > 1024 * 1024) {
       return targetPath;
     }
-    
+
     final data = await rootBundle.load('assets/models/DeepFilterNet3_onnx.tar.gz');
     final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
     await targetFile.writeAsBytes(bytes);
-    
+
     return targetPath;
   }
 
@@ -621,18 +713,18 @@ class ModelService {
     if (!await modelDir.exists()) {
       await modelDir.create(recursive: true);
     }
-    
+
     final targetPath = p.join(modelDir.path, 'ggml-silero-v5.1.2.bin');
     final targetFile = File(targetPath);
-    
+
     if (await targetFile.exists() && await targetFile.length() > 1024 * 1024) {
       return targetPath;
     }
-    
+
     final data = await rootBundle.load('assets/models/ggml-silero-v5.1.2.bin');
     final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
     await targetFile.writeAsBytes(bytes);
-    
+
     return targetPath;
   }
 }

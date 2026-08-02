@@ -19,13 +19,14 @@ impl QwenRuntime {
         aligner_model_dir: Option<&str>,
         encoder_backend: EncoderBackend,
         decoder_backend: DecoderBackend,
+        decoder_file: Option<&str>,
     ) -> Result<Self, QwenError> {
         println!(
-            "[runtime] loading Qwen runtime\n  asr_dir={}\n  aligner_dir={:?}\n  enc_backend={:?}\n  dec_backend={:?}",
-            asr_model_dir, aligner_model_dir, encoder_backend, decoder_backend
+            "[runtime] loading Qwen runtime\n  asr_dir={}\n  aligner_dir={:?}\n  enc_backend={:?}\n  dec_backend={:?}\n  decoder_file={:?}",
+            asr_model_dir, aligner_model_dir, encoder_backend, decoder_backend, decoder_file
         );
         let encoder = QwenEncoder::load(asr_model_dir, encoder_backend)?;
-        let decoder = QwenDecoder::load(asr_model_dir, decoder_backend)?;
+        let decoder = QwenDecoder::load(asr_model_dir, decoder_backend, decoder_file)?;
         let aligner = if let Some(align_dir) = aligner_model_dir {
             match QwenAligner::load(align_dir) {
                 Ok(a) => Some(parking_lot::Mutex::new(a)),
@@ -162,7 +163,7 @@ mod tests {
         assert!(std::path::Path::new(&model_dir).exists(), "model dir not found: {}", model_dir);
 
         gpu_mem("before load");
-        let runtime = QwenRuntime::load(&model_dir, None, EncoderBackend::Auto, DecoderBackend::Auto)
+        let runtime = QwenRuntime::load(&model_dir, None, EncoderBackend::Auto, DecoderBackend::Auto, None)
             .expect("runtime load failed");
         gpu_mem("after load (pre-encode)");
 
