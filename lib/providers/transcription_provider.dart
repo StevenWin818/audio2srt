@@ -766,8 +766,6 @@ class TranscriptionProvider with ChangeNotifier {
     _saveSelectedModelPref('$baseId|$_selectedQuant');
     _safeNotifyListeners();
     _preloadWhisperContext();
-    // 模型加载是异步的，稍后刷新实际后端状态
-    Future.delayed(const Duration(seconds: 2), () => refreshQwenRuntimeStatus());
   }
 
   void setSelectedQuant(String quantId) {
@@ -778,7 +776,6 @@ class TranscriptionProvider with ChangeNotifier {
     }
     _safeNotifyListeners();
     _preloadWhisperContext();
-    Future.delayed(const Duration(seconds: 2), () => refreshQwenRuntimeStatus());
   }
 
   void setSelectedLanguage(String langCode) {
