@@ -11,6 +11,16 @@ pub struct QwenRuntime {
     pub asr_decoder: parking_lot::Mutex<QwenDecoder>,
     pub aligner: Option<parking_lot::Mutex<QwenAligner>>,
     pub cancel: std::sync::Arc<AtomicBool>,
+    /// 模型目录 (供 UI 显示)
+    pub model_dir: String,
+    /// decoder GGUF 文件名 (量化信息)
+    pub decoder_file: String,
+    /// encoder 实际执行提供程序 ("CUDA" / "DirectML" / "CPU")
+    pub encoder_ep: String,
+    /// decoder 实际后端 ("CUDA" / "Vulkan" / "CPU")
+    pub decoder_backend: String,
+    /// decoder offload 状态
+    pub decoder_offload: String,
 }
 
 impl QwenRuntime {
@@ -38,11 +48,23 @@ impl QwenRuntime {
         } else {
             None
         };
+        let encoder_ep = encoder.actual_ep.clone();
+        let decoder_backend = decoder.actual_backend.clone();
+        let decoder_offload = decoder.offload_info.clone();
+        let decoder_file = std::path::Path::new(&decoder.model_path())
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
         Ok(Self {
             asr_encoder: parking_lot::Mutex::new(encoder),
             asr_decoder: parking_lot::Mutex::new(decoder),
             aligner,
             cancel: Arc::new(AtomicBool::new(false)),
+            model_dir: asr_model_dir.to_string(),
+            decoder_file,
+            encoder_ep,
+            decoder_backend,
+            decoder_offload,
         })
     }
 

@@ -78,6 +78,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PipelineConfig dco_decode_box_autoadd_pipeline_config(dynamic raw);
 
   @protected
+  QwenRuntimeStatus dco_decode_box_autoadd_qwen_runtime_status(dynamic raw);
+
+  @protected
   QwenWarmupConfig dco_decode_box_autoadd_qwen_warmup_config(dynamic raw);
 
   @protected
@@ -158,6 +161,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int? dco_decode_opt_box_autoadd_i_32(dynamic raw);
 
   @protected
+  QwenRuntimeStatus? dco_decode_opt_box_autoadd_qwen_runtime_status(
+    dynamic raw,
+  );
+
+  @protected
   BigInt? dco_decode_opt_box_autoadd_usize(dynamic raw);
 
   @protected
@@ -165,6 +173,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   QwenHardwareInfo dco_decode_qwen_hardware_info(dynamic raw);
+
+  @protected
+  QwenRuntimeStatus dco_decode_qwen_runtime_status(dynamic raw);
 
   @protected
   QwenWarmupConfig dco_decode_qwen_warmup_config(dynamic raw);
@@ -246,6 +257,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PipelineConfig sse_decode_box_autoadd_pipeline_config(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  QwenRuntimeStatus sse_decode_box_autoadd_qwen_runtime_status(
     SseDeserializer deserializer,
   );
 
@@ -348,6 +364,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   int? sse_decode_opt_box_autoadd_i_32(SseDeserializer deserializer);
 
   @protected
+  QwenRuntimeStatus? sse_decode_opt_box_autoadd_qwen_runtime_status(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   BigInt? sse_decode_opt_box_autoadd_usize(SseDeserializer deserializer);
 
   @protected
@@ -355,6 +376,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   QwenHardwareInfo sse_decode_qwen_hardware_info(SseDeserializer deserializer);
+
+  @protected
+  QwenRuntimeStatus sse_decode_qwen_runtime_status(
+    SseDeserializer deserializer,
+  );
 
   @protected
   QwenWarmupConfig sse_decode_qwen_warmup_config(SseDeserializer deserializer);
@@ -455,6 +481,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_pipeline_config(
     PipelineConfig self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_qwen_runtime_status(
+    QwenRuntimeStatus self,
     SseSerializer serializer,
   );
 
@@ -582,6 +614,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_box_autoadd_i_32(int? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_box_autoadd_qwen_runtime_status(
+    QwenRuntimeStatus? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_usize(BigInt? self, SseSerializer serializer);
 
   @protected
@@ -593,6 +631,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_qwen_hardware_info(
     QwenHardwareInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_qwen_runtime_status(
+    QwenRuntimeStatus self,
     SseSerializer serializer,
   );
 

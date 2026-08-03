@@ -10,12 +10,16 @@ import 'silero_vad.dart';
 
 // These functions are ignored because they are not marked as `pub`: `add_perf_record`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_media_duration_secs`, `get_physical_pcore_mask`, `is_qwen_model_dir`, `join`, `lock_high_priority`, `parse_duration_str`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_qwen_worker`, `spawn_vad_worker`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AsrTask`, `EncodedTask`, `FfmpegPumpHandle`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `eq`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `get_or_create_qwen_runtime`
 // These functions are ignored (category: IgnoreBecauseNotAllowedOwner): `add`
 
 void setRustPerfLogging({required bool enable}) => RustLib.instance.api
     .crateApiStreamPipelineSetRustPerfLogging(enable: enable);
+
+/// 查询当前缓存的 Qwen 运行时状态 (模型/encoder/decoder 实际加载位置)。
+Future<QwenRuntimeStatus?> getQwenRuntimeStatus() =>
+    RustLib.instance.api.crateApiStreamPipelineGetQwenRuntimeStatus();
 
 void unloadQwenRuntime() =>
     RustLib.instance.api.crateApiStreamPipelineUnloadQwenRuntime();
@@ -155,6 +159,51 @@ class PipelineConfig {
           vadMinSpeechMs == other.vadMinSpeechMs &&
           vadMinSilenceMs == other.vadMinSilenceMs &&
           selectedAudioTrack == other.selectedAudioTrack;
+}
+
+/// 当前缓存的 Qwen 运行时状态 (供 UI 显示模型实际加载在哪)。
+class QwenRuntimeStatus {
+  /// 模型目录
+  final String modelDir;
+
+  /// decoder GGUF 文件名 (量化信息)
+  final String decoderFile;
+
+  /// encoder 实际执行提供程序 ("CUDA" / "DirectML" / "CPU")
+  final String encoderEp;
+
+  /// decoder 实际后端 ("CUDA" / "Vulkan" / "CPU")
+  final String decoderBackend;
+
+  /// decoder offload 状态 ("GPU (N/N layers)" / "CPU")
+  final String decoderOffload;
+
+  const QwenRuntimeStatus({
+    required this.modelDir,
+    required this.decoderFile,
+    required this.encoderEp,
+    required this.decoderBackend,
+    required this.decoderOffload,
+  });
+
+  @override
+  int get hashCode =>
+      modelDir.hashCode ^
+      decoderFile.hashCode ^
+      encoderEp.hashCode ^
+      decoderBackend.hashCode ^
+      decoderOffload.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is QwenRuntimeStatus &&
+          runtimeType == other.runtimeType &&
+          modelDir == other.modelDir &&
+          decoderFile == other.decoderFile &&
+          encoderEp == other.encoderEp &&
+          decoderBackend == other.decoderBackend &&
+          decoderOffload == other.decoderOffload;
 }
 
 enum TimestampMode { fast, precise }

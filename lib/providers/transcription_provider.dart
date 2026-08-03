@@ -166,6 +166,20 @@ class TranscriptionProvider with ChangeNotifier {
     return 'decoder.$_selectedQuant.gguf';
   }
 
+  /// 当前 Qwen 运行时实际加载状态 (模型/encoder/decoder 后端)
+  rust_stream.QwenRuntimeStatus? _qwenRuntimeStatus;
+  rust_stream.QwenRuntimeStatus? get qwenRuntimeStatus => _qwenRuntimeStatus;
+
+  /// 查询 Rust 侧当前缓存的运行时状态
+  Future<void> refreshQwenRuntimeStatus() async {
+    try {
+      _qwenRuntimeStatus = await rust_stream.getQwenRuntimeStatus();
+      _safeNotifyListeners();
+    } catch (e) {
+      debugPrint('[TranscriptionProvider] getQwenRuntimeStatus error: $e');
+    }
+  }
+
   String _selectedLanguage = 'auto';
   String get selectedLanguage => _selectedLanguage;
 
@@ -188,6 +202,20 @@ class TranscriptionProvider with ChangeNotifier {
 
   List<rust_whisper.VulkanDeviceInfo> _vulkanDevices = [];
   List<rust_whisper.VulkanDeviceInfo> get vulkanDevices => _vulkanDevices;
+
+  /// 获取当前活跃的 GPU 加速后端技术名称 ("CUDA" / "Vulkan")
+  String get gpuTechnologyName {
+    if (_vulkanDevices.any((d) => d.name.toUpperCase().contains('CUDA'))) {
+      return 'CUDA';
+    }
+    if (_qwenRuntimeStatus != null) {
+      if (_qwenRuntimeStatus!.decoderBackend.toUpperCase().contains('CUDA') ||
+          _qwenRuntimeStatus!.encoderEp.toUpperCase().contains('CUDA')) {
+        return 'CUDA';
+      }
+    }
+    return 'Vulkan';
+  }
 
   // VAD 配置
   bool _vadEnabled = true;
@@ -466,6 +494,8 @@ class TranscriptionProvider with ChangeNotifier {
     notifyListeners();
     _preloadWhisperContext();
     _warmupMirrorSpeed();
+    // 模型异步预加载完成后刷新实际后端状态 (encoder/decoder 实际加载位置)
+    Future.delayed(const Duration(seconds: 4), () => refreshQwenRuntimeStatus());
   }
 
   Future<void> _saveSelectedModelPref(String modelKey) async {
@@ -717,6 +747,8 @@ class TranscriptionProvider with ChangeNotifier {
     _saveSelectedModelPref('$baseId|$_selectedQuant');
     _safeNotifyListeners();
     _preloadWhisperContext();
+    // 模型加载是异步的，稍后刷新实际后端状态
+    Future.delayed(const Duration(seconds: 3), () => refreshQwenRuntimeStatus());
   }
 
   void setSelectedQuant(String quantId) {
@@ -727,6 +759,7 @@ class TranscriptionProvider with ChangeNotifier {
     }
     _safeNotifyListeners();
     _preloadWhisperContext();
+    Future.delayed(const Duration(seconds: 3), () => refreshQwenRuntimeStatus());
   }
 
   void setSelectedLanguage(String langCode) {

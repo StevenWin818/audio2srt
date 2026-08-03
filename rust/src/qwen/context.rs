@@ -50,6 +50,19 @@ impl QwenContextCache {
             drop(old_runtime);
         }
     }
+
+    /// 当前缓存的运行时状态 (模型目录 / decoder 文件 / encoder EP / decoder 后端 / offload)
+    pub fn runtime_status(&self) -> Option<(String, String, String, String, String)> {
+        self.runtime.as_ref().map(|r| {
+            (
+                r.model_dir.clone(),
+                r.decoder_file.clone(),
+                r.encoder_ep.clone(),
+                r.decoder_backend.clone(),
+                r.decoder_offload.clone(),
+            )
+        })
+    }
 }
 
 pub static GLOBAL_QWEN_CACHE: once_cell::sync::Lazy<Mutex<QwenContextCache>> =

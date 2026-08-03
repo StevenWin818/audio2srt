@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -196990829;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1988683751;
 
 // Section: executor
 
@@ -415,6 +415,40 @@ fn wire__crate__api__qwen__get_qwen_runtime_info_impl(
             move |context| {
                 transform_result_sse::<_, ()>((move || {
                     let output_ok = Result::<_, ()>::Ok(crate::api::qwen::get_qwen_runtime_info())?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__stream_pipeline__get_qwen_runtime_status_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_qwen_runtime_status",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok(
+                        crate::api::stream_pipeline::get_qwen_runtime_status(),
+                    )?;
                     Ok(output_ok)
                 })())
             }
@@ -1471,6 +1505,19 @@ impl SseDecode for Option<i32> {
     }
 }
 
+impl SseDecode for Option<crate::api::stream_pipeline::QwenRuntimeStatus> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(
+                <crate::api::stream_pipeline::QwenRuntimeStatus>::sse_decode(deserializer),
+            );
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<usize> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1564,6 +1611,24 @@ impl SseDecode for crate::qwen::backend::QwenHardwareInfo {
             devices: var_devices,
             recommended_encoder_backend: var_recommendedEncoderBackend,
             recommended_decoder_backend: var_recommendedDecoderBackend,
+        };
+    }
+}
+
+impl SseDecode for crate::api::stream_pipeline::QwenRuntimeStatus {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_modelDir = <String>::sse_decode(deserializer);
+        let mut var_decoderFile = <String>::sse_decode(deserializer);
+        let mut var_encoderEp = <String>::sse_decode(deserializer);
+        let mut var_decoderBackend = <String>::sse_decode(deserializer);
+        let mut var_decoderOffload = <String>::sse_decode(deserializer);
+        return crate::api::stream_pipeline::QwenRuntimeStatus {
+            model_dir: var_modelDir,
+            decoder_file: var_decoderFile,
+            encoder_ep: var_encoderEp,
+            decoder_backend: var_decoderBackend,
+            decoder_offload: var_decoderOffload,
         };
     }
 }
@@ -1776,53 +1841,59 @@ fn pde_ffi_dispatcher_primary_impl(
             data_len,
         ),
         11 => wire__crate__api__qwen__get_qwen_runtime_info_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__silero_vad__hardware_acceleration_info_default_impl(
+        12 => wire__crate__api__stream_pipeline__get_qwen_runtime_status_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        14 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__ffmpeg__mux_srt_to_video_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__ffmpeg__probe_audio_tracks_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__silero_vad__register_thread_as_pro_audio_impl(
+        14 => wire__crate__api__silero_vad__hardware_acceleration_info_default_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        20 => wire__crate__api__silero_vad__transcribe_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__stream_pipeline__transcribe_stream_impl(
+        15 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__ffmpeg__mux_srt_to_video_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__ffmpeg__probe_audio_tracks_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__silero_vad__register_thread_as_pro_audio_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        22 => wire__crate__api__silero_vad__transcription_segment_default_impl(
+        21 => wire__crate__api__silero_vad__transcribe_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__stream_pipeline__transcribe_stream_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        23 => wire__crate__api__qwen__unload_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__models__validate_qwen_model_impl(port, ptr, rust_vec_len, data_len),
-        26 => {
+        23 => wire__crate__api__silero_vad__transcription_segment_default_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        24 => wire__crate__api__qwen__unload_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__models__validate_qwen_model_impl(port, ptr, rust_vec_len, data_len),
+        27 => {
             wire__crate__api__qwen__validate_qwen_model_dir_impl(port, ptr, rust_vec_len, data_len)
         }
-        27 => wire__crate__api__silero_vad__vulkan_device_info_default_impl(
+        28 => wire__crate__api__silero_vad__vulkan_device_info_default_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        28 => wire__crate__api__qwen__warmup_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__silero_vad__warmup_whisper_context_impl(
+        29 => wire__crate__api__qwen__warmup_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__silero_vad__warmup_whisper_context_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        30 => {
+        31 => {
             wire__crate__api__silero_vad__word_item_default_impl(port, ptr, rust_vec_len, data_len)
         }
         _ => unreachable!(),
@@ -1842,16 +1913,16 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        12 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
-        16 => {
+        13 => wire__crate__api__simple__greet_impl(ptr, rust_vec_len, data_len),
+        17 => {
             wire__crate__api__stream_pipeline__preload_qwen_model_impl(ptr, rust_vec_len, data_len)
         }
-        19 => wire__crate__api__stream_pipeline__set_rust_perf_logging_impl(
+        20 => wire__crate__api__stream_pipeline__set_rust_perf_logging_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        24 => {
+        25 => {
             wire__crate__api__stream_pipeline__unload_qwen_runtime_impl(ptr, rust_vec_len, data_len)
         }
         _ => unreachable!(),
@@ -2103,6 +2174,30 @@ impl flutter_rust_bridge::IntoIntoDart<crate::qwen::backend::QwenHardwareInfo>
     for crate::qwen::backend::QwenHardwareInfo
 {
     fn into_into_dart(self) -> crate::qwen::backend::QwenHardwareInfo {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::stream_pipeline::QwenRuntimeStatus {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.model_dir.into_into_dart().into_dart(),
+            self.decoder_file.into_into_dart().into_dart(),
+            self.encoder_ep.into_into_dart().into_dart(),
+            self.decoder_backend.into_into_dart().into_dart(),
+            self.decoder_offload.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::stream_pipeline::QwenRuntimeStatus
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::stream_pipeline::QwenRuntimeStatus>
+    for crate::api::stream_pipeline::QwenRuntimeStatus
+{
+    fn into_into_dart(self) -> crate::api::stream_pipeline::QwenRuntimeStatus {
         self
     }
 }
@@ -2545,6 +2640,16 @@ impl SseEncode for Option<i32> {
     }
 }
 
+impl SseEncode for Option<crate::api::stream_pipeline::QwenRuntimeStatus> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::stream_pipeline::QwenRuntimeStatus>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<usize> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -2602,6 +2707,17 @@ impl SseEncode for crate::qwen::backend::QwenHardwareInfo {
             self.recommended_decoder_backend,
             serializer,
         );
+    }
+}
+
+impl SseEncode for crate::api::stream_pipeline::QwenRuntimeStatus {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.model_dir, serializer);
+        <String>::sse_encode(self.decoder_file, serializer);
+        <String>::sse_encode(self.encoder_ep, serializer);
+        <String>::sse_encode(self.decoder_backend, serializer);
+        <String>::sse_encode(self.decoder_offload, serializer);
     }
 }
 

@@ -85,6 +85,7 @@ class _SettingsViewState extends State<SettingsView> {
   // 硬件加速配置
   Widget _buildHardwareConfigCard(TranscriptionProvider provider) {
     final hasGpuActive = provider.useGpu && provider.vulkanDevices.isNotEmpty;
+    final gpuTech = provider.gpuTechnologyName;
 
     return Container(
       padding: const EdgeInsets.all(24),
@@ -108,13 +109,13 @@ class _SettingsViewState extends State<SettingsView> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'GPU 硬件加速 (Vulkan)',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                    Text(
+                      'GPU 硬件加速 ($gpuTech)',
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '使用 Vulkan 后端加速模型推理，建议开启。如果您的设备支持 Vulkan，能大幅加快推理速度，否则会自动安全回退至 CPU 推理。',
+                      '使用 $gpuTech 后端加速模型推理，建议开启。如果您的设备支持 $gpuTech，能大幅加快推理速度，否则会自动安全回退至 CPU 推理。',
                       style: TextStyle(fontSize: 12, color: Colors.grey[400]),
                     ),
                   ],
@@ -164,6 +165,130 @@ class _SettingsViewState extends State<SettingsView> {
               ],
             ),
           ),
+          const SizedBox(height: 8),
+          _buildRuntimeStatusCard(provider),
+        ],
+      ),
+    );
+  }
+
+  /// 当前模型实际加载位置 (模型参数-量化等级 / Encoder 加载 / Decoder 加载)
+  Widget _buildRuntimeStatusCard(TranscriptionProvider provider) {
+    final status = provider.qwenRuntimeStatus;
+
+    Widget row(String label, String value, {Color? valueColor}) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 95,
+              child: Text(
+                label,
+                style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                value,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: valueColor ?? Colors.white,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    String formatModelParamQuant(String modelDir, String decoderFile) {
+      final dirName = modelDir.split(RegExp(r'[\\/]')).last.toLowerCase();
+      String modelName = 'Qwen3-ASR';
+      if (dirName.contains('1.7b')) {
+        modelName = 'Qwen3-ASR 1.7B';
+      } else if (dirName.contains('0.6b')) {
+        modelName = 'Qwen3-ASR 0.6B';
+      } else if (dirName.isNotEmpty) {
+        modelName = dirName;
+      }
+
+      final fLower = decoderFile.toLowerCase();
+      String quant = 'F16';
+      if (fLower.contains('q6_k')) {
+        quant = 'Q6_K';
+      } else if (fLower.contains('q4_k_m')) {
+        quant = 'Q4_K_M';
+      } else if (fLower.contains('q4_0')) {
+        quant = 'Q4_0';
+      } else if (fLower.contains('q8_0')) {
+        quant = 'Q8_0';
+      } else if (fLower.contains('f16')) {
+        quant = 'F16';
+      } else if (decoderFile.isNotEmpty) {
+        quant = decoderFile.replaceAll('.gguf', '').replaceAll('decoder.', '').toUpperCase();
+      }
+
+      return '$modelName - $quant';
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0x05FFFFFF),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0x0FFFFFFF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                '模型加载状态',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => provider.refreshQwenRuntimeStatus(),
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(Icons.refresh, size: 15, color: Colors.grey[400]),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          if (status == null)
+            Text(
+              '模型尚未加载 (启动后自动预加载，或首次转写时加载)',
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+            )
+          else ...[
+            row(
+              '模型',
+              formatModelParamQuant(status.modelDir, status.decoderFile),
+            ),
+            row(
+              'Encoder 加载',
+              status.encoderEp,
+              valueColor: status.encoderEp == 'CPU'
+                  ? Colors.orangeAccent
+                  : const Color(0xFFA78BFA),
+            ),
+            row(
+              'Decoder 加载',
+              status.decoderBackend == 'CPU'
+                  ? 'CPU'
+                  : '${status.decoderBackend} (${status.decoderOffload})',
+              valueColor: status.decoderBackend == 'CPU'
+                  ? Colors.orangeAccent
+                  : const Color(0xFFA78BFA),
+            ),
+          ],
         ],
       ),
     );
