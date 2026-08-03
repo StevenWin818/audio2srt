@@ -29,6 +29,35 @@ pub fn set_rust_perf_logging(enable: bool) {
 static SHOULD_CANCEL: AtomicBool = AtomicBool::new(false);
 static ACTIVE_FFMPEG_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
 
+/// 当前缓存的 Qwen 运行时状态 (供 UI 显示模型实际加载在哪)。
+#[derive(Debug, Clone)]
+pub struct QwenRuntimeStatus {
+    /// 模型目录
+    pub model_dir: String,
+    /// decoder GGUF 文件名 (量化信息)
+    pub decoder_file: String,
+    /// encoder 实际执行提供程序 ("CUDA" / "DirectML" / "CPU")
+    pub encoder_ep: String,
+    /// decoder 实际后端 ("CUDA" / "Vulkan" / "CPU")
+    pub decoder_backend: String,
+    /// decoder offload 状态 ("GPU (N/N layers)" / "CPU")
+    pub decoder_offload: String,
+}
+
+/// 查询当前缓存的 Qwen 运行时状态 (模型/encoder/decoder 实际加载位置)。
+pub fn get_qwen_runtime_status() -> Option<QwenRuntimeStatus> {
+    let cache = crate::qwen::context::GLOBAL_QWEN_CACHE.lock();
+    let (model_dir, decoder_file, encoder_ep, decoder_backend, decoder_offload) =
+        cache.runtime_status()?;
+    Some(QwenRuntimeStatus {
+        model_dir,
+        decoder_file,
+        encoder_ep,
+        decoder_backend,
+        decoder_offload,
+    })
+}
+
 #[flutter_rust_bridge::frb(ignore)]
 pub fn get_or_create_qwen_runtime(
     qwen_dir: &str,

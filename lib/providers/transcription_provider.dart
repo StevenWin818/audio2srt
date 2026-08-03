@@ -166,6 +166,20 @@ class TranscriptionProvider with ChangeNotifier {
     return 'decoder.$_selectedQuant.gguf';
   }
 
+  /// 当前 Qwen 运行时实际加载状态 (模型/encoder/decoder 后端)
+  rust_stream.QwenRuntimeStatus? _qwenRuntimeStatus;
+  rust_stream.QwenRuntimeStatus? get qwenRuntimeStatus => _qwenRuntimeStatus;
+
+  /// 查询 Rust 侧当前缓存的运行时状态
+  Future<void> refreshQwenRuntimeStatus() async {
+    try {
+      _qwenRuntimeStatus = await rust_stream.getQwenRuntimeStatus();
+      _safeNotifyListeners();
+    } catch (e) {
+      debugPrint('[TranscriptionProvider] getQwenRuntimeStatus error: $e');
+    }
+  }
+
   String _selectedLanguage = 'auto';
   String get selectedLanguage => _selectedLanguage;
 
@@ -188,6 +202,20 @@ class TranscriptionProvider with ChangeNotifier {
 
   List<rust_whisper.VulkanDeviceInfo> _vulkanDevices = [];
   List<rust_whisper.VulkanDeviceInfo> get vulkanDevices => _vulkanDevices;
+
+  /// 获取当前活跃的 GPU 加速后端技术名称 ("CUDA" / "Vulkan")
+  String get gpuTechnologyName {
+    if (_vulkanDevices.any((d) => d.name.toUpperCase().contains('CUDA'))) {
+      return 'CUDA';
+    }
+    if (_qwenRuntimeStatus != null) {
+      if (_qwenRuntimeStatus!.decoderBackend.toUpperCase().contains('CUDA') ||
+          _qwenRuntimeStatus!.encoderEp.toUpperCase().contains('CUDA')) {
+        return 'CUDA';
+      }
+    }
+    return 'Vulkan';
+  }
 
   // VAD 配置
   bool _vadEnabled = true;
@@ -466,6 +494,8 @@ class TranscriptionProvider with ChangeNotifier {
     notifyListeners();
     _preloadWhisperContext();
     _warmupMirrorSpeed();
+    // 模型异步预加载完成后刷新实际后端状态 (encoder/decoder 实际加载位置)
+    Future.delayed(const Duration(seconds: 4), () => refreshQwenRuntimeStatus());
   }
 
   Future<void> _saveSelectedModelPref(String modelKey) async {
@@ -711,12 +741,33 @@ class TranscriptionProvider with ChangeNotifier {
     }
   }
 
-  void setSelectedModelBase(String baseId) {
+  Future<void> setSelectedModelBase(String baseId) async {
     if (_selectedModelBase == baseId) return;
     _selectedModelBase = baseId;
+
+    // 自动更正量化精度：若当前量化在目标 baseId 未下载，自动校准为该模型已下载的有效量化
+    final base = ModelService.baseById(baseId);
+    if (base != null) {
+      final isQuantValid = await _modelService.isQuantDownloaded(baseId, _selectedQuant);
+      if (!isQuantValid) {
+        if (await _modelService.isQuantDownloaded(baseId, 'f16')) {
+          _selectedQuant = 'f16';
+        } else {
+          for (final q in base.quants) {
+            if (await _modelService.isQuantDownloaded(baseId, q.id)) {
+              _selectedQuant = q.id;
+              break;
+            }
+          }
+        }
+      }
+    }
+
     _saveSelectedModelPref('$baseId|$_selectedQuant');
     _safeNotifyListeners();
     _preloadWhisperContext();
+    // 模型加载是异步的，稍后刷新实际后端状态
+    Future.delayed(const Duration(seconds: 2), () => refreshQwenRuntimeStatus());
   }
 
   void setSelectedQuant(String quantId) {
@@ -727,6 +778,7 @@ class TranscriptionProvider with ChangeNotifier {
     }
     _safeNotifyListeners();
     _preloadWhisperContext();
+    Future.delayed(const Duration(seconds: 2), () => refreshQwenRuntimeStatus());
   }
 
   void setSelectedLanguage(String langCode) {
@@ -751,11 +803,33 @@ class TranscriptionProvider with ChangeNotifier {
     _preloadTimer?.cancel();
     _preloadTimer = Timer(const Duration(milliseconds: 200), () async {
       final baseId = _selectedModelBase;
-      final quant = _selectedQuant;
+      var quant = _selectedQuant;
       if (baseId == null) return;
       try {
         final baseExists = await _modelService.isBaseDownloaded(baseId);
-        final quantExists = await _modelService.isQuantDownloaded(baseId, quant);
+        var quantExists = await _modelService.isQuantDownloaded(baseId, quant);
+
+        // 如果当前 quant 在新 baseId 上未下载，自动寻找并修复为有效量化
+        if (!quantExists) {
+          final base = ModelService.baseById(baseId);
+          if (base != null) {
+            if (await _modelService.isQuantDownloaded(baseId, 'f16')) {
+              quant = 'f16';
+              _selectedQuant = 'f16';
+              quantExists = true;
+            } else {
+              for (final q in base.quants) {
+                if (await _modelService.isQuantDownloaded(baseId, q.id)) {
+                  quant = q.id;
+                  _selectedQuant = q.id;
+                  quantExists = true;
+                  break;
+                }
+              }
+            }
+          }
+        }
+
         if (!baseExists || !quantExists) {
           _downloadedModels = await _modelService.getDownloadedBases();
           _safeNotifyListeners();

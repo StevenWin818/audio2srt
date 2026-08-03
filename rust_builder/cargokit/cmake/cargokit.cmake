@@ -48,14 +48,56 @@ function(apply_cargokit target manifest_dir lib_name any_symbol_name)
         "CARGOKIT_TOOL_TEMP_DIR=${CARGOKIT_TEMP_DIR}/tool"
         "CARGOKIT_ROOT_PROJECT_DIR=${CMAKE_SOURCE_DIR}"
         "CMAKE_GENERATOR_PLATFORM=" # 阻止 Ninja 下平台 x64 规格报错
-        # 注意：不要在这里使用分号分隔的 CUDA 架构列表 (如 $<...>:70;75;80;86;89;90>)。
-        "CMAKE_CUDA_ARCHITECTURES=native"
-        "CUDA_ARCHITECTURES=native"
+        # CUDA 架构: 不在此设置 (llama.cpp ggml-cuda 默认即多架构列表:
+        # native + 75-virtual;80-virtual;86-real;89-real;90-virtual;120a-real;121a-real,
+        # 分发兼容不同 GPU；Debug/Release 行为一致)。
         "CMAKE_GENERATOR_TOOLSET="
     )
 
     if(CMAKE_HOST_WIN32)
-        list(APPEND CARGOKIT_ENV "CARGO_TARGET_DIR=C:/t")
+        # 注意: 不要设置 CARGO_TARGET_DIR。cargokit build_tool 显式传
+        # `--target-dir <manifest>/target` (命令行参数优先于 env)，
+        # 系统 CMake 4.3.x 存在 CUDA native 探测回归 (llama.cpp GPU 探测失败:
+        # "CUDA_ARCHITECTURES is set to native, but no NVIDIA GPU was detected")。
+        # 仅当检测到回归版本时，才通过 CMAKE env 指定 VS 自带 cmake (无回归)；
+        # 非 Windows 或 cmake 版本正常时不做任何干预，保持跨平台。
+        set(_sys_cmake_ver "")
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}" --version
+            OUTPUT_VARIABLE _sys_cmake_ver
+            ERROR_QUIET
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+        set(_cmake_major "0")
+        set(_cmake_minor "0")
+        if(_sys_cmake_ver MATCHES "cmake version ([0-9]+)\\.([0-9]+)")
+            set(_cmake_major "${CMAKE_MATCH_1}")
+            set(_cmake_minor "${CMAKE_MATCH_2}")
+        endif()
+        set(_need_workaround OFF)
+        if(_cmake_major GREATER 4 OR (_cmake_major EQUAL 4 AND _cmake_minor GREATER_EQUAL 3))
+            set(_need_workaround ON)
+        endif()
+        if(_need_workaround)
+            set(CMAKE_ENV_CMAKE "")
+            foreach(_vs_root
+                "C:/Program Files (x86)/Microsoft Visual Studio/19/BuildTools"
+                "C:/Program Files/Microsoft Visual Studio/19/BuildTools"
+                "C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools"
+                "C:/Program Files/Microsoft Visual Studio/18/BuildTools"
+                "C:/Program Files/Microsoft Visual Studio/2022/Community"
+                "C:/Program Files/Microsoft Visual Studio/2022/Professional"
+                "C:/Program Files/Microsoft Visual Studio/2022/Enterprise"
+                "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools")
+                set(_cand "${_vs_root}/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe")
+                if(EXISTS "${_cand}")
+                    set(CMAKE_ENV_CMAKE "${_cand}")
+                    break()
+                endif()
+            endforeach()
+            if(NOT CMAKE_ENV_CMAKE STREQUAL "")
+                list(APPEND CARGOKIT_ENV "CMAKE=${CMAKE_ENV_CMAKE}")
+            endif()
+        endif()
     endif()
 
     if (WIN32)

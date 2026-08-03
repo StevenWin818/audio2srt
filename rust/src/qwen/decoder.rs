@@ -34,6 +34,10 @@ pub struct QwenDecoder {
     vocab: *const ll::llama_vocab,
     n_embd: i32,
     use_gpu: bool,
+    /// 实际生效后端 ("CUDA" / "Vulkan" / "CPU")
+    pub actual_backend: String,
+    /// offload 状态 ("GPU (N/N layers)" / "CPU")
+    pub offload_info: String,
 }
 
 unsafe impl Send for QwenDecoder {}
@@ -142,7 +146,6 @@ impl QwenDecoder {
         }
 
         let use_gpu = !matches!(backend, DecoderBackend::Cpu) && supports_offload;
-
         let path_c = CString::new(chosen_str.clone())
             .map_err(|e| QwenError::DecoderError(format!("path CString: {}", e)))?;
 
@@ -181,6 +184,30 @@ impl QwenDecoder {
             unsafe { ll::llama_vocab_n_tokens(vocab) }
         );
 
+        // 记录实际生效后端 (供 UI 显示): 按编译的 GGML 后端推断
+        let actual_backend = if use_gpu {
+            if cfg!(any(feature = "cuda", feature = "qwen-cuda")) {
+                "CUDA".to_string()
+            } else if cfg!(any(feature = "vulkan", feature = "qwen-vulkan")) {
+                "Vulkan".to_string()
+            } else {
+                "CPU".to_string()
+            }
+        } else {
+            "CPU".to_string()
+        };
+        let n_layer = unsafe { ll::llama_model_n_layer(model) };
+        // llama.cpp offload 计数 = repeating 层 + output 层 (n_layer + 1)
+        let offload_info = if use_gpu {
+            format!("GPU ({}/{} layers)", n_layer + 1, n_layer + 1)
+        } else {
+            "CPU".to_string()
+        };
+        println!(
+            "[decoder] actual_backend={} offload={}",
+            actual_backend, offload_info
+        );
+
         // 上下文参数
         let mut ctx_params = unsafe { ll::llama_context_default_params() };
         ctx_params.n_ctx = 4096;
@@ -210,6 +237,8 @@ impl QwenDecoder {
             vocab,
             n_embd,
             use_gpu,
+            actual_backend,
+            offload_info,
         })
     }
 

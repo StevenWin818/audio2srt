@@ -27,6 +27,8 @@ pub struct QwenEncoder {
     model_path: String,
     input_name: String,
     backend_path: String,
+    /// 实际生效的执行提供程序 ("CUDA" / "DirectML" / "CPU")
+    pub actual_ep: String,
     #[allow(dead_code)]
     layout: InputLayout,
 }
@@ -72,13 +74,26 @@ impl QwenEncoder {
         // 因此部署时已按 cuDNN 可用性选择对应的 onnxruntime 版本。
         let mut ep_ok = false;
         let mut ep_errors: Vec<String> = Vec::new();
+        let mut actual_ep = "CPU".to_string();
 
+        #[cfg(any(feature = "cuda", feature = "qwen-cuda"))]
         let cuda_usable = match backend {
             EncoderBackend::Cuda => true,
             EncoderBackend::DirectMl => false,
-            EncoderBackend::Auto => cudnn_available(),
+            EncoderBackend::Auto => {
+                #[cfg(target_os = "windows")]
+                {
+                    cudnn_available()
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    true
+                }
+            }
             EncoderBackend::Cpu => false,
         };
+        #[cfg(not(any(feature = "cuda", feature = "qwen-cuda")))]
+        let cuda_usable = false;
 
         // 1. CUDA 后端分支
         #[cfg(any(feature = "cuda", feature = "qwen-cuda"))]
@@ -89,6 +104,7 @@ impl QwenEncoder {
                     Ok(b) => {
                         builder = b;
                         ep_ok = true;
+                        actual_ep = "CUDA".to_string();
                         println!("[encoder] CUDA EP 注册成功 (onnxruntime 1.28 GPU / CUDA 13)");
                     }
                     Err(e) => {
@@ -111,6 +127,7 @@ impl QwenEncoder {
                     Ok(b) => {
                         builder = b;
                         ep_ok = true;
+                        actual_ep = "DirectML".to_string();
                         println!("[encoder] Windows DirectML EP 注册成功 (DX12, 无 cuDNN 依赖)");
                     }
                     Err(e) => {
@@ -172,6 +189,7 @@ impl QwenEncoder {
             model_path: chosen_str,
             input_name,
             backend_path: String::new(),
+            actual_ep,
             layout,
         })
     }
@@ -422,6 +440,8 @@ pub fn ort_build_info() -> String {
 
 /// 探测 cuDNN 9 安装目录 (CUDA 13.3 变体)。
 /// 常见安装位置: C:\Program Files\NVIDIA\CUDNN\v9.x\bin\13.3\x64
+/// 仅 Windows + CUDA 构建启用；非 Windows 的 CUDA 环境假定系统路径可直接加载。
+#[cfg(all(target_os = "windows", any(feature = "cuda", feature = "qwen-cuda")))]
 fn probe_cudnn_dir() -> Option<std::path::PathBuf> {
     let base = Path::new("C:/Program Files/NVIDIA/CUDNN");
     if let Ok(entries) = std::fs::read_dir(base) {
@@ -444,6 +464,7 @@ fn probe_cudnn_dir() -> Option<std::path::PathBuf> {
 }
 
 /// 探测 CUDA Toolkit bin\x64 目录 (cudart64_13.dll)
+#[cfg(all(target_os = "windows", any(feature = "cuda", feature = "qwen-cuda")))]
 fn probe_cuda_bin() -> Option<std::path::PathBuf> {
     let base = Path::new("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA");
     if let Ok(entries) = std::fs::read_dir(base) {
@@ -465,6 +486,7 @@ fn probe_cuda_bin() -> Option<std::path::PathBuf> {
 
 /// 判断 cuDNN 当前是否可加载 (决定 Auto 后端走 CUDA 还是 DirectML)。
 /// 检查 exe 目录 / PATH / 常见安装目录。
+#[cfg(all(target_os = "windows", any(feature = "cuda", feature = "qwen-cuda")))]
 fn cudnn_available() -> bool {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(dir) = exe_path.parent() {
@@ -486,10 +508,12 @@ fn cudnn_available() -> bool {
     false
 }
 
-/// 部署 CUDA 版 ONNX Runtime 到 exe 目录:
+/// 部署 CUDA 版 ONNX Runtime 核心 DLL 到 exe 目录:
 /// onnxruntime.dll + onnxruntime_providers_cuda.dll + providers_shared
-/// (来自项目内 bundled 目录)，以及 cuDNN 9 / cudart / cublas / cublasLt
-/// (来自系统安装，探测失败时跳过并告警)。
+/// (来自项目内 bundled 目录)。
+/// cuDNN/CUDA 运行时 DLL **不拷贝**：直接通过 AddDllDirectory 使用系统安装
+/// (Windows)，避免在程序目录重复存储 ~1.5GB 显卡 DLL；非 Windows 走系统路径。
+#[cfg(any(feature = "cuda", feature = "qwen-cuda"))]
 fn deploy_cuda_bundle(exe_dir: &Path) {
     let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("third_party")
@@ -500,9 +524,25 @@ fn deploy_cuda_bundle(exe_dir: &Path) {
         "onnxruntime_providers_shared.dll",
     ];
 
-    // 已部署完整 (核心 DLL + cuDNN) 则跳过，避免每次启动重复拷贝 1.5GB+
-    let already = core_files.iter().all(|f| exe_dir.join(f).exists())
-        && exe_dir.join("cudnn64_9.dll").exists();
+    // Windows: 每次启动都注册系统 cuDNN/CUDA 目录到 DLL 搜索路径 (不拷贝)，
+    // 并清理历史版本拷贝到 exe 目录的显卡 DLL (释放磁盘空间)。
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(dir) = probe_cudnn_dir() {
+            add_dll_directory(&dir);
+            println!("[encoder] Using cuDNN runtime from {} (no copy)", dir.display());
+        } else {
+            println!("[encoder] WARNING: cuDNN 9 install not found (C:\\Program Files\\NVIDIA\\CUDNN\\v9.x\\bin\\13.3\\x64). CUDA EP will fail!");
+        }
+        if let Some(dir) = probe_cuda_bin() {
+            add_dll_directory(&dir);
+            println!("[encoder] Using CUDA runtime from {} (no copy)", dir.display());
+        }
+        cleanup_legacy_cuda_copies(exe_dir);
+    }
+
+    // 已部署完整核心 DLL 则跳过，避免每次启动重复拷贝
+    let already = core_files.iter().all(|f| exe_dir.join(f).exists());
     if already {
         println!("[encoder] CUDA ONNX Runtime already deployed in exe_dir, skip copy");
         return;
@@ -524,41 +564,44 @@ fn deploy_cuda_bundle(exe_dir: &Path) {
             );
         }
     }
+}
 
-    // cuDNN 9 (CUDA 13.3 变体)
-    match probe_cudnn_dir() {
-        Some(dir) => {
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for e in entries.flatten() {
-                    let p = e.path();
-                    if p.extension().and_then(|x| x.to_str()) == Some("dll")
-                        && p.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with("cudnn")).unwrap_or(false)
-                    {
-                        let dst = exe_dir.join(p.file_name().unwrap());
-                        let _ = std::fs::remove_file(&dst);
-                        let _ = std::fs::copy(&p, &dst);
-                    }
+/// 清理旧版本部署时拷贝到 exe 目录的 cuDNN/CUDA 运行时 DLL (cudnn*.dll 等)。
+/// 这些 DLL 现在直接使用系统安装，不再需要本地副本。
+#[cfg(all(target_os = "windows", any(feature = "cuda", feature = "qwen-cuda")))]
+fn cleanup_legacy_cuda_copies(exe_dir: &Path) {
+    let legacy_prefixes = [
+        "cudnn", "cudart64_13", "cublas64_13", "cublasLt64_13",
+        "cudart64_12", "cublas64_12", "cublasLt64_12",
+    ];
+    if let Ok(entries) = std::fs::read_dir(exe_dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.ends_with(".dll")
+                && legacy_prefixes.iter().any(|pfx| name.starts_with(pfx))
+            {
+                match std::fs::remove_file(&p) {
+                    Ok(_) => println!("[encoder] Removed legacy copied DLL: {}", name),
+                    Err(_) => println!("[encoder] Skipped locked legacy DLL: {}", name),
                 }
-                println!("[encoder] Copied cuDNN runtime from {}", dir.display());
             }
         }
-        None => println!("[encoder] WARNING: cuDNN 9 install not found (C:\\Program Files\\NVIDIA\\CUDNN\\v9.x\\bin\\13.3\\x64). CUDA EP will fail!"),
     }
+}
 
-    // CUDA 运行时: cudart / cublas / cublasLt (PATH 可能已含，但拷贝到 exe 目录更稳妥)
-    match probe_cuda_bin() {
-        Some(dir) => {
-            for f in ["cudart64_13.dll", "cublas64_13.dll", "cublasLt64_13.dll"] {
-                let src = dir.join(f);
-                if src.exists() {
-                    let dst = exe_dir.join(f);
-                    let _ = std::fs::remove_file(&dst);
-                    let _ = std::fs::copy(&src, &dst);
-                }
-            }
-            println!("[encoder] Copied CUDA runtime DLLs from {}", dir.display());
-        }
-        None => println!("[encoder] WARNING: CUDA 13 toolkit bin not found; cudart/cublas must be on PATH"),
+/// 把目录加入进程 DLL 搜索路径 (LoadLibrary 无需拷贝即可找到系统安装的显卡 DLL)。
+#[cfg(target_os = "windows")]
+fn add_dll_directory(path: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::LibraryLoader::{
+        AddDllDirectory, SetDefaultDllDirectories, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+    };
+    unsafe {
+        // 必须先启用默认搜索标志，AddDllDirectory 添加的目录才会被普通 LoadLibrary 搜索
+        SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        AddDllDirectory(wide.as_ptr());
     }
 }
 
@@ -589,19 +632,32 @@ fn ensure_onnxruntime_loaded(backend: EncoderBackend) {
                 let want_cuda = match backend {
                     EncoderBackend::Cuda => true,
                     EncoderBackend::DirectMl => false,
-                    EncoderBackend::Auto => cudnn_available(),
+                    EncoderBackend::Auto => {
+                        #[cfg(target_os = "windows")]
+                        {
+                            cudnn_available()
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            true
+                        }
+                    }
                     EncoderBackend::Cpu => false,
                 };
                 println!(
-                    "[encoder] backend={:?} want_cuda={} cudnn_available={}",
-                    backend,
-                    want_cuda,
-                    cudnn_available()
+                    "[encoder] backend={:?} want_cuda={}",
+                    backend, want_cuda
                 );
 
+                #[cfg(any(feature = "cuda", feature = "qwen-cuda"))]
                 if want_cuda {
                     deploy_cuda_bundle(&exe_dir);
-                } else {
+                }
+                #[cfg(not(any(feature = "cuda", feature = "qwen-cuda")))]
+                if want_cuda {
+                    println!("[encoder] cuda feature not enabled; skip CUDA bundle deploy");
+                }
+                if !want_cuda {
                     // DirectML / CPU: 部署项目内捆绑的 DirectML 版
                     let bundled_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
                         .join("third_party")
