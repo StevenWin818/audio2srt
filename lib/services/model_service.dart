@@ -290,17 +290,27 @@ class ModelService {
     return File(p.join(path, 'decoder.$quantId.gguf'));
   }
 
+  /// encoder 是否有效: encoder.fp16.onnx (FP16 转换版) 或 encoder.onnx (FP32) 任一存在且 > 100MB
+  Future<bool> _encoderOk(String path) async {
+    for (final name in ['encoder.fp16.onnx', 'encoder.onnx', 'encoder.int4.onnx']) {
+      try {
+        final f = File(p.join(path, name));
+        if (await f.exists() && await f.length() > 100 * 1024 * 1024) {
+          return true;
+        }
+      } catch (_) {}
+    }
+    return false;
+  }
+
   /// 基础模型是否完整下载 (encoder + config 就绪)
   Future<bool> isBaseDownloaded(String baseId) async {
     final path = await getModelPath(baseId);
     final dir = Directory(path);
     if (!await dir.exists()) return false;
-    final encoder = File(p.join(path, 'encoder.onnx'));
     final config = File(p.join(path, 'config.json'));
     try {
-      return await encoder.exists() &&
-          await encoder.length() > 100 * 1024 * 1024 &&
-          await config.exists();
+      return await _encoderOk(path) && await config.exists();
     } catch (_) {
       return false;
     }
@@ -311,12 +321,9 @@ class ModelService {
     final path = await getModelPath(baseId);
     final dir = Directory(path);
     if (!await dir.exists()) return false;
-    final encoder = File(p.join(path, 'encoder.onnx'));
     final config = File(p.join(path, 'config.json'));
     try {
-      return !(await encoder.exists() &&
-          await encoder.length() > 100 * 1024 * 1024 &&
-          await config.exists());
+      return !(await _encoderOk(path) && await config.exists());
     } catch (_) {
       return true;
     }
@@ -488,8 +495,9 @@ class ModelService {
       filesToDownload.clear();
       for (final f in model.baseFiles) {
         final target = File(p.join(targetDir.path, f.filename));
+        // encoder 任一有效文件 (fp16 转换版或 fp32) 存在即跳过下载
         final ok = f.filename == 'encoder.onnx'
-            ? (await target.exists() && await target.length() > 100 * 1024 * 1024)
+            ? await _encoderOk(targetDir.path)
             : await target.exists();
         if (!ok) filesToDownload.add(f);
       }
@@ -650,21 +658,24 @@ class ModelService {
     }
   }
 
-  /// 修复基础模型: 只删除损坏的基础文件 (encoder.onnx 过小/损坏)，保留完好的量化 decoder。
+  /// 修复基础模型: 只删除损坏的基础文件 (encoder 过小/损坏)，保留完好的量化 decoder。
   /// config.json 缺失时无需删除 (下载时自动补齐)。返回是否清理了文件。
   Future<bool> repairBase(String baseId) async {
     final path = await getModelPath(baseId);
-    final encoder = File(p.join(path, 'encoder.onnx'));
-    try {
-      if (await encoder.exists() && await encoder.length() <= 100 * 1024 * 1024) {
-        await encoder.delete();
-        debugPrint('[ModelService] Repair: removed corrupted encoder.onnx in $baseId');
-        return true;
+    var cleaned = false;
+    for (final name in ['encoder.fp16.onnx', 'encoder.onnx', 'encoder.int4.onnx']) {
+      try {
+        final f = File(p.join(path, name));
+        if (await f.exists() && await f.length() <= 100 * 1024 * 1024) {
+          await f.delete();
+          debugPrint('[ModelService] Repair: removed corrupted $name in $baseId');
+          cleaned = true;
+        }
+      } catch (e) {
+        debugPrint('[ModelService] Repair encoder check error: $e');
       }
-    } catch (e) {
-      debugPrint('[ModelService] Repair encoder check error: $e');
     }
-    return false;
+    return cleaned;
   }
 
   Future<void> deleteAligner() async {

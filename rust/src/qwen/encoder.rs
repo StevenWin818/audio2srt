@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Debug, Clone)]
 pub struct EncoderOutput {
     pub embeddings: Vec<f32>,
-    pub samples_16k: Vec<f32>,
     pub shape: Vec<usize>,
     pub audio_duration_ms: u64,
 }
@@ -37,7 +36,9 @@ impl QwenEncoder {
         ensure_onnxruntime_loaded(backend);
 
         let dir = Path::new(model_dir);
+        // FP16 版优先 (体积减半、CUDA/DirectML 张量核加速)；FP32 原文件作回退
         let candidates = [
+            dir.join("encoder.fp16.onnx"),
             dir.join("asr_encoder_frontend.int4.onnx"),
             dir.join("encoder.int4.onnx"),
             dir.join("encoder.onnx"),
@@ -194,6 +195,7 @@ impl QwenEncoder {
         // Qwen3-ASR 的 encoder.onnx 输入名为 `mel`，声明 shape `[1, 128, time]`，
         // 期望外部预计算好的 log-mel 特征图
         // secondary 仅在 layout 不明或可同时支持两种输入时作为最佳排序使用。
+        let t_mel_start = std::time::Instant::now();
         let (primary, fallback) = match self.layout {
             InputLayout::Mel => {
                 let mel = AudioProcessor::log_mel(samples)
@@ -211,6 +213,8 @@ impl QwenEncoder {
                 (raw, mel)
             }
         };
+        let mel_ms = t_mel_start.elapsed().as_millis();
+        let t_run_start = std::time::Instant::now();
 
         // 排序：layout 匹配的特征优先；另一特征仅在主路径失败时作为兜底。
         let try_order: [Option<(Vec<f32>, Vec<i64>)>; 2] = [primary, fallback];
@@ -219,14 +223,16 @@ impl QwenEncoder {
         let mut embeddings = Vec::new();
         let mut shape_vec = Vec::new();
 
-        for entry in &try_order {
+        // 按值迭代: into_boxed_slice 可零拷贝转移所有权 (避免每次段编码的多余数据拷贝)
+        for entry in try_order {
             let Some((data, shape)) = entry else { continue };
             if data.is_empty() {
                 continue;
             }
+            let shape_for_log = shape.clone(); // 仅 3 个 i64，用于成功日志
             let tensor = match Tensor::<f32>::from_array((
-                shape.clone(),
-                data.clone().into_boxed_slice(),
+                shape,
+                data.into_boxed_slice(),
             )) {
                 Ok(t) => t,
                 Err(e) => {
@@ -239,7 +245,7 @@ impl QwenEncoder {
                 .run(inputs![self.input_name.as_str() => tensor])
             {
                 Ok(outputs) => {
-                    println!("[encoder] ONNX inference succeeded with input shape {:?}", shape);
+                    println!("[encoder] ONNX inference succeeded with input shape {:?}", shape_for_log);
                     let res = extract_embeddings(outputs);
                     match res {
                         Ok((e, s)) => {
@@ -270,6 +276,12 @@ impl QwenEncoder {
             return Err(QwenError::OnnxError(msg));
         }
 
+        let run_ms = t_run_start.elapsed().as_millis();
+        println!(
+            "[encoder] timing: mel={}ms session_run={}ms",
+            mel_ms, run_ms
+        );
+
         println!(
             "[ONNX Encoder] ONNX 前向传播计算成功完成: 音频时长 {:.2}s -> 生成声学 Embedding 形状 {:?}",
             samples.len() as f64 / SAMPLE_RATE as f64,
@@ -278,7 +290,6 @@ impl QwenEncoder {
 
         Ok(EncoderOutput {
             embeddings,
-            samples_16k: samples.to_vec(),
             shape: shape_vec,
             audio_duration_ms,
         })
@@ -565,6 +576,12 @@ fn deploy_cuda_bundle(exe_dir: &Path) {
 /// - Cpu: DirectML 版 (含 CPU EP) 兜底
 fn ensure_onnxruntime_loaded(backend: EncoderBackend) {
     ORT_INITIALIZED.get_or_init(|| {
+        // 诊断用: ORT_VERBOSE=1 时输出 onnxruntime 详细日志 (含 EP partition 信息)
+        if std::env::var("ORT_VERBOSE").is_ok() {
+            if let Ok(env) = ort::environment::get_environment() {
+                env.set_log_level(ort::logging::LogLevel::Verbose);
+            }
+        }
         if let Ok(exe_path) = std::env::current_exe() {
             if let Some(exe_dir) = exe_path.parent() {
                 println!("[encoder] Checking runtime DLLs in exe_dir: {:?}", exe_dir);

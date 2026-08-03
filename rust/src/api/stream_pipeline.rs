@@ -1283,7 +1283,8 @@ fn is_qwen_model_dir(dir_or_file: &str) -> bool {
         return true;
     }
     if path.is_dir() {
-        if path.join("encoder.onnx").exists()
+        if path.join("encoder.fp16.onnx").exists()
+            || path.join("encoder.onnx").exists()
             || path.join("encoder.int4.onnx").exists()
             || path.join("asr_encoder_frontend.int4.onnx").exists()
         {

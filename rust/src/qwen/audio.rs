@@ -13,6 +13,9 @@ struct MelPlan {
     fft: std::sync::Arc<dyn realfft::RealToComplex<f32>>,
     window: Vec<f32>,
     mel: Vec<f32>, // row-major [N_MELS x (N_FFT/2 + 1)]
+    /// 每个 mel 滤波器非零频点区间 [k_start, k_end] (闭区间)，
+    /// 利用三角滤波器的稀疏性避免全频点遍历
+    bands: Vec<(usize, usize)>,
 }
 
 static MEL_PLAN: OnceLock<MelPlan> = OnceLock::new();
@@ -46,10 +49,13 @@ fn mel_plan() -> &'static MelPlan {
             (0..n_freqs).map(|i| i as f64 * SAMPLE_RATE as f64 / N_FFT as f64).collect();
 
         let mut mel = vec![0.0f32; N_MELS * n_freqs];
+        let mut bands = vec![(0usize, 0usize); N_MELS];
         for m in 0..N_MELS {
             let f_left = hz_points[m];
             let f_center = hz_points[m + 1];
             let f_right = hz_points[m + 2];
+            let mut k_start = usize::MAX;
+            let mut k_end = 0usize;
             for (k, &f) in fft_freqs.iter().enumerate() {
                 let w = if f >= f_left && f <= f_center {
                     (f - f_left) / (f_center - f_left)
@@ -60,14 +66,26 @@ fn mel_plan() -> &'static MelPlan {
                 };
                 if w > 0.0 {
                     mel[m * n_freqs + k] = w as f32;
+                    if k < k_start {
+                        k_start = k;
+                    }
+                    if k > k_end {
+                        k_end = k;
+                    }
                 }
             }
+            bands[m] = if k_start <= k_end {
+                (k_start, k_end)
+            } else {
+                (0, 0)
+            };
         }
 
         MelPlan {
             fft,
             window,
             mel,
+            bands,
         }
     })
 }
@@ -141,10 +159,12 @@ impl AudioProcessor {
                 .map_err(|e| QwenError::AudioError(format!("FFT failed: {}", e)))?;
 
             // 功率谱 -> Whisper log-mel（以 10 为底的对数）
+            // 利用三角滤波器的稀疏性: 每个滤波器只遍历其非零频点区间
             for m in 0..N_MELS {
+                let (k_start, k_end) = plan.bands[m];
                 let mut acc = 0.0f32;
                 let row = m * n_freqs;
-                for k in 0..n_freqs {
+                for k in k_start..=k_end {
                     let c = spectrum[k];
                     let power = c.re * c.re + c.im * c.im;
                     acc += plan.mel[row + k] * power;

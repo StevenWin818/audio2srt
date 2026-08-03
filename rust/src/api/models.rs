@@ -63,7 +63,8 @@ pub fn validate_qwen_model(model_dir: String) -> Result<ModelInfo, String> {
     } else {
         // Simple fallback check without manifest.json
         let mut missing_files = Vec::new();
-        let enc_exists = dir.join("asr_encoder_frontend.int4.onnx").exists()
+        let enc_exists = dir.join("encoder.fp16.onnx").exists()
+            || dir.join("asr_encoder_frontend.int4.onnx").exists()
             || dir.join("encoder.onnx").exists();
         let decoder_names = [
             "decoder.bf16.gguf",
