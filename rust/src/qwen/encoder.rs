@@ -72,15 +72,12 @@ impl QwenEncoder {
         // 注意: CUDA EP 的 with_execution_providers 注册可能返回 Ok，
         // 但缺少 cuDNN/CUDA 运行时(如 CUDA 13 机器)时实际执行会静默回退 CPU，
         // 因此部署时已按 cuDNN 可用性选择对应的 onnxruntime 版本。
-        let mut ep_ok = false;
         let mut ep_errors: Vec<String> = Vec::new();
         let mut actual_ep = "CPU".to_string();
 
         #[cfg(any(feature = "cuda", feature = "qwen-cuda"))]
         let cuda_usable = match backend {
-            EncoderBackend::Cuda => true,
-            EncoderBackend::DirectMl => false,
-            EncoderBackend::Auto => {
+            EncoderBackend::Cuda | EncoderBackend::Auto => {
                 #[cfg(target_os = "windows")]
                 {
                     cudnn_available()
@@ -90,85 +87,75 @@ impl QwenEncoder {
                     true
                 }
             }
-            EncoderBackend::Cpu => false,
+            _ => false,
         };
         #[cfg(not(any(feature = "cuda", feature = "qwen-cuda")))]
         let cuda_usable = false;
 
-        // 1. CUDA 后端分支
+        let mut session_res: Option<Session> = None;
+
+        // 1. 尝试 CUDA EP (须具备 cuDNN 9 且驱动匹配; commit 实测验证, 失败自动回退)
         #[cfg(any(feature = "cuda", feature = "qwen-cuda"))]
-        {
-            if cuda_usable {
-                use ort::ep::CUDA;
-                match builder.clone().with_execution_providers([CUDA::default().build()]) {
-                    Ok(b) => {
-                        builder = b;
-                        ep_ok = true;
+        if cuda_usable {
+            use ort::ep::CUDA;
+            println!("[encoder] 正在尝试注册并构建 CUDA EP Session...");
+            let cuda_builder = builder.clone();
+            if let Ok(b) = cuda_builder.with_execution_providers([CUDA::default().build()]) {
+                match b.commit_from_file(&chosen_str) {
+                    Ok(sess) => {
+                        println!("[encoder] ✅ CUDA EP 模式 Session 构建成功 (onnxruntime GPU)");
                         actual_ep = "CUDA".to_string();
-                        println!("[encoder] CUDA EP 注册成功 (onnxruntime 1.28 GPU / CUDA 13)");
+                        session_res = Some(sess);
                     }
                     Err(e) => {
                         let msg = format!("{:?}", e);
-                        println!("[encoder] CUDA EP 注册失败 ({:?}); 降级处理", e);
+                        println!("[encoder] ⚠️ CUDA EP Session 构建失败 ({:?}); 准备回退降级", e);
                         ep_errors.push(format!("CUDA EP: {}", msg));
                     }
                 }
             }
         }
 
-        // 2. DirectML 后端分支 (Windows; Auto 且无 cuDNN 时, 或显式选择)
+        // 2. 降级尝试 DirectML EP (Windows 环境下无需 cuDNN，纯 DirectX 12 显卡硬件加速)
         #[cfg(all(target_os = "windows", any(feature = "vulkan", feature = "qwen-dml", feature = "qwen-dml-win")))]
-        {
-            let want_dml = matches!(backend, EncoderBackend::DirectMl)
-                || (matches!(backend, EncoderBackend::Auto) && !cuda_usable);
-            if want_dml {
-                use ort::ep::DirectML;
-                match builder.clone().with_execution_providers([DirectML::default().build()]) {
-                    Ok(b) => {
-                        builder = b;
-                        ep_ok = true;
+        if session_res.is_none() && (matches!(backend, EncoderBackend::Auto | EncoderBackend::DirectMl | EncoderBackend::Cuda)) {
+            use ort::ep::DirectML;
+            println!("[encoder] 正在尝试注册并构建 DirectML EP Session (DX12 GPU 加速, 无需 cuDNN)...");
+            let dml_builder = builder.clone();
+            if let Ok(b) = dml_builder.with_execution_providers([DirectML::default().build()]) {
+                match b.commit_from_file(&chosen_str) {
+                    Ok(sess) => {
+                        println!("[encoder] ✅ DirectML EP (DX12 GPU) 模式 Session 构建成功");
                         actual_ep = "DirectML".to_string();
-                        println!("[encoder] Windows DirectML EP 注册成功 (DX12, 无 cuDNN 依赖)");
+                        session_res = Some(sess);
                     }
                     Err(e) => {
                         let msg = format!("{:?}", e);
-                        println!("[encoder] DirectML EP 注册失败 ({:?}); 降级处理", e);
+                        println!("[encoder] ⚠️ DirectML EP Session 构建失败 ({:?}); 准备回退降级", e);
                         ep_errors.push(format!("DirectML EP: {}", msg));
                     }
                 }
             }
         }
 
-        if ep_ok {
-            println!("[encoder] GPU 加速执行提供程序已启用");
-        } else {
-            // ===== 明确的 CPU 回退警告 =====
-            println!("[encoder] ================================================================");
-            println!("[encoder] ⚠️  警告: encoder 未启用任何 GPU 执行提供程序, 将使用 CPU 推理!");
-            println!("[encoder]     这会导致编码速度显著下降 (约为 GPU 的 3~5 倍耗时)。");
-            if !ep_errors.is_empty() {
-                for e in &ep_errors {
-                    println!("[encoder]     注册失败详情: {}", e);
+        // 3. 终极降级：CPU 兜底保障 (确保模型 100% 成功装载)
+        let session = match session_res {
+            Some(sess) => sess,
+            None => {
+                println!("[encoder] ================================================================");
+                println!("[encoder] ⚠️  提示: 所有 GPU 执行提供程序不可用/注册失败，降级使用 CPU 推理!");
+                if !ep_errors.is_empty() {
+                    for e in &ep_errors {
+                        println!("[encoder]     未成功原因: {}", e);
+                    }
                 }
+                println!("[encoder] ================================================================");
+                actual_ep = "CPU".to_string();
+                builder
+                    .commit_from_file(&chosen_str)
+                    .map_err(|e| QwenError::OnnxError(format!("commit_from_file CPU fallback ({}): {}", chosen_str, e)))?
             }
-            match backend {
-                EncoderBackend::Cuda => println!("[encoder]     排查建议: 检查 cuDNN 9 (C:\\Program Files\\NVIDIA\\CUDNN\\v9.x\\bin\\13.3\\x64) 与 CUDA 13 运行时是否完整; 或改用 DirectML 后端 (设置中关闭 CUDA)。"),
-                EncoderBackend::DirectMl => println!("[encoder]     排查建议: 检查 DirectX 12 / DirectML.dll (系统组件) 是否可用。"),
-                EncoderBackend::Auto => println!("[encoder]     排查建议: 若安装了 cuDNN 9 请确认路径正确; 否则将自动使用 DirectML 或 CPU。"),
-                EncoderBackend::Cpu => println!("[encoder]     当前为显式 CPU 后端 (设置中未启用 GPU)。"),
-            }
-            println!("[encoder] ================================================================");
-        }
-
-        // 3. 非 Windows 平台下的 Vulkan 后端分支 (GGUF-Vulkan + ort-CPU)
-        #[cfg(all(not(target_os = "windows"), feature = "vulkan"))]
-        {
-            println!("[encoder] 非 Windows 平台 (Vulkan 方案): ONNX Runtime 使用 CPU，解码器使用 Vulkan");
-        }
-
-        let session = builder
-            .commit_from_file(&chosen_str)
-            .map_err(|e| QwenError::OnnxError(format!("commit_from_file({}): {}", chosen_str, e)))?;
+        };
 
         // 从输出节点名称/形状自动检测输入布局
         let (input_name, layout) = detect_input_layout(&session);
@@ -439,68 +426,282 @@ pub fn ort_build_info() -> String {
 }
 
 /// 探测 cuDNN 9 安装目录 (CUDA 13.3 变体)。
-/// 常见安装位置: C:\Program Files\NVIDIA\CUDNN\v9.x\bin\13.3\x64
 /// 仅 Windows + CUDA 构建启用；非 Windows 的 CUDA 环境假定系统路径可直接加载。
+/// 在给定目录及其子目录中搜索包含指定 prefix 前缀的 DLL 文件夹
+/// 从字符串提取 (major, minor) 版本号。
+/// 例如: "cudnn64_9.dll" -> (9, 0), "v9.24" -> (9, 24),
+///       "cudart64_13.dll" -> (13, 0), "v13.3" -> (13, 3)
+fn extract_version(s: &str) -> Option<(u32, u32)> {
+    let lower = s.to_lowercase();
+    let chars: Vec<char> = lower.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_ascii_digit() {
+            let mut j = i;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            let major_str: String = chars[i..j].iter().collect();
+            if let Ok(major) = major_str.parse::<u32>() {
+                if (8..=18).contains(&major) {
+                    // 检查是否紧跟 ".数字" 形式的 minor (如 "9.24")
+                    let mut minor = 0u32;
+                    if j + 1 < chars.len() && chars[j] == '.' && chars[j + 1].is_ascii_digit() {
+                        let mut k = j + 1;
+                        while k < chars.len() && chars[k].is_ascii_digit() {
+                            k += 1;
+                        }
+                        if let Ok(mi) = chars[j + 1..k].iter().collect::<String>().parse::<u32>() {
+                            minor = mi;
+                        }
+                    }
+                    return Some((major, minor));
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// 在目录树中搜索包含指定前缀 DLL 的文件夹，并按以下优先级排序：
+/// 1. CUDA 变体与系统 CUDA 主版本匹配 (preferred_cuda_major != 0 时启用，
+///    用于 cuDNN: bin/<cuda_ver>/x64 目录结构对应不同 CUDA 变体)
+/// 2. 与目标主版本 (preferred_major) 距离最近 (如 cuDNN 目标 9, cudart 目标 13)
+/// 3. 同主版本时 minor 大者优先 (最新受支持版本，如 cuDNN 9.24 > 9.10)
+#[cfg(all(target_os = "windows", any(feature = "cuda", feature = "qwen-cuda")))]
+fn find_best_dll_dir(
+    root: &Path,
+    dll_prefix: &str,
+    preferred_major: u32,
+    preferred_cuda_major: u32,
+) -> Option<std::path::PathBuf> {
+    if !root.exists() {
+        return None;
+    }
+    // (dir, 库主版本, 库 minor, 对应 CUDA 主版本变体, 0=未知)
+    let mut candidates: Vec<(std::path::PathBuf, u32, u32, u32)> = Vec::new();
+    let mut stack = vec![(root.to_path_buf(), 0)];
+
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > 5 {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            let mut subdirs = Vec::new();
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                        if name.to_lowercase().starts_with(dll_prefix) && name.to_lowercase().ends_with(".dll") {
+                            // 版本: DLL 名提供 major (如 cudnn64_9 -> 9)，
+                            // minor 从所在目录路径补充 (如 v9.24/bin/13.3/x64 -> minor 24)
+                            let ver = match extract_version(name) {
+                                Some((m, 0)) => {
+                                    dir.to_str()
+                                        .and_then(extract_version)
+                                        .filter(|(dm, _)| *dm == m)
+                                        .map(|(_, dmi)| (m, dmi))
+                                        .unwrap_or((m, 0))
+                                }
+                                v => v.unwrap_or((0, 0)),
+                            };
+                            // CUDA 变体: cuDNN 目录结构 bin/<cuda_ver>/x64 —— 父目录名即 CUDA 版本
+                            let cuda_major = dir
+                                .parent()
+                                .and_then(|p| p.file_name().and_then(|n| n.to_str()))
+                                .and_then(extract_version)
+                                .map(|(m, _)| m)
+                                .filter(|m| (11..=13).contains(m))
+                                .unwrap_or(0);
+                            candidates.push((dir.clone(), ver.0, ver.1, cuda_major));
+                            break;
+                        }
+                    }
+                } else if p.is_dir() {
+                    subdirs.push(p);
+                }
+            }
+            for sub in subdirs {
+                stack.push((sub, depth + 1));
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    // 排序: CUDA 变体匹配系统 -> minor 最新 -> major 距离 -> major 大
+    candidates.sort_by(|a, b| {
+        let match_a = if preferred_cuda_major != 0 && a.3 != 0 {
+            if a.3 == preferred_cuda_major { 0 } else { 1 }
+        } else {
+            0 // 未知变体不惩罚 (兼容无版本子目录的安装结构)
+        };
+        let match_b = if preferred_cuda_major != 0 && b.3 != 0 {
+            if b.3 == preferred_cuda_major { 0 } else { 1 }
+        } else {
+            0
+        };
+        let dist_a = (a.1 as i32 - preferred_major as i32).abs();
+        let dist_b = (b.1 as i32 - preferred_major as i32).abs();
+        match_a
+            .cmp(&match_b)
+            .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| dist_a.cmp(&dist_b))
+            .then_with(|| b.1.cmp(&a.1))
+    });
+
+    Some(candidates.remove(0).0)
+}
+
+/// 探测系统可用的 CUDA 主版本，用于匹配 cuDNN 的 CUDA 变体。
+/// 简化依据: 显卡驱动与 CUDA 工具包安装时均已做兼容性检查 (驱动向后兼容、
+/// 工具包安装器校验驱动版本)，因此这里只需区分 onnxruntime 1.28 支持的
+/// CUDA 13 / 12 (CUDA 11 不支持，无需探测)。cuDNN 是解压式安装无检查，
+/// 故按此主版本匹配其 bin/<cuda_ver>/x64 变体即可；最终由 CUDA EP
+/// commit 实测验证兜底 (失败自动回退 DirectML/CPU)。
+#[cfg(all(target_os = "windows", any(feature = "cuda", feature = "qwen-cuda")))]
+fn preferred_cuda_major() -> u32 {
+    let base = Path::new("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA");
+    for major in [13u32, 12] {
+        let dll = format!("cudart64_{}.dll", major);
+        if let Ok(entries) = std::fs::read_dir(base) {
+            if entries.flatten().any(|e| e.path().join("bin/x64").join(&dll).exists()) {
+                return major;
+            }
+        }
+        if let Ok(path) = std::env::var("PATH") {
+            if path
+                .split(';')
+                .any(|d| !d.is_empty() && Path::new(d).join(&dll).exists())
+            {
+                return major;
+            }
+        }
+    }
+    0
+}
+
+/// 自动探测系统的 cuDNN 安装目录。
+/// 优先选择与系统 CUDA 主版本匹配的变体 (bin/<cuda_ver>/x64)，
+/// 同匹配时选 cuDNN minor 最新 (如 9.24 > 9.10)。
 #[cfg(all(target_os = "windows", any(feature = "cuda", feature = "qwen-cuda")))]
 fn probe_cudnn_dir() -> Option<std::path::PathBuf> {
-    let base = Path::new("C:/Program Files/NVIDIA/CUDNN");
-    if let Ok(entries) = std::fs::read_dir(base) {
-        let mut dirs: Vec<std::path::PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect();
-        dirs.sort();
-        for d in dirs.into_iter().rev() {
-            for sub in ["bin/13.3/x64", "bin/13.0/x64"] {
-                let cand = d.join(sub);
-                if cand.join("cudnn64_9.dll").exists() {
-                    return Some(cand);
+    let cuda_major = preferred_cuda_major();
+
+    // 1. 优先读取显式环境变量 (CUDNN_PATH, CUDNN_ROOT, CUDNN_HOME)
+    for env_var in ["CUDNN_PATH", "CUDNN_ROOT", "CUDNN_HOME"] {
+        if let Ok(val) = std::env::var(env_var) {
+            let p = Path::new(&val);
+            if let Some(bin) = find_best_dll_dir(p, "cudnn64_", 9, cuda_major) {
+                return Some(bin);
+            }
+        }
+    }
+
+    // 2. 检查常见默认安装路径 (扫描 C:\Program Files 下的所有 CUDNN 版本目录并按匹配度排序)
+    let bases = [
+        Path::new("C:/Program Files/NVIDIA/CUDNN"),
+        Path::new("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDNN"),
+    ];
+
+    for base in bases {
+        if base.exists() {
+            if let Some(found) = find_best_dll_dir(base, "cudnn64_", 9, cuda_major) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// 自动探测 CUDA Toolkit 的 bin 目录 (优先系统可用最高 CUDA 主版本)
+#[cfg(all(target_os = "windows", any(feature = "cuda", feature = "qwen-cuda")))]
+fn probe_cuda_bin() -> Option<std::path::PathBuf> {
+    let cuda_major = preferred_cuda_major();
+
+    // 1. 优先读取 CUDA_PATH 环境变量
+    if let Ok(cuda_path) = std::env::var("CUDA_PATH") {
+        let p = Path::new(&cuda_path);
+        if let Some(bin) = find_best_dll_dir(p, "cudart64_", cuda_major.max(12), 0) {
+            return Some(bin);
+        }
+    }
+
+    // 2. 读取其他以 CUDA_PATH_ 开头的环境变量 (如 CUDA_PATH_V13_0, CUDA_PATH_V12_0 等)
+    let mut env_paths = Vec::new();
+    for (k, v) in std::env::vars() {
+        if k.starts_with("CUDA_PATH_") {
+            env_paths.push(v);
+        }
+    }
+    for val in env_paths {
+        let p = Path::new(&val);
+        if let Some(bin) = find_best_dll_dir(p, "cudart64_", cuda_major.max(12), 0) {
+            return Some(bin);
+        }
+    }
+
+    // 3. 探查常规安装主目录
+    let base = Path::new("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA");
+    if base.exists() {
+        if let Some(found) = find_best_dll_dir(base, "cudart64_", cuda_major.max(12), 0) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// 检查指定路径中是否存在 ONNX Runtime GPU 所必需的 cuDNN 9 核心动态库
+#[cfg(all(target_os = "windows", any(feature = "cuda", feature = "qwen-cuda")))]
+fn has_cudnn9_dll(dir: &Path) -> bool {
+    if !dir.exists() {
+        return false;
+    }
+    if dir.join("cudnn64_9.dll").exists() || dir.join("bin").join("cudnn64_9.dll").exists() {
+        return true;
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                    if name.to_lowercase().starts_with("cudnn64_9") && name.to_lowercase().ends_with(".dll") {
+                        return true;
+                    }
+                }
+            } else if p.is_dir() {
+                if p.join("cudnn64_9.dll").exists() {
+                    return true;
                 }
             }
         }
     }
-    None
+    false
 }
 
-/// 探测 CUDA Toolkit bin\x64 目录 (cudart64_13.dll)
-#[cfg(all(target_os = "windows", any(feature = "cuda", feature = "qwen-cuda")))]
-fn probe_cuda_bin() -> Option<std::path::PathBuf> {
-    let base = Path::new("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA");
-    if let Ok(entries) = std::fs::read_dir(base) {
-        let mut dirs: Vec<std::path::PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect();
-        dirs.sort();
-        for d in dirs.into_iter().rev() {
-            let cand = d.join("bin/x64");
-            if cand.join("cudart64_13.dll").exists() {
-                return Some(cand);
-            }
-        }
-    }
-    None
-}
-
-/// 判断 cuDNN 当前是否可加载 (决定 Auto 后端走 CUDA 还是 DirectML)。
-/// 检查 exe 目录 / PATH / 常见安装目录。
+/// 判断 cuDNN 当前是否可加载
 #[cfg(all(target_os = "windows", any(feature = "cuda", feature = "qwen-cuda")))]
 fn cudnn_available() -> bool {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(dir) = exe_path.parent() {
-            if dir.join("cudnn64_9.dll").exists() {
+            if has_cudnn9_dll(dir) {
                 return true;
             }
         }
     }
-    if probe_cudnn_dir().is_some() {
-        return true;
+    if let Some(dir) = probe_cudnn_dir() {
+        if has_cudnn9_dll(&dir) {
+            return true;
+        }
     }
     if let Ok(path) = std::env::var("PATH") {
         for d in path.split(';') {
-            if !d.is_empty() && Path::new(d).join("cudnn64_9.dll").exists() {
+            if !d.is_empty() && has_cudnn9_dll(Path::new(d)) {
                 return true;
             }
         }
@@ -510,9 +711,7 @@ fn cudnn_available() -> bool {
 
 /// 部署 CUDA 版 ONNX Runtime 核心 DLL 到 exe 目录:
 /// onnxruntime.dll + onnxruntime_providers_cuda.dll + providers_shared
-/// (来自项目内 bundled 目录)。
 /// cuDNN/CUDA 运行时 DLL **不拷贝**：直接通过 AddDllDirectory 使用系统安装
-/// (Windows)，避免在程序目录重复存储 ~1.5GB 显卡 DLL；非 Windows 走系统路径。
 #[cfg(any(feature = "cuda", feature = "qwen-cuda"))]
 fn deploy_cuda_bundle(exe_dir: &Path) {
     let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -524,7 +723,7 @@ fn deploy_cuda_bundle(exe_dir: &Path) {
         "onnxruntime_providers_shared.dll",
     ];
 
-    // Windows: 每次启动都注册系统 cuDNN/CUDA 目录到 DLL 搜索路径 (不拷贝)，
+    // Windows: 每次启动都注册系统 cuDNN/CUDA 目录到 DLL 搜索路径，
     // 并清理历史版本拷贝到 exe 目录的显卡 DLL (释放磁盘空间)。
     #[cfg(target_os = "windows")]
     {
@@ -532,7 +731,7 @@ fn deploy_cuda_bundle(exe_dir: &Path) {
             add_dll_directory(&dir);
             println!("[encoder] Using cuDNN runtime from {} (no copy)", dir.display());
         } else {
-            println!("[encoder] WARNING: cuDNN 9 install not found (C:\\Program Files\\NVIDIA\\CUDNN\\v9.x\\bin\\13.3\\x64). CUDA EP will fail!");
+            println!("[encoder] INFO: System cuDNN 9 installation not found; CUDA EP will fall back to DirectML/CPU.");
         }
         if let Some(dir) = probe_cuda_bin() {
             add_dll_directory(&dir);
@@ -750,6 +949,51 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn extract_version_parses_major_minor() {
+        assert_eq!(extract_version("cudnn64_9.dll"), Some((9, 0)));
+        assert_eq!(extract_version("v9.24"), Some((9, 24)));
+        assert_eq!(extract_version("cudart64_13.dll"), Some((13, 0)));
+        assert_eq!(extract_version("v13.3"), Some((13, 3)));
+        assert_eq!(extract_version("cublasLt64_13.dll"), Some((13, 0)));
+        assert_eq!(extract_version("cudnn_ops64_9.dll"), Some((9, 0)));
+        assert_eq!(extract_version("C:/Program Files/NVIDIA/CUDNN/v9.24/bin/13.3/x64"), Some((9, 24)));
+        assert_eq!(extract_version("no-version-here"), None);
+    }
+
+    /// 构造临时 cuDNN 安装目录树，验证 CUDA 变体匹配 + minor 最新排序
+    #[cfg(all(target_os = "windows", any(feature = "cuda", feature = "qwen-cuda")))]
+    #[test]
+    fn find_best_dll_dir_matches_cuda_variant() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!("cudnn_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        // v9.10 只有 CUDA 12 变体
+        fs::create_dir_all(tmp.join("v9.10/bin/12.9/x64")).unwrap();
+        fs::write(tmp.join("v9.10/bin/12.9/x64/cudnn64_9.dll"), b"x").unwrap();
+        // v9.24 有 CUDA 12 和 13 两个变体
+        fs::create_dir_all(tmp.join("v9.24/bin/13.3/x64")).unwrap();
+        fs::write(tmp.join("v9.24/bin/13.3/x64/cudnn64_9.dll"), b"x").unwrap();
+        fs::create_dir_all(tmp.join("v9.24/bin/12.9/x64")).unwrap();
+        fs::write(tmp.join("v9.24/bin/12.9/x64/cudnn64_9.dll"), b"x").unwrap();
+
+        // 系统 CUDA 13: 应选 v9.24 的 CUDA 13 变体 (匹配 + 最新)
+        let r = find_best_dll_dir(&tmp, "cudnn64_", 9, 13).unwrap();
+        assert!(r.to_string_lossy().contains("v9.24"), "got {}", r.display());
+        assert!(r.to_string_lossy().contains("13.3"), "got {}", r.display());
+
+        // 系统 CUDA 12: 应选 v9.24 的 CUDA 12 变体 (匹配 + minor 最新, 而非 v9.10)
+        let r2 = find_best_dll_dir(&tmp, "cudnn64_", 9, 12).unwrap();
+        assert!(r2.to_string_lossy().contains("v9.24"), "got {}", r2.display());
+        assert!(r2.to_string_lossy().contains("12.9"), "got {}", r2.display());
+
+        // 无 CUDA 匹配需求 (0): 按 minor 最新选 v9.24 (13.3 变体, 递归先序不保证, 但必为 v9.24)
+        let r3 = find_best_dll_dir(&tmp, "cudnn64_", 9, 0).unwrap();
+        assert!(r3.to_string_lossy().contains("v9.24"), "got {}", r3.display());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn encoder_loads_with_auto_backend_and_runs() {
