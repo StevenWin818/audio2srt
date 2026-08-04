@@ -1,9 +1,9 @@
 fn main() {
     // CUDA 架构编译分发策略已交由 cargokit.cmake 的 CARGOKIT_ENV 动态控制。
 
-    // 2. 当在 Windows 下启用 cuda 特性时，自动为 MSVC 链接器注入 CUDA Toolkit 的库搜索路径 (lib/x64)
     #[cfg(target_os = "windows")]
     {
+        // 1. 当启用 cuda 特性时，自动为 MSVC 链接器注入 CUDA Toolkit 的库搜索路径 (lib/x64)
         let is_cuda_enabled = std::env::var("CARGO_FEATURE_CUDA").is_ok() 
             || std::env::var("CARGO_FEATURE_QWEN_CUDA").is_ok();
         if is_cuda_enabled {
@@ -31,3 +31,4 @@ fn main() {
         }
     }
 }
+

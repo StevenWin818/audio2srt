@@ -63,6 +63,14 @@ impl QwenContextCache {
             )
         })
     }
+
+    /// 标记当前缓存的运行时取消 (encoder/decode 的 cancel 检查立即生效，
+    /// 加速取消后的线程退出；下次转写 cache HIT 时 reset_cancel 清除)
+    pub fn cancel_runtime(&self) {
+        if let Some(r) = &self.runtime {
+            r.cancel();
+        }
+    }
 }
 
 pub static GLOBAL_QWEN_CACHE: once_cell::sync::Lazy<Mutex<QwenContextCache>> =

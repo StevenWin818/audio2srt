@@ -38,13 +38,52 @@ impl QwenEncoder {
         ensure_onnxruntime_loaded(backend);
 
         let dir = Path::new(model_dir);
-        // FP16 版优先 (体积减半、CUDA/DirectML 张量核加速)；FP32 原文件作回退
-        let candidates = [
-            dir.join("encoder.fp16.onnx"),
-            dir.join("asr_encoder_frontend.int4.onnx"),
-            dir.join("encoder.int4.onnx"),
-            dir.join("encoder.onnx"),
-        ];
+        // 模型选择策略:
+        // - GPU 后端 (CUDA/DirectML 有效): FP16 优先 (张量核加速、体积减半)
+        // - CPU 后端: FP32 优先 (CPU EP 无 FP16 原生算子，onnxruntime 会为每个
+        //   算子插 Cast 转 FP32 再转回，纯开销; FP32 模型实测显著更快)
+        // Auto 按"最终很可能落到哪个 EP"决策: 有 CUDA 特性且 cuDNN 可用 -> GPU;
+        // 有 qwen-dml 特性 -> DirectML; 其余 (含 vulkan 特性) -> CPU。
+        let gpu_ep_possible = match backend {
+            EncoderBackend::Cuda | EncoderBackend::DirectMl => true,
+            EncoderBackend::Auto => {
+                #[cfg(any(feature = "cuda", feature = "qwen-cuda"))]
+                {
+                    #[cfg(target_os = "windows")]
+                    {
+                        if cudnn_available() {
+                            true
+                        } else {
+                            cfg!(any(feature = "qwen-dml", feature = "qwen-dml-win"))
+                        }
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        true
+                    }
+                }
+                #[cfg(not(any(feature = "cuda", feature = "qwen-cuda")))]
+                {
+                    cfg!(any(feature = "qwen-dml", feature = "qwen-dml-win"))
+                }
+            }
+            EncoderBackend::Cpu => false,
+        };
+        let candidates = if gpu_ep_possible {
+            [
+                dir.join("encoder.fp16.onnx"),
+                dir.join("asr_encoder_frontend.int4.onnx"),
+                dir.join("encoder.int4.onnx"),
+                dir.join("encoder.onnx"),
+            ]
+        } else {
+            [
+                dir.join("encoder.onnx"),
+                dir.join("asr_encoder_frontend.int4.onnx"),
+                dir.join("encoder.int4.onnx"),
+                dir.join("encoder.fp16.onnx"),
+            ]
+        };
         let chosen = candidates
             .iter()
             .find(|p| p.exists())
@@ -117,7 +156,9 @@ impl QwenEncoder {
         }
 
         // 2. 降级尝试 DirectML EP (Windows 环境下无需 cuDNN，纯 DirectX 12 显卡硬件加速)
-        #[cfg(all(target_os = "windows", any(feature = "vulkan", feature = "qwen-dml", feature = "qwen-dml-win")))]
+        //    仅 qwen-dml / qwen-dml-win 特性启用时编译 (vulkan 特性已不再捆绑 DML:
+        //    否则 ort 仅凭 load-dynamic 也会注册成功, 实际却静默跑 CPU, UI 显示失真)
+        #[cfg(all(target_os = "windows", any(feature = "qwen-dml", feature = "qwen-dml-win")))]
         if session_res.is_none() && (matches!(backend, EncoderBackend::Auto | EncoderBackend::DirectMl | EncoderBackend::Cuda)) {
             use ort::ep::DirectML;
             println!("[encoder] 正在尝试注册并构建 DirectML EP Session (DX12 GPU 加速, 无需 cuDNN)...");
@@ -170,7 +211,7 @@ impl QwenEncoder {
             }
         );
 
-        Ok(Self {
+        let mut encoder = Self {
             session,
             backend,
             model_path: chosen_str,
@@ -178,9 +219,25 @@ impl QwenEncoder {
             backend_path: String::new(),
             actual_ep,
             layout,
-        })
+        };
+        encoder.warmup();
+        Ok(encoder)
     }
 
+    /// 对 ONNX Session 进行零延迟预热：触发底层内存池分配、图优化与 SIMD/AVX 线程池初始化
+    pub fn warmup(&mut self) {
+        let t0 = std::time::Instant::now();
+        let dummy_samples = vec![0.0f32; 16000];
+        let cancel = AtomicBool::new(false);
+        let _ = self.encode(&dummy_samples, &cancel);
+        println!(
+            "[encoder] ONNX Session 预热完成: {}ms (EP: {})",
+            t0.elapsed().as_millis(),
+            self.actual_ep
+        );
+    }
+
+    /// 编码一段 16k 音频 (ORT Session run 需 &mut, 单实例串行)。
     pub fn encode(
         &mut self,
         samples: &[f32],
@@ -740,8 +797,15 @@ fn deploy_cuda_bundle(exe_dir: &Path) {
         cleanup_legacy_cuda_copies(exe_dir);
     }
 
-    // 已部署完整核心 DLL 则跳过，避免每次启动重复拷贝
-    let already = core_files.iter().all(|f| exe_dir.join(f).exists());
+    // 必须所有核心文件存在且 onnxruntime.dll 文件大小与 CUDA 版本完全匹配，才跳过拷贝
+    let cuda_dll_src = bundled.join("onnxruntime.dll");
+    let cuda_dll_dst = exe_dir.join("onnxruntime.dll");
+    let dll_matches = if cuda_dll_src.exists() && cuda_dll_dst.exists() {
+        cuda_dll_src.metadata().map(|m| m.len()).unwrap_or(0) == cuda_dll_dst.metadata().map(|m| m.len()).unwrap_or(1)
+    } else {
+        false
+    };
+    let already = dll_matches && core_files.iter().all(|f| exe_dir.join(f).exists());
     if already {
         println!("[encoder] CUDA ONNX Runtime already deployed in exe_dir, skip copy");
         return;
@@ -834,7 +898,14 @@ fn ensure_onnxruntime_loaded(backend: EncoderBackend) {
                     EncoderBackend::Auto => {
                         #[cfg(target_os = "windows")]
                         {
-                            cudnn_available()
+                            #[cfg(any(feature = "cuda", feature = "qwen-cuda"))]
+                            {
+                                cudnn_available()
+                            }
+                            #[cfg(not(any(feature = "cuda", feature = "qwen-cuda")))]
+                            {
+                                false
+                            }
                         }
                         #[cfg(not(target_os = "windows"))]
                         {
@@ -866,6 +937,8 @@ fn ensure_onnxruntime_loaded(backend: EncoderBackend) {
                     let target_shared = exe_dir.join("onnxruntime_providers_shared.dll");
                     if bundled_dll.exists() {
                         // 覆盖旧拷贝 (可能是 CPU 版)，保证使用 DML 版
+                        let target_cuda = exe_dir.join("onnxruntime_providers_cuda.dll");
+                        let _ = std::fs::remove_file(&target_cuda);
                         let _ = std::fs::remove_file(&target_dll);
                         if let Err(e) = std::fs::copy(&bundled_dll, &target_dll) {
                             println!("[encoder] Failed to copy bundled DirectML onnxruntime.dll: {}", e);

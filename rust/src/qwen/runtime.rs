@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 pub struct QwenRuntime {
+    /// encoder (单实例; 编码线程池各自加载独立 Session 以支持 CPU 并行)
     pub asr_encoder: parking_lot::Mutex<QwenEncoder>,
     pub asr_decoder: parking_lot::Mutex<QwenDecoder>,
     pub aligner: Option<parking_lot::Mutex<QwenAligner>>,
@@ -83,6 +84,25 @@ impl QwenRuntime {
     pub fn encode_segment(&self, samples_16k: &[f32]) -> Result<EncoderOutput, QwenError> {
         let mut enc = self.asr_encoder.lock();
         enc.encode(samples_16k, &self.cancel)
+    }
+
+    /// encoder 的模型目录 (供编码线程池加载独立 Session；QwenEncoder::load 接收目录)
+    pub fn encoder_model_path(&self) -> String {
+        let p = self.asr_encoder.lock().frontend_path().to_string();
+        std::path::Path::new(&p)
+            .parent()
+            .map(|d| d.to_string_lossy().into_owned())
+            .unwrap_or(p)
+    }
+
+    /// encoder 的请求后端 (供编码线程池使用相同 EP)
+    pub fn encoder_backend(&self) -> EncoderBackend {
+        self.asr_encoder.lock().backend()
+    }
+
+    /// encoder 实际生效的 EP ("CUDA" / "DirectML" / "CPU")
+    pub fn encoder_actual_ep(&self) -> String {
+        self.asr_encoder.lock().actual_ep.clone()
     }
 
     /// 仅执行 GGUF/llama.cpp 解码器前向传播。

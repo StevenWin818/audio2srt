@@ -55,7 +55,9 @@ impl QwenAligner {
                 builder = b;
             }
         }
-        #[cfg(all(target_os = "windows", any(feature = "vulkan", feature = "qwen-dml", feature = "qwen-dml-win")))]
+        // 仅 qwen-dml / qwen-dml-win 特性启用时编译 (vulkan 特性已不再捆绑 DML:
+        // 否则 ort 仅凭 load-dynamic 也会注册成功, 实际却静默跑 CPU)
+        #[cfg(all(target_os = "windows", any(feature = "qwen-dml", feature = "qwen-dml-win")))]
         {
             use ort::ep::DirectML;
             if let Ok(b) = builder.clone().with_execution_providers([DirectML::default().build()]) {
