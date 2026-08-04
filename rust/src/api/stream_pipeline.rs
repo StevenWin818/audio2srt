@@ -18,6 +18,7 @@ use crate::api::silero_vad::{
     TranscriptionSegment, TranscriptionEvent, WordItem,
     convert_chinese, register_thread_as_pro_audio,
 };
+use crate::api::subtitle_split::split_subtitles;
 
 static PERF_LOG_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -847,6 +848,11 @@ fn spawn_dfn_worker(
 /// 捕捉跨扫描边界结束的语音尾部, 防止短句丢失。
 const VAD_SCAN_OVERLAP: usize = 8000; // 0.5s @ 16kHz
 
+/// 语音块最小/最大时长 (秒): VAD 切出的短段先合并成 20~45s 大块,
+/// 整块交给 ASR 后由"标点+DP"分条器在块内拆分字幕。
+const BLOCK_MIN_SECONDS: i64 = 20;
+const BLOCK_MAX_SECONDS: i64 = 45;
+
 /// 对给定音频切片运行一次 Silero VAD 扫描。
 /// whisper.cpp 的 VAD 每次只处理传入的采样 (无内部累积), 可安全重复调用。
 fn vad_scan(
@@ -922,6 +928,30 @@ fn spawn_vad_worker(
         let mut vad_scan_cursor = 0usize;
         // 缓冲内已知最早的语音起点 (供 30s 保底强切时尽量保留语音不丢)
         let mut speech_anchor = 0usize;
+
+        // 语音块累积 (20~45s): VAD 切出的短段先并入大块, 达到下限后整块交给 ASR,
+        // 分条在块内完成 (标点+DP)。块越大 ASR 上下文越完整, 识别更准。
+        let mut block_samples: Vec<f32> = Vec::new();
+        let mut block_start_ms: i64 = 0;
+        let mut block_end_ms: i64 = 0;
+        let mut flush_block =
+            |samples: &mut Vec<f32>, start: &mut i64, end: &mut i64| -> bool {
+                if samples.is_empty() {
+                    return true;
+                }
+                let blk = std::mem::take(samples);
+                let (bs, be) = (*start, *end);
+                *start = 0;
+                *end = 0;
+                tx_asr_task
+                    .send(AsrTask {
+                        seq: ASR_TASK_SEQ.fetch_add(1, Ordering::Relaxed),
+                        samples: blk,
+                        start_ms: bs,
+                        end_ms: be,
+                    })
+                    .is_ok()
+            };
 
         while let Ok(mut clean_48k_batch) = rx_clean_48k.recv() {
             if SHOULD_CANCEL.load(Ordering::SeqCst) {
@@ -1046,8 +1076,19 @@ fn spawn_vad_worker(
                             );
 
                             if segment_samples.len() > 3200 {
-                                if tx_asr_task.send(AsrTask { seq: ASR_TASK_SEQ.fetch_add(1, Ordering::Relaxed), samples: segment_samples, start_ms, end_ms }).is_err() {
-                                    break;
+                                // 语音块累积: 短段先并入 20~45s 大块, 达到下限再整块发送
+                                if block_samples.is_empty() {
+                                    block_start_ms = start_ms;
+                                }
+                                block_samples.extend_from_slice(&segment_samples);
+                                block_end_ms = end_ms;
+                                let blk_ms = block_end_ms - block_start_ms;
+                                if blk_ms >= BLOCK_MIN_SECONDS * 1000
+                                    || block_samples.len() >= BLOCK_MAX_SECONDS as usize * 16000
+                                {
+                                    if !flush_block(&mut block_samples, &mut block_start_ms, &mut block_end_ms) {
+                                        break;
+                                    }
                                 }
                             }
                             
@@ -1097,8 +1138,14 @@ fn spawn_vad_worker(
                                         segment_samples.len() * 1000 / 16000,
                                         anchor
                                     );
-                                    
-                                    let _ = tx_asr_task.send(AsrTask { seq: ASR_TASK_SEQ.fetch_add(1, Ordering::Relaxed), samples: segment_samples, start_ms, end_ms });
+
+                                    // 强制切块必然 ≥ 30s: 并入块后立即整块发送
+                                    if block_samples.is_empty() {
+                                        block_start_ms = start_ms;
+                                    }
+                                    block_samples.extend_from_slice(&segment_samples);
+                                    block_end_ms = end_ms;
+                                    flush_block(&mut block_samples, &mut block_start_ms, &mut block_end_ms);
                                 } else {
                                     println!("[Rust] VAD 过滤: 成功丢弃 30 秒的非语音/纯音乐数据");
                                 }
@@ -1128,12 +1175,18 @@ fn spawn_vad_worker(
         }
 
         if !audio_buffer.is_empty() {
-            let seg_duration_ms = (audio_buffer.len() as f64 / 16000.0 * 1000.0) as i64;
-            let start_ms = current_offset_ms;
-            let end_ms = current_offset_ms + seg_duration_ms;
-            let _ = tx_asr_task.send(AsrTask { seq: ASR_TASK_SEQ.fetch_add(1, Ordering::Relaxed), samples: audio_buffer, start_ms, end_ms });
+            // 收尾: 剩余缓冲并入语音块一起发送 (不足 20s 也整块送出)
+            if block_samples.is_empty() {
+                block_start_ms = current_offset_ms;
+            }
+            block_samples.extend_from_slice(&audio_buffer);
+            block_end_ms = current_offset_ms + (audio_buffer.len() as i64 * 1000 / 16000);
+            flush_block(&mut block_samples, &mut block_start_ms, &mut block_end_ms);
+        } else {
+            flush_block(&mut block_samples, &mut block_start_ms, &mut block_end_ms);
         }
 
+        drop(flush_block);
         drop(tx_asr_task);
         Ok(())
     })
@@ -1483,6 +1536,7 @@ fn process_encoded_task(
         &final_text,
         task.start_ms as u64,
         task.end_ms as u64,
+        language,
     ) {
         Ok(align_res) => align_res
             .units
@@ -1497,18 +1551,27 @@ fn process_encoded_task(
         Err(_) => Vec::new(),
     };
 
-    let new_seg = TranscriptionSegment {
-        start_ms: task.start_ms,
-        end_ms: task.end_ms,
-        text: final_text,
-        timestamp_quality: "Qwen3-ForcedAligned".to_string(),
-        words: word_items,
+    // 分条: 标点+停顿生成候选边界, 动态规划生成 2~5 秒字幕 (最多两行, 偏好一行)。
+    // 对齐单元缺失时回退为整段一条字幕。
+    let sub_segments = split_subtitles(&word_items);
+    let segments: Vec<TranscriptionSegment> = if sub_segments.is_empty() {
+        vec![TranscriptionSegment {
+            start_ms: task.start_ms,
+            end_ms: task.end_ms,
+            text: final_text,
+            timestamp_quality: "Qwen3-ForcedAligned".to_string(),
+            words: word_items,
+        }]
+    } else {
+        sub_segments
     };
 
-    all_segments.push(new_seg.clone());
-    if sink.add(TranscriptionEvent::Segment(new_seg)).is_err() {
-        println!("[Rust] Sink closed. Aborting Qwen loop.");
-        return Ok(());
+    for seg in segments {
+        all_segments.push(seg.clone());
+        if sink.add(TranscriptionEvent::Segment(seg)).is_err() {
+            println!("[Rust] Sink closed. Aborting Qwen loop.");
+            return Ok(());
+        }
     }
 
     // Progress

@@ -5,3 +5,4 @@ pub mod qwen;
 pub mod silero_vad;
 pub mod simple;
 pub mod stream_pipeline;
+pub mod subtitle_split;

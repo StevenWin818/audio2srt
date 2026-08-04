@@ -39,7 +39,7 @@ impl QwenRuntime {
         let encoder = QwenEncoder::load(asr_model_dir, encoder_backend)?;
         let decoder = QwenDecoder::load(asr_model_dir, decoder_backend, decoder_file)?;
         let aligner = if let Some(align_dir) = aligner_model_dir {
-            match QwenAligner::load(align_dir) {
+            match QwenAligner::load(align_dir, decoder_backend) {
                 Ok(a) => Some(parking_lot::Mutex::new(a)),
                 Err(e) => {
                     println!("[runtime] aligner load failed: {:?}", e);
@@ -127,6 +127,7 @@ impl QwenRuntime {
         text: &str,
         segment_start_ms: u64,
         segment_end_ms: u64,
+        language: &Option<String>,
     ) -> Result<AlignmentResult, QwenError> {
         if let Some(aligner_mutex) = &self.aligner {
             let mut aligner = aligner_mutex.lock();
@@ -135,6 +136,7 @@ impl QwenRuntime {
                 text,
                 segment_start_ms,
                 segment_end_ms,
+                language.as_deref(),
                 &self.cancel,
             )
         } else {

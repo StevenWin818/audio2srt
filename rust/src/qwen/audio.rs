@@ -120,6 +120,24 @@ impl AudioProcessor {
     /// NeMo 风格的 log-mel 频谱图，带有可选的每话语 CMVN。
     /// 返回形状为 [N_MELS, T_frames] 的平面行优先 `Vec<f32>`。
     pub fn log_mel(samples: &[f32]) -> Result<(Vec<f32>, usize), QwenError> {
+        let (mut feats, n_frames) = Self::log_mel_impl(samples, true)?;
+
+        let min_f = feats.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+        let max_f2 = feats.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+        let mean_f: f32 = feats.iter().sum::<f32>() / feats.len() as f32;
+        println!("[audio] Mel features: n_frames={} min={:.4} max={:.4} mean={:.4}", n_frames, min_f, max_f2, mean_f);
+
+        Ok((feats, n_frames))
+    }
+
+    /// Qwen3-ForcedAligner 使用的原始 log-mel:
+    /// 与 log_mel 相同的 STFT/mel 滤波, 但**不做** [-1,1] 归一化
+    /// 返回形状 [N_MELS, T_frames]。
+    pub fn log_mel_raw(samples: &[f32]) -> Result<(Vec<f32>, usize), QwenError> {
+        Self::log_mel_impl(samples, false)
+    }
+
+    fn log_mel_impl(samples: &[f32], normalize: bool) -> Result<(Vec<f32>, usize), QwenError> {
         if samples.len() < N_FFT {
             return Err(QwenError::AudioError(format!(
                 "Audio too short for STFT (got {}, need {})",
@@ -174,20 +192,17 @@ impl AudioProcessor {
             }
         }
 
-        // 标准 Whisper Feature Extractor 归一化：
-        // 以整段频谱的最大值截断 log10 功率于 (max - 8.0)，随后映射至 [-1.0, 1.0]。
-        // (参考实现为相对截断 log_spec.max() - 8.0，而非固定的 -8.0)
-        let max_f = feats.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-        let floor = max_f - 8.0;
-        for v in feats.iter_mut() {
-            let clamped = (*v).max(floor);
-            *v = (clamped + 4.0) / 4.0;
+        if normalize {
+            // 标准 Whisper Feature Extractor 归一化：
+            // 以整段频谱的最大值截断 log10 功率于 (max - 8.0)，随后映射至 [-1.0, 1.0]。
+            // (参考实现为相对截断 log_spec.max() - 8.0，而非固定的 -8.0)
+            let max_f = feats.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+            let floor = max_f - 8.0;
+            for v in feats.iter_mut() {
+                let clamped = (*v).max(floor);
+                *v = (clamped + 4.0) / 4.0;
+            }
         }
-
-        let min_f = feats.iter().fold(f32::INFINITY, |a, &b| a.min(b));
-        let max_f2 = feats.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-        let mean_f: f32 = feats.iter().sum::<f32>() / feats.len() as f32;
-        println!("[audio] Mel features: n_frames={} min={:.4} max={:.4} mean={:.4}", n_frames, min_f, max_f2, mean_f);
 
         Ok((feats, n_frames))
     }

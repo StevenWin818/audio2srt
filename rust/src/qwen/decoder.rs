@@ -443,7 +443,8 @@ impl QwenDecoder {
         })
     }
 
-    fn tokenize_str(&self, text: &str) -> Result<Vec<ll::llama_token>, QwenError> {
+    /// 供 ForcedAligner 复用: 用当前 GGUF 词表对单个词做 BPE 编码。
+    pub fn tokenize_str(&self, text: &str) -> Result<Vec<ll::llama_token>, QwenError> {
         let text_c = CString::new(text)
             .map_err(|e| QwenError::DecoderError(format!("tokenize CString: {}", e)))?;
         let bytes = text.as_bytes();
