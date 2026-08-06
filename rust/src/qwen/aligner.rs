@@ -5,7 +5,7 @@ use llama_cpp_sys_2 as ll;
 use ort::session::Session;
 use ort::value::Tensor;
 use serde::{Deserialize, Serialize};
-use std::ffi::{c_char, CString};
+use std::ffi::CString;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -21,6 +21,23 @@ pub struct AlignedToken {
 pub struct AlignmentResult {
     pub units: Vec<AlignedToken>,
     pub elapsed_ms: u64,
+    /// 对齐质量: "ForcedAligned" (真实 GGUF 对齐) / "LinearFallback" (线性平分)
+    pub align_quality: String,
+}
+
+/// 拼接音频 -> 媒体时间轴的分段映射。
+/// VAD 切出的短段拼接成块时, 中间的静音被过滤, 拼接轴的局部时间
+/// 必须通过此映射还原到原视频时间轴。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct TimelineSpan {
+    /// 本段在拼接音频中的采样起点 (16k)
+    pub concat_start_sample: usize,
+    /// 本段在拼接音频中的采样终点 (16k)
+    pub concat_end_sample: usize,
+    /// 本段在媒体时间轴上的起点 (ms)
+    pub source_start_ms: i64,
+    /// 本段在媒体时间轴上的终点 (ms)
+    pub source_end_ms: i64,
 }
 
 /// 对齐器音频编码器参数 (与转换模型一致)
@@ -60,6 +77,16 @@ fn ensure_backend_init() {
         ll::llama_log_set(Some(llama_log_callback), std::ptr::null_mut());
         ll::llama_backend_init();
     });
+}
+
+/// 运行时探测是否有可用的 GPU 设备 (与 decoder 的判定一致)。
+/// 后端编译进 cdylib ≠ 运行时驱动可用; 无设备时 llama.cpp 会把 offload 层数归零,
+/// 模型实际跑在 CPU。此检查用于决定 GGUF 是否真正 offload。
+fn gpu_device_available() -> bool {
+    unsafe {
+        !ll::ggml_backend_dev_by_type(ll::GGML_BACKEND_DEVICE_TYPE_GPU).is_null()
+            || !ll::ggml_backend_dev_by_type(ll::GGML_BACKEND_DEVICE_TYPE_IGPU).is_null()
+    }
 }
 
 /// Qwen3-ForcedAligner-0.6B (GGUF 版) Rust 推理:
@@ -139,7 +166,9 @@ impl QwenAligner {
         let chosen_str = chosen.to_string_lossy().to_string();
 
         let supports_offload = unsafe { ll::llama_supports_gpu_offload() };
-        let use_gpu = !matches!(decoder_backend, DecoderBackend::Cpu) && supports_offload;
+        let use_gpu = !matches!(decoder_backend, DecoderBackend::Cpu)
+            && supports_offload
+            && gpu_device_available();
 
         let path_c = CString::new(chosen_str.clone())
             .map_err(|e| QwenError::DecoderError(format!("aligner path CString: {}", e)))?;
@@ -286,6 +315,7 @@ impl QwenAligner {
     }
 
     /// 真实强制对齐 (GGUF 路线)。ONNX/GGUF 缺失时回退线性字符平分。
+    /// `timeline` 把拼接音频的局部时间映射回媒体时间轴。
     pub fn align(
         &mut self,
         samples_16k: &[f32],
@@ -293,6 +323,7 @@ impl QwenAligner {
         segment_start_ms: u64,
         segment_end_ms: u64,
         _language: Option<&str>,
+        timeline: &[TimelineSpan],
         cancel: &AtomicBool,
     ) -> Result<AlignmentResult, QwenError> {
         if cancel.load(Ordering::Relaxed) {
@@ -304,6 +335,7 @@ impl QwenAligner {
             return Ok(AlignmentResult {
                 units: vec![],
                 elapsed_ms: 0,
+                align_quality: "ForcedAligned".into(),
             });
         }
 
@@ -311,21 +343,24 @@ impl QwenAligner {
             return Ok(AlignmentResult {
                 units: linear_align(trimmed, segment_start_ms, segment_end_ms),
                 elapsed_ms: 0,
+                align_quality: "LinearFallback".into(),
             });
         }
         if self.model.is_null() || self.context.is_null() || self.audio_start_id < 0 {
             return Ok(AlignmentResult {
                 units: linear_align(trimmed, segment_start_ms, segment_end_ms),
                 elapsed_ms: 0,
+                align_quality: "LinearFallback".into(),
             });
         }
 
-        // 1. 词表切分 (CJK 逐字, 拉丁按词)
-        let words = tokenize_for_align(trimmed);
+        // 1. 词表切分 (CJK 逐字, 拉丁按词; 日语/韩语逐字符回退)
+        let words = tokenize_for_align(trimmed, _language);
         if words.is_empty() {
             return Ok(AlignmentResult {
                 units: vec![],
                 elapsed_ms: 0,
+                align_quality: "ForcedAligned".into(),
             });
         }
 
@@ -334,13 +369,15 @@ impl QwenAligner {
             let frontend = self.frontend.as_mut().unwrap();
             let backend = self.backend.as_mut().unwrap();
 
-            // 2. mel (与 encoder 相同的归一化 log-mel; 对齐器帧数 = 采样数/160, 丢弃尾帧)
-            let (mel, _n_frames_log) = AudioProcessor::log_mel(samples_16k)?;
+            // 2. mel (与 encoder 相同的归一化 log-mel; 行步长取返回的实际帧数
+            //    = samples.len()/160 + 1, 有效列 = samples.len()/160)
+            let (mel, mel_stride) = AudioProcessor::log_mel(samples_16k)?;
             let n_frames = samples_16k.len() / 160;
             if n_frames == 0 {
                 return Ok(AlignmentResult {
                     units: vec![],
                     elapsed_ms: 0,
+                    align_quality: "ForcedAligned".into(),
                 });
             }
 
@@ -357,7 +394,7 @@ impl QwenAligner {
                 let base = c * CHUNK_FRAMES;
                 let mut chunk = vec![0.0f32; N_MELS * CHUNK_FRAMES];
                 for m in 0..N_MELS {
-                    let src = m * n_frames;
+                    let src = m * mel_stride;
                     let dst = m * CHUNK_FRAMES;
                     for t in 0..CHUNK_FRAMES {
                         let idx = base + t;
@@ -455,8 +492,7 @@ impl QwenAligner {
         let post_start = 1 + n_audio;
         self.submit_token_batch_logits(&post_ids, post_start, &ts_pos_in_post)?;
 
-        // 7. 读取时间戳 logits: argmax(logits[:4000]) × 80ms
-        let n_embd = self.n_embd as usize;
+        // 7. 读取时间戳 logits: argmax(logits[:4000]) × 80ms (只读前缀, 不复制整词表)
         let mut raw_ts: Vec<f64> = Vec::with_capacity(ts_pos_in_post.len());
         for &i in &ts_pos_in_post {
             let logits_ptr = unsafe { ll::llama_get_logits_ith(self.context, i as i32) };
@@ -465,10 +501,8 @@ impl QwenAligner {
                     "aligner: llama_get_logits_ith returned NULL".into(),
                 ));
             }
-            let logits =
-                unsafe { std::slice::from_raw_parts(logits_ptr, 152064).to_vec() };
-            let classes = logits.len().min(TIMESTAMP_CLASSES);
-            let argmax = (0..classes)
+            let logits = unsafe { std::slice::from_raw_parts(logits_ptr, TIMESTAMP_CLASSES) };
+            let argmax = (0..TIMESTAMP_CLASSES)
                 .max_by(|&a, &b| {
                     logits[a]
                         .partial_cmp(&logits[b])
@@ -478,16 +512,20 @@ impl QwenAligner {
             raw_ts.push(argmax as f64 * self.step_ms);
         }
 
-        // 8. LIS 修正 -> 逐词时间
+        // 8. LIS 修正 -> 逐词时间, 并通过 TimelineSpan 映射回媒体时间轴
         let fixed = fix_timestamp(&raw_ts);
         let mut items: Vec<AlignedToken> = words
             .iter()
             .enumerate()
-            .map(|(i, w)| AlignedToken {
-                text: w.clone(),
-                start_ms: fixed.get(i * 2).copied().unwrap_or(0) as u64,
-                end_ms: fixed.get(i * 2 + 1).copied().unwrap_or(0) as u64,
-                confidence: None,
+            .map(|(i, w)| {
+                let local_start = fixed.get(i * 2).copied().unwrap_or(0) as u64;
+                let local_end = fixed.get(i * 2 + 1).copied().unwrap_or(0) as u64;
+                AlignedToken {
+                    text: w.clone(),
+                    start_ms: map_to_media(timeline, local_start),
+                    end_ms: map_to_media(timeline, local_end),
+                    confidence: None,
+                }
             })
             .collect();
 
@@ -506,6 +544,7 @@ impl QwenAligner {
         Ok(AlignmentResult {
             units: items,
             elapsed_ms: start_time.elapsed().as_millis() as u64,
+            align_quality: "ForcedAligned".into(),
         })
     }
 
@@ -614,9 +653,11 @@ impl QwenAligner {
                 if !batch.pos.is_null() {
                     for i in 0..chunk_tokens {
                         let p = (start_pos + token_offset + i) as ll::llama_pos;
-                        for j in 0..N_POS_PER_EMBD {
+                        // M-RoPE 四轴布局与参考实现一致: T/H/W = 位置, E 轴 = 0
+                        for j in 0..3 {
                             *batch.pos.add(j * chunk_tokens + i) = p;
                         }
+                        *batch.pos.add(3 * chunk_tokens + i) = 0;
                     }
                 }
                 batch.n_tokens = chunk_tokens as i32;
@@ -642,6 +683,26 @@ fn feat_output_lengths(input_lengths: i64) -> i64 {
     ((feat - 1).div_euclid(2) + 1 - 1).div_euclid(2) + 1 + (input_lengths / 100) * TOKENS_PER_CHUNK as i64
 }
 
+/// 把拼接音频上的局部时间 (ms, 相对块起点) 映射回媒体时间轴。
+/// 时间落在某分段内时线性映射; 超出块范围时钳制到末段终点。
+fn map_to_media(timeline: &[TimelineSpan], local_ms: u64) -> u64 {
+    if timeline.is_empty() {
+        return local_ms;
+    }
+    let sample_pos = local_ms.saturating_mul(16);
+    for span in timeline {
+        if sample_pos < span.concat_end_sample as u64 {
+            let local_in_span = sample_pos.saturating_sub(span.concat_start_sample as u64);
+            let media = span.source_start_ms + (local_in_span * 1000 / 16000) as i64;
+            return media.clamp(span.source_start_ms, span.source_end_ms) as u64;
+        }
+    }
+    timeline
+        .last()
+        .map(|s| s.source_end_ms as u64)
+        .unwrap_or(local_ms)
+}
+
 fn is_kept_char(c: char) -> bool {
     if c == '\'' {
         return true;
@@ -660,8 +721,12 @@ fn is_cjk_char(c: char) -> bool {
         || (0xF900..=0xFAFF).contains(&code)
 }
 
-/// 通用分词: 按空白切词, 过滤非字母/数字, CJK 逐字拆出 (中英混排适用)
-fn tokenize_for_align(text: &str) -> Vec<String> {
+/// 通用分词: 按空白切词, 过滤非字母/数字, CJK 逐字拆出 (中英混排适用)。
+/// 日语/韩语: 官方使用 nagisa/soynlp 形态素分词, 无依赖时逐字符回退
+/// (与 HaujetZhao 参考实现的 ImportError 回退一致)。
+fn tokenize_for_align(text: &str, language: Option<&str>) -> Vec<String> {
+    let lang = language.unwrap_or("").to_lowercase();
+    let per_char = lang == "japanese" || lang == "korean";
     let mut tokens: Vec<String> = Vec::new();
     for seg in text.split_whitespace() {
         let cleaned: String = seg.chars().filter(|c| is_kept_char(*c)).collect();
@@ -670,7 +735,7 @@ fn tokenize_for_align(text: &str) -> Vec<String> {
         }
         let mut buf = String::new();
         for ch in cleaned.chars() {
-            if is_cjk_char(ch) {
+            if per_char || is_cjk_char(ch) {
                 if !buf.is_empty() {
                     tokens.push(std::mem::take(&mut buf));
                 }
@@ -900,7 +965,7 @@ mod tests {
     #[test]
     fn cjk_tokenization() {
         assert_eq!(
-            tokenize_for_align("今天你好 world"),
+            tokenize_for_align("今天你好 world", None),
             vec![
                 "今".to_string(),
                 "天".to_string(),
@@ -910,9 +975,40 @@ mod tests {
             ]
         );
         assert_eq!(
-            tokenize_for_align("Hello, world!"),
+            tokenize_for_align("Hello, world!", None),
             vec!["Hello".to_string(), "world".to_string()]
         );
+        // 日语逐字符 (无形态素分词依赖时的回退)
+        let ja = tokenize_for_align("こんにちは", Some("Japanese"));
+        assert_eq!(ja.len(), 5);
+    }
+
+    #[test]
+    fn timeline_mapping() {
+        use super::TimelineSpan;
+        // 语音 A 5s + 静音 8s + 语音 B 5s, 拼接轴只保留两段语音
+        let spans = vec![
+            TimelineSpan {
+                concat_start_sample: 0,
+                concat_end_sample: 80000,
+                source_start_ms: 0,
+                source_end_ms: 5000,
+            },
+            TimelineSpan {
+                concat_start_sample: 80000,
+                concat_end_sample: 160000,
+                source_start_ms: 13000,
+                source_end_ms: 18000,
+            },
+        ];
+        assert_eq!(map_to_media(&spans, 0), 0);
+        assert_eq!(map_to_media(&spans, 4000), 4000);
+        // 第二段语音局部 0ms (拼接 5000ms 处) -> 媒体 13000ms
+        assert_eq!(map_to_media(&spans, 5000), 13000);
+        // 第二段语音局部 1s -> 媒体 14000ms
+        assert_eq!(map_to_media(&spans, 6000), 14000);
+        // 超出块尾 -> 末段终点
+        assert_eq!(map_to_media(&spans, 12000), 18000);
     }
 
     #[test]

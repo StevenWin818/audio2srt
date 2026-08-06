@@ -14,6 +14,8 @@ pub struct DecodeRequest<'a> {
     pub encoder_output: &'a EncoderOutput,
     pub language: Option<&'a str>,
     pub context: Option<&'a str>,
+    /// 最大生成 token 数: 按音频时长动态设置, None 时用默认 256
+    pub max_new_tokens: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +80,14 @@ fn ensure_backend_init() {
     });
 }
 
+/// 运行时探测是否有可用的 GPU 设备
+fn gpu_device_available() -> bool {
+    unsafe {
+        !ll::ggml_backend_dev_by_type(ll::GGML_BACKEND_DEVICE_TYPE_GPU).is_null()
+            || !ll::ggml_backend_dev_by_type(ll::GGML_BACKEND_DEVICE_TYPE_IGPU).is_null()
+    }
+}
+
 impl QwenDecoder {
     /// 加载解码器 GGUF。
     ///
@@ -137,15 +147,18 @@ impl QwenDecoder {
         // (或 GGML_CUDA 等 GPU 后端)，n_gpu_layers=-1 也会被 llama-model.cpp:1268 在
         // `devices.empty()` 时归零为 0，模型实际全部跑在 CPU 上。
         let supports_offload = unsafe { ll::llama_supports_gpu_offload() };
+        let gpu_available = gpu_device_available();
+        let requested_gpu = !matches!(backend, DecoderBackend::Cpu);
         println!(
-            "[decoder] llama_supports_gpu_offload()={}  backend={:?}  use_gpu={}",
-            supports_offload, backend, !matches!(backend, DecoderBackend::Cpu)
+            "[decoder] llama_supports_gpu_offload()={}  gpu_device_available()={}  backend={:?}",
+            supports_offload, gpu_available, backend
         );
-        if !supports_offload && !matches!(backend, DecoderBackend::Cpu) {
-            println!("[decoder] **WARNING** backend requested GPU 但 ggml 未编译进 GPU 后端 —— 模型将走 CPU 路径");
+        if requested_gpu && (!supports_offload || !gpu_available) {
+            println!("[decoder] **WARNING** backend requested GPU 但运行时无可用 GPU 设备 —— 模型将走 CPU 路径");
         }
 
-        let use_gpu = !matches!(backend, DecoderBackend::Cpu) && supports_offload;
+        // 实际是否真用 GPU: 需同时满足 请求后端非 CPU + 编译支持 offload + 运行时存在 GPU 设备。
+        let use_gpu = requested_gpu && supports_offload && gpu_available;
         let path_c = CString::new(chosen_str.clone())
             .map_err(|e| QwenError::DecoderError(format!("path CString: {}", e)))?;
 
@@ -366,14 +379,21 @@ impl QwenDecoder {
         let eos_tok = unsafe { ll::llama_vocab_eos(self.vocab) };
         let eot_tok = unsafe { ll::llama_vocab_eot(self.vocab) };
 
+        // 45s 快语速块可能需要 400+ token: 按音频时长动态放宽, 避免截断
+        // (默认 256; 每 100ms 音频约 1 token + 64 余量, 上限 768)
+        let max_new_tokens = req
+            .max_new_tokens
+            .unwrap_or(256)
+            .clamp(256, 768);
         const MAX_NEW_TOKENS: usize = 256;
+        let max_new_tokens = max_new_tokens.max(MAX_NEW_TOKENS);
         // Token Piece 是任意字节片段，单个片段不保证是有效的 UTF-8 字符。
         // 将所有片段收集完后再统一转换为 UTF-8 字符串，
         // 避免中日韩等多字节字符因跨 Token 切割而导致无声丢弃和乱码。
         let mut output_bytes = Vec::<u8>::new();
         let mut generated = 0usize;
 
-        for _ in 0..MAX_NEW_TOKENS {
+        for _ in 0..max_new_tokens {
             if cancel.load(Ordering::Relaxed) {
                 unsafe { ll::llama_sampler_free(sampler) };
                 return Err(QwenError::Cancelled);

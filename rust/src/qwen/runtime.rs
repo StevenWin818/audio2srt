@@ -76,7 +76,7 @@ impl QwenRuntime {
         context_prompt: Option<&str>,
     ) -> Result<DecodeResult, QwenError> {
         let enc_out = self.encode_segment(samples_16k)?;
-        self.decode_segment(&enc_out, language, context_prompt)
+        self.decode_segment(&enc_out, language, context_prompt, None)
     }
 
     /// 仅执行 ONNX 编码器前向传播。与 `decode_segment` 拆分后，
@@ -111,11 +111,13 @@ impl QwenRuntime {
         encoder_output: &EncoderOutput,
         language: Option<&str>,
         context_prompt: Option<&str>,
+        max_new_tokens: Option<usize>,
     ) -> Result<DecodeResult, QwenError> {
         let req = DecodeRequest {
             encoder_output,
             language,
             context: context_prompt,
+            max_new_tokens,
         };
         let mut dec = self.asr_decoder.lock();
         dec.decode(&req, &self.cancel)
@@ -128,6 +130,7 @@ impl QwenRuntime {
         segment_start_ms: u64,
         segment_end_ms: u64,
         language: &Option<String>,
+        timeline: &[crate::qwen::aligner::TimelineSpan],
     ) -> Result<AlignmentResult, QwenError> {
         if let Some(aligner_mutex) = &self.aligner {
             let mut aligner = aligner_mutex.lock();
@@ -137,6 +140,7 @@ impl QwenRuntime {
                 segment_start_ms,
                 segment_end_ms,
                 language.as_deref(),
+                timeline,
                 &self.cancel,
             )
         } else {
@@ -169,7 +173,11 @@ impl QwenRuntime {
                 })
                 .collect();
             let elapsed_ms = start_time.elapsed().as_millis() as u64;
-            Ok(AlignmentResult { units, elapsed_ms })
+            Ok(AlignmentResult {
+                units,
+                elapsed_ms,
+                align_quality: "LinearFallback".into(),
+            })
         }
     }
 

@@ -8,9 +8,9 @@ import '../qwen/backend.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'silero_vad.dart';
 
-// These functions are ignored because they are not marked as `pub`: `add_perf_record`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_media_duration_secs`, `get_physical_pcore_mask`, `is_qwen_model_dir`, `join`, `lock_high_priority`, `parse_duration_str`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_qwen_worker`, `spawn_vad_worker`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AsrTask`, `EncodedTask`, `FfmpegPumpHandle`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `add_perf_record`, `bind_vad_to_e_cores`, `cached_cpu_topology`, `core_pinning_disabled`, `detect_cpu_topology`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_media_duration_secs`, `get_physical_pcore_mask`, `is_qwen_model_dir`, `join`, `lock_high_priority`, `parse_duration_str`, `process_encoded_task`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `set_thread_group_affinity`, `set_worker_pcore_affinity`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_qwen_worker`, `spawn_vad_worker`, `vad_scan`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AsrTask`, `CoreSet`, `EncodedTask`, `FfmpegPumpHandle`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `get_or_create_qwen_runtime`
 // These functions are ignored (category: IgnoreBecauseNotAllowedOwner): `add`
 
@@ -28,10 +28,14 @@ void preloadQwenModel({
   required String asrModelDir,
   String? alignerModelDir,
   String? decoderFile,
+  required EncoderBackend encoderBackend,
+  required DecoderBackend decoderBackend,
 }) => RustLib.instance.api.crateApiStreamPipelinePreloadQwenModel(
   asrModelDir: asrModelDir,
   alignerModelDir: alignerModelDir,
   decoderFile: decoderFile,
+  encoderBackend: encoderBackend,
+  decoderBackend: decoderBackend,
 );
 
 void cancelTranscriptionBackend() =>

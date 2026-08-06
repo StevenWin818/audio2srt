@@ -10,6 +10,7 @@ import 'api/qwen.dart';
 import 'api/silero_vad.dart';
 import 'api/simple.dart';
 import 'api/stream_pipeline.dart';
+import 'api/subtitle_split.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
@@ -73,7 +74,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1988683751;
+  int get rustContentHash => 2035100308;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -145,6 +146,8 @@ abstract class RustLibApi extends BaseApi {
     required String asrModelDir,
     String? alignerModelDir,
     String? decoderFile,
+    required EncoderBackend encoderBackend,
+    required DecoderBackend decoderBackend,
   });
 
   Future<List<AudioTrackInfo>> crateApiFfmpegProbeAudioTracks({
@@ -155,6 +158,13 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiSileroVadRegisterThreadAsProAudio();
 
   void crateApiStreamPipelineSetRustPerfLogging({required bool enable});
+
+  Future<List<TranscriptionSegment>> crateApiSubtitleSplitSplitSubtitles({
+    required List<WordItem> units,
+    required String quality,
+    required PlatformInt64 blockStartMs,
+    required PlatformInt64 blockEndMs,
+  });
 
   Stream<TranscriptionEvent> crateApiSileroVadTranscribe({
     required String modelPath,
@@ -739,6 +749,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String asrModelDir,
     String? alignerModelDir,
     String? decoderFile,
+    required EncoderBackend encoderBackend,
+    required DecoderBackend decoderBackend,
   }) {
     return handler.executeSync(
       SyncTask(
@@ -747,6 +759,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(asrModelDir, serializer);
           sse_encode_opt_String(alignerModelDir, serializer);
           sse_encode_opt_String(decoderFile, serializer);
+          sse_encode_encoder_backend(encoderBackend, serializer);
+          sse_encode_decoder_backend(decoderBackend, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
         },
         codec: SseCodec(
@@ -754,7 +768,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiStreamPipelinePreloadQwenModelConstMeta,
-        argValues: [asrModelDir, alignerModelDir, decoderFile],
+        argValues: [
+          asrModelDir,
+          alignerModelDir,
+          decoderFile,
+          encoderBackend,
+          decoderBackend,
+        ],
         apiImpl: this,
       ),
     );
@@ -763,7 +783,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStreamPipelinePreloadQwenModelConstMeta =>
       const TaskConstMeta(
         debugName: "preload_qwen_model",
-        argNames: ["asrModelDir", "alignerModelDir", "decoderFile"],
+        argNames: [
+          "asrModelDir",
+          "alignerModelDir",
+          "decoderFile",
+          "encoderBackend",
+          "decoderBackend",
+        ],
       );
 
   @override
@@ -858,6 +884,45 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<List<TranscriptionSegment>> crateApiSubtitleSplitSplitSubtitles({
+    required List<WordItem> units,
+    required String quality,
+    required PlatformInt64 blockStartMs,
+    required PlatformInt64 blockEndMs,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_word_item(units, serializer);
+          sse_encode_String(quality, serializer);
+          sse_encode_i_64(blockStartMs, serializer);
+          sse_encode_i_64(blockEndMs, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 21,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_transcription_segment,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSubtitleSplitSplitSubtitlesConstMeta,
+        argValues: [units, quality, blockStartMs, blockEndMs],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSubtitleSplitSplitSubtitlesConstMeta =>
+      const TaskConstMeta(
+        debugName: "split_subtitles",
+        argNames: ["units", "quality", "blockStartMs", "blockEndMs"],
+      );
+
+  @override
   Stream<TranscriptionEvent> crateApiSileroVadTranscribe({
     required String modelPath,
     required String vadModelPath,
@@ -906,7 +971,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 21,
+              funcId: 22,
               port: port_,
             );
           },
@@ -984,7 +1049,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 22,
+              funcId: 23,
               port: port_,
             );
           },
@@ -1016,7 +1081,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 24,
             port: port_,
           );
         },
@@ -1046,7 +1111,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 25,
             port: port_,
           );
         },
@@ -1070,7 +1135,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 25)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1098,7 +1163,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 27,
             port: port_,
           );
         },
@@ -1131,7 +1196,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 28,
             port: port_,
           );
         },
@@ -1161,7 +1226,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 29,
             port: port_,
           );
         },
@@ -1194,7 +1259,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1231,7 +1296,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 31,
             port: port_,
           );
         },
@@ -1261,7 +1326,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 32,
             port: port_,
           );
         },

@@ -836,12 +836,38 @@ class TranscriptionProvider with ChangeNotifier {
         final modelDir = await _modelService.getModelPath(baseId);
         final alignerDir = _selectedAlignerModel != null ? await _modelService.getModelPath(_selectedAlignerModel!) : null;
         final decoderFile = 'decoder.$quant.gguf';
-        debugPrint('[TranscriptionProvider] Preloading model into GPU VRAM (async background): $modelDir (decoder=$decoderFile)');
+        debugPrint('[TranscriptionProvider] Preloading model into GPU VRAM (async background): $modelDir (decoder=$decoderFile, useGpu=$_useGpu)');
         rust_stream.preloadQwenModel(
           asrModelDir: modelDir,
           alignerModelDir: alignerDir,
           decoderFile: decoderFile,
+          encoderBackend: _useGpu
+              ? rust_qwen_backend.EncoderBackend.auto
+              : rust_qwen_backend.EncoderBackend.cpu,
+          decoderBackend: _useGpu
+              ? rust_qwen_backend.DecoderBackend.auto
+              : rust_qwen_backend.DecoderBackend.cpu,
         );
+        // 预加载完成后刷新"模型加载状态"面板 (模型在后台线程加载, 延迟轮询)。
+        // 开关 GPU 加速 / 切换模型量化后, 面板显示的实际加载位置随之更新。
+        // 后台加载 (尤其 CPU 冷启动) 可能超过数秒, 轮询直到运行时状态刷新,
+        // 最多约 24s 后停止, 避免长时间占用定时器。
+        _preloadTimer?.cancel();
+        var pollAttempts = 0;
+        String? lastSignature;
+        _preloadTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
+          pollAttempts++;
+          refreshQwenRuntimeStatus();
+          final st = _qwenRuntimeStatus;
+          final signature = st == null
+              ? null
+              : '${st.encoderEp}|${st.decoderBackend}|${st.decoderFile}';
+          final reloaded = st != null && signature != lastSignature && pollAttempts > 1;
+          lastSignature = signature ?? lastSignature;
+          if (reloaded || pollAttempts >= 6) {
+            timer.cancel();
+          }
+        });
       } catch (e) {
         debugPrint('[TranscriptionProvider] Qwen ASR model preload error: $e');
       }

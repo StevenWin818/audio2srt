@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1988683751;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 2035100308;
 
 // Section: executor
 
@@ -625,12 +625,18 @@ fn wire__crate__api__stream_pipeline__preload_qwen_model_impl(
             let api_asr_model_dir = <String>::sse_decode(&mut deserializer);
             let api_aligner_model_dir = <Option<String>>::sse_decode(&mut deserializer);
             let api_decoder_file = <Option<String>>::sse_decode(&mut deserializer);
+            let api_encoder_backend =
+                <crate::qwen::backend::EncoderBackend>::sse_decode(&mut deserializer);
+            let api_decoder_backend =
+                <crate::qwen::backend::DecoderBackend>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, String>((move || {
                 let output_ok = crate::api::stream_pipeline::preload_qwen_model(
                     api_asr_model_dir,
                     api_aligner_model_dir,
                     api_decoder_file,
+                    api_encoder_backend,
+                    api_decoder_backend,
                 )?;
                 Ok(output_ok)
             })())
@@ -737,6 +743,48 @@ fn wire__crate__api__stream_pipeline__set_rust_perf_logging_impl(
                 })?;
                 Ok(output_ok)
             })())
+        },
+    )
+}
+fn wire__crate__api__subtitle_split__split_subtitles_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "split_subtitles",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_units = <Vec<crate::api::silero_vad::WordItem>>::sse_decode(&mut deserializer);
+            let api_quality = <String>::sse_decode(&mut deserializer);
+            let api_block_start_ms = <i64>::sse_decode(&mut deserializer);
+            let api_block_end_ms = <i64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok =
+                        Result::<_, ()>::Ok(crate::api::subtitle_split::split_subtitles(
+                            &api_units,
+                            &api_quality,
+                            api_block_start_ms,
+                            api_block_end_ms,
+                        ))?;
+                    Ok(output_ok)
+                })())
+            }
         },
     )
 }
@@ -1862,38 +1910,44 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        21 => wire__crate__api__silero_vad__transcribe_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__stream_pipeline__transcribe_stream_impl(
+        21 => wire__crate__api__subtitle_split__split_subtitles_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        23 => wire__crate__api__silero_vad__transcription_segment_default_impl(
+        22 => wire__crate__api__silero_vad__transcribe_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__stream_pipeline__transcribe_stream_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        24 => wire__crate__api__qwen__unload_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__models__validate_qwen_model_impl(port, ptr, rust_vec_len, data_len),
-        27 => {
+        24 => wire__crate__api__silero_vad__transcription_segment_default_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        25 => wire__crate__api__qwen__unload_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__models__validate_qwen_model_impl(port, ptr, rust_vec_len, data_len),
+        28 => {
             wire__crate__api__qwen__validate_qwen_model_dir_impl(port, ptr, rust_vec_len, data_len)
         }
-        28 => wire__crate__api__silero_vad__vulkan_device_info_default_impl(
+        29 => wire__crate__api__silero_vad__vulkan_device_info_default_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        29 => wire__crate__api__qwen__warmup_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__silero_vad__warmup_whisper_context_impl(
+        30 => wire__crate__api__qwen__warmup_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__silero_vad__warmup_whisper_context_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        31 => {
+        32 => {
             wire__crate__api__silero_vad__word_item_default_impl(port, ptr, rust_vec_len, data_len)
         }
         _ => unreachable!(),
@@ -1922,7 +1976,7 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        25 => {
+        26 => {
             wire__crate__api__stream_pipeline__unload_qwen_runtime_impl(ptr, rust_vec_len, data_len)
         }
         _ => unreachable!(),

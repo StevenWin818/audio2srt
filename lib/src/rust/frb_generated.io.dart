@@ -10,6 +10,7 @@ import 'api/qwen.dart';
 import 'api/silero_vad.dart';
 import 'api/simple.dart';
 import 'api/stream_pipeline.dart';
+import 'api/subtitle_split.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' as ffi;

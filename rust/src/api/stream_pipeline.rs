@@ -145,8 +145,13 @@ pub fn preload_qwen_model(
     asr_model_dir: String,
     aligner_model_dir: Option<String>,
     decoder_file: Option<String>,
+    encoder_backend: crate::qwen::backend::EncoderBackend,
+    decoder_backend: crate::qwen::backend::DecoderBackend,
 ) -> Result<(), String> {
-    println!("[Rust] Spawning background thread for preloading Qwen model: {} (decoder={:?})", asr_model_dir, decoder_file);
+    println!(
+        "[Rust] Spawning background thread for preloading Qwen model: {} (decoder={:?}, enc={:?}, dec={:?})",
+        asr_model_dir, decoder_file, encoder_backend, decoder_backend
+    );
     std::thread::spawn(move || {
         let app_data = std::env::var("APPDATA").unwrap_or_default();
         let default_qwen = format!("{}/com.audio2srt/audio2srt/models/qwen3-asr-0.6b", app_data.replace('\\', "/"));
@@ -163,8 +168,8 @@ pub fn preload_qwen_model(
         match get_or_create_qwen_runtime(
             &qwen_dir,
             aligner_model_dir.as_deref(),
-            crate::qwen::backend::EncoderBackend::Auto,
-            crate::qwen::backend::DecoderBackend::Auto,
+            encoder_backend,
+            decoder_backend,
             decoder_file.as_deref(),
         ) {
             Ok(_) => println!("[Rust Preload] Successfully preloaded model into VRAM: {}", qwen_dir),
@@ -438,7 +443,9 @@ struct AsrTask {
     samples: Vec<f32>,
     start_ms: i64,
     end_ms: i64,
-    }
+    /// 拼接音频 -> 媒体时间轴的分段映射
+    timeline: Vec<crate::qwen::aligner::TimelineSpan>,
+}
 
 /// VAD 切段全局序号 (编码线程池并行处理后按此恢复顺序)
 static ASR_TASK_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -855,15 +862,16 @@ const BLOCK_MAX_SECONDS: i64 = 45;
 
 /// 对给定音频切片运行一次 Silero VAD 扫描。
 /// whisper.cpp 的 VAD 每次只处理传入的采样 (无内部累积), 可安全重复调用。
+/// 错误必须上抛: 调用方不得把推理失败当成"无语音"。
 fn vad_scan(
     vad_ctx: &mut WhisperVadContext,
     vad_params: &WhisperVadParams,
     audio: &[f32],
-) -> Vec<WhisperVadSegment> {
+) -> Result<Vec<WhisperVadSegment>, String> {
     vad_ctx
         .segments_from_samples(vad_params.clone(), audio)
         .map(|segs| segs.into_iter().collect())
-        .unwrap_or_default()
+        .map_err(|e| format!("Silero VAD inference error: {:?}", e))
 }
 
 fn spawn_vad_worker(
@@ -934,13 +942,18 @@ fn spawn_vad_worker(
         let mut block_samples: Vec<f32> = Vec::new();
         let mut block_start_ms: i64 = 0;
         let mut block_end_ms: i64 = 0;
+        let mut block_spans: Vec<crate::qwen::aligner::TimelineSpan> = Vec::new();
         let mut flush_block =
-            |samples: &mut Vec<f32>, start: &mut i64, end: &mut i64| -> bool {
+            |samples: &mut Vec<f32>,
+             start: &mut i64,
+             end: &mut i64,
+             spans: &mut Vec<crate::qwen::aligner::TimelineSpan>| -> bool {
                 if samples.is_empty() {
                     return true;
                 }
                 let blk = std::mem::take(samples);
                 let (bs, be) = (*start, *end);
+                let tl = std::mem::take(spans);
                 *start = 0;
                 *end = 0;
                 tx_asr_task
@@ -949,6 +962,7 @@ fn spawn_vad_worker(
                         samples: blk,
                         start_ms: bs,
                         end_ms: be,
+                        timeline: tl,
                     })
                     .is_ok()
             };
@@ -1001,17 +1015,33 @@ fn spawn_vad_worker(
                     // 增量扫描: 只喂"上次扫描之后新增的音频 + 0.5s 重叠"。
                     // 重叠用于捕捉跨扫描边界结束的语音尾部 (防止短句丢失)。
                     let mut scan_base = vad_scan_cursor.saturating_sub(VAD_SCAN_OVERLAP);
-                    let mut segs_vec = vad_scan(vad_ctx, &vad_params, &audio_buffer[scan_base..]);
+                    let mut segs_vec = match vad_scan(vad_ctx, &vad_params, &audio_buffer[scan_base..]) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            // VAD 推理失败: 本次跳过切段/清理, 避免误删真实语音
+                            println!("[VAD] scan error (skip this round): {}", e);
+                            vad_scan_cursor = audio_buffer.len();
+                            continue;
+                        }
+                    };
 
                     // 增量窗口内无语音但缓冲已积累较多: 语音可能刚在扫描窗口前结束
                     // (窗口截断会漏掉跨边界的段尾), 对全缓冲重扫一次验证,
                     // 避免"语音结束未切段 -> 静音清理把整段语音丢掉"。
                     if segs_vec.is_empty() && audio_buffer.len() > 80000 && scan_base > 0 {
-                        let full = vad_scan(vad_ctx, &vad_params, &audio_buffer);
-                        if !full.is_empty() {
-                            segs_vec = full;
-                            // 全缓冲扫描的段索引相对缓冲起点 (0), 基准随之切换
-                            scan_base = 0;
+                        match vad_scan(vad_ctx, &vad_params, &audio_buffer) {
+                            Ok(full) => {
+                                if !full.is_empty() {
+                                    segs_vec = full;
+                                    // 全缓冲扫描的段索引相对缓冲起点 (0), 基准随之切换
+                                    scan_base = 0;
+                                }
+                            }
+                            Err(e) => {
+                                println!("[VAD] full-scan error (skip this round): {}", e);
+                                vad_scan_cursor = audio_buffer.len();
+                                continue;
+                            }
                         }
                     }
 
@@ -1076,17 +1106,29 @@ fn spawn_vad_worker(
                             );
 
                             if segment_samples.len() > 3200 {
-                                // 语音块累积: 短段先并入 20~45s 大块, 达到下限再整块发送
+                                // 语音块累积: 短段先并入 20~45s 大块, 达到下限再整块发送。
+                                // 记录 TimelineSpan: 拼接轴位置 -> 媒体时间轴 (静音被过滤后靠它还原)
                                 if block_samples.is_empty() {
                                     block_start_ms = start_ms;
                                 }
+                                block_spans.push(crate::qwen::aligner::TimelineSpan {
+                                    concat_start_sample: block_samples.len(),
+                                    concat_end_sample: block_samples.len() + segment_samples.len(),
+                                    source_start_ms: start_ms,
+                                    source_end_ms: end_ms,
+                                });
                                 block_samples.extend_from_slice(&segment_samples);
                                 block_end_ms = end_ms;
                                 let blk_ms = block_end_ms - block_start_ms;
                                 if blk_ms >= BLOCK_MIN_SECONDS * 1000
                                     || block_samples.len() >= BLOCK_MAX_SECONDS as usize * 16000
                                 {
-                                    if !flush_block(&mut block_samples, &mut block_start_ms, &mut block_end_ms) {
+                                    if !flush_block(
+                                        &mut block_samples,
+                                        &mut block_start_ms,
+                                        &mut block_end_ms,
+                                        &mut block_spans,
+                                    ) {
                                         break;
                                     }
                                 }
@@ -1143,9 +1185,20 @@ fn spawn_vad_worker(
                                     if block_samples.is_empty() {
                                         block_start_ms = start_ms;
                                     }
+                                    block_spans.push(crate::qwen::aligner::TimelineSpan {
+                                        concat_start_sample: block_samples.len(),
+                                        concat_end_sample: block_samples.len() + segment_samples.len(),
+                                        source_start_ms: start_ms,
+                                        source_end_ms: end_ms,
+                                    });
                                     block_samples.extend_from_slice(&segment_samples);
                                     block_end_ms = end_ms;
-                                    flush_block(&mut block_samples, &mut block_start_ms, &mut block_end_ms);
+                                    flush_block(
+                                        &mut block_samples,
+                                        &mut block_start_ms,
+                                        &mut block_end_ms,
+                                        &mut block_spans,
+                                    );
                                 } else {
                                     println!("[Rust] VAD 过滤: 成功丢弃 30 秒的非语音/纯音乐数据");
                                 }
@@ -1162,7 +1215,21 @@ fn spawn_vad_worker(
                         let start_ms = current_offset_ms;
                         let end_ms = current_offset_ms + 10000;
                         current_offset_ms = end_ms;
-                        if tx_asr_task.send(AsrTask { seq: ASR_TASK_SEQ.fetch_add(1, Ordering::Relaxed), samples: segment_samples, start_ms, end_ms }).is_err() {
+                        if tx_asr_task
+                            .send(AsrTask {
+                                seq: ASR_TASK_SEQ.fetch_add(1, Ordering::Relaxed),
+                                samples: segment_samples,
+                                start_ms,
+                                end_ms,
+                                timeline: vec![crate::qwen::aligner::TimelineSpan {
+                                    concat_start_sample: 0,
+                                    concat_end_sample: 160000,
+                                    source_start_ms: start_ms,
+                                    source_end_ms: end_ms,
+                                }],
+                            })
+                            .is_err()
+                        {
                             break;
                         }
                         check_and_cut = true;
@@ -1179,11 +1246,27 @@ fn spawn_vad_worker(
             if block_samples.is_empty() {
                 block_start_ms = current_offset_ms;
             }
+            block_spans.push(crate::qwen::aligner::TimelineSpan {
+                concat_start_sample: block_samples.len(),
+                concat_end_sample: block_samples.len() + audio_buffer.len(),
+                source_start_ms: current_offset_ms,
+                source_end_ms: current_offset_ms + (audio_buffer.len() as i64 * 1000 / 16000),
+            });
             block_samples.extend_from_slice(&audio_buffer);
             block_end_ms = current_offset_ms + (audio_buffer.len() as i64 * 1000 / 16000);
-            flush_block(&mut block_samples, &mut block_start_ms, &mut block_end_ms);
+            flush_block(
+                &mut block_samples,
+                &mut block_start_ms,
+                &mut block_end_ms,
+                &mut block_spans,
+            );
         } else {
-            flush_block(&mut block_samples, &mut block_start_ms, &mut block_end_ms);
+            flush_block(
+                &mut block_samples,
+                &mut block_start_ms,
+                &mut block_end_ms,
+                &mut block_spans,
+            );
         }
 
         drop(flush_block);
@@ -1199,6 +1282,8 @@ struct EncodedTask {
     enc_out: Option<crate::qwen::encoder::EncoderOutput>,
     start_ms: i64,
     end_ms: i64,
+    /// 拼接音频 -> 媒体时间轴的分段映射 (从 AsrTask 透传)
+    timeline: Vec<crate::qwen::aligner::TimelineSpan>,
 }
 
 /// 连续解码为空(模型跳过)的音频最大合并时长，超过则丢弃避免污染后续识别。
@@ -1289,6 +1374,7 @@ fn spawn_qwen_worker(
                             enc_out: None,
                             start_ms: task.start_ms,
                             end_ms: task.end_ms,
+                            timeline: task.timeline.clone(),
                         })
                         .is_err()
                     {
@@ -1314,6 +1400,7 @@ fn spawn_qwen_worker(
                                 enc_out: None,
                                 start_ms: task.start_ms,
                                 end_ms: task.end_ms,
+                                timeline: task.timeline.clone(),
                             })
                             .is_err()
                         {
@@ -1342,6 +1429,7 @@ fn spawn_qwen_worker(
                         enc_out,
                         start_ms: task.start_ms,
                         end_ms: task.end_ms,
+                        timeline: task.timeline.clone(),
                     })
                     .is_err()
                 {
@@ -1362,7 +1450,7 @@ fn spawn_qwen_worker(
             // 合并缓冲：模型对嘈杂/语言切换初期的短片段倾向输出空结果(跳过)。
             // 空结果不直接丢弃，而是与下一个片段拼接后整体重编码重试，
             // 直到模型能识别为止。
-            let mut pending: Option<(Vec<f32>, i64)> = None;
+            let mut pending: Option<(Vec<f32>, i64, Vec<crate::qwen::aligner::TimelineSpan>)> = None;
 
             // 编码线程池并行完成，按 seq 恢复原始顺序后再处理
             let mut next_seq = 0u64;
@@ -1459,7 +1547,7 @@ fn spawn_qwen_worker(
 #[allow(clippy::too_many_arguments)]
 fn process_encoded_task(
     task: &mut EncodedTask,
-    pending: &mut Option<(Vec<f32>, i64)>,
+    pending: &mut Option<(Vec<f32>, i64, Vec<crate::qwen::aligner::TimelineSpan>)>,
     runtime: &Arc<crate::qwen::runtime::QwenRuntime>,
     max_merge_samples: usize,
     language: &Option<String>,
@@ -1475,7 +1563,7 @@ fn process_encoded_task(
     };
 
     // 与上一个"空结果"片段拼接
-    if let Some((p_samples, p_start_ms)) = pending.take() {
+    if let Some((p_samples, p_start_ms, p_timeline)) = pending.take() {
         if p_samples.len() + task.samples.len() > max_merge_samples {
             println!(
                 "[Rust] Qwen: dropping {}ms of unrecognized (empty) audio (from {}ms)",
@@ -1490,23 +1578,36 @@ fn process_encoded_task(
                 Ok(enc_out2) => {
                     task.samples = merged;
                     task.start_ms = p_start_ms;
+                    // 合并后的时间轴 = 待合并段的时间轴 + 当前段时间轴 (拼接偏移平移)
+                    let mut tl = p_timeline;
+                    for span in task.timeline.iter_mut() {
+                        span.concat_start_sample += p_samples.len();
+                        span.concat_end_sample += p_samples.len();
+                    }
+                    tl.append(&mut task.timeline);
+                    task.timeline = tl;
                     enc_out = enc_out2;
                 }
                 Err(e) => {
                     // 合并重编码失败: 恢复 pending 等下一个片段再试,
                     // 避免"已取走未合并"导致这段语音静默丢失
                     println!("[Rust] Qwen merge re-encode error: {:?}", e);
-                    *pending = Some((p_samples, p_start_ms));
+                    *pending = Some((p_samples, p_start_ms, p_timeline));
                 }
             }
         }
     }
 
     let start_time = std::time::Instant::now();
+    // 动态生成上限: 45s 快语速约 450 token; 每 100ms 音频约 1 token + 64 余量
+    let max_new_tokens = Some(
+        ((task.samples.len() / 16000 * 1000 / 100) as usize + 64).clamp(256, 768),
+    );
     let decode_res = match runtime.decode_segment(
         &enc_out,
         language.as_deref(),
         context_prompt.as_deref(),
+        max_new_tokens,
     ) {
         Ok(res) => res,
         Err(e) => {
@@ -1522,7 +1623,7 @@ fn process_encoded_task(
     let mut final_text = decode_res.text.trim().to_string();
     if final_text.is_empty() {
         // 模型跳过：保留音频待与下一个片段合并重试
-        *pending = Some((task.samples.clone(), task.start_ms));
+        *pending = Some((task.samples.clone(), task.start_ms, task.timeline.clone()));
         return Ok(());
     }
 
@@ -1531,35 +1632,60 @@ fn process_encoded_task(
     }
 
     // 强制对齐
-    let word_items = match runtime.align_segment(
+    // 强制对齐: 传入拼接时间轴映射; 语言优先用解码器检测到的语言 (自动模式)
+    let align_language = if decode_res.detected_language.is_some() {
+        &decode_res.detected_language
+    } else {
+        language
+    };
+    let (align_quality, word_items) = match runtime.align_segment(
         &task.samples,
         &final_text,
         task.start_ms as u64,
         task.end_ms as u64,
-        language,
+        align_language,
+        &task.timeline,
     ) {
-        Ok(align_res) => align_res
-            .units
-            .into_iter()
-            .map(|u| WordItem {
-                text: u.text,
-                start_ms: u.start_ms as i64,
-                end_ms: u.end_ms as i64,
-                confidence: u.confidence.unwrap_or(1.0),
-            })
-            .collect(),
-        Err(_) => Vec::new(),
+        Ok(align_res) => (
+            align_res.align_quality.clone(),
+            align_res
+                .units
+                .into_iter()
+                .map(|u| WordItem {
+                    text: u.text,
+                    start_ms: u.start_ms as i64,
+                    end_ms: u.end_ms as i64,
+                    confidence: u.confidence.unwrap_or(1.0),
+                })
+                .collect(),
+        ),
+        Err(e) => {
+            println!("[Rust] align segment error: {:?}", e);
+            ("LinearFallback".to_string(), Vec::new())
+        }
     };
 
+    // 诊断: 块首偏移来源 (对齐器预测 vs 块真实起点)
+    if let Some(first) = word_items.first() {
+        println!(
+            "[align] block=[{}..{}] first unit '{}' @ {}ms (offset {}ms)",
+            task.start_ms,
+            task.end_ms,
+            first.text,
+            first.start_ms,
+            first.start_ms - task.start_ms
+        );
+    }
+
     // 分条: 标点+停顿生成候选边界, 动态规划生成 2~5 秒字幕 (最多两行, 偏好一行)。
-    // 对齐单元缺失时回退为整段一条字幕。
-    let sub_segments = split_subtitles(&word_items);
+    // 对齐单元缺失时回退为整段一条字幕; 质量标记必须诚实 (真实对齐 vs 线性回退)。
+    let sub_segments = split_subtitles(&word_items, &align_quality, task.start_ms, task.end_ms);
     let segments: Vec<TranscriptionSegment> = if sub_segments.is_empty() {
         vec![TranscriptionSegment {
             start_ms: task.start_ms,
             end_ms: task.end_ms,
             text: final_text,
-            timestamp_quality: "Qwen3-ForcedAligned".to_string(),
+            timestamp_quality: align_quality.clone(),
             words: word_items,
         }]
     } else {

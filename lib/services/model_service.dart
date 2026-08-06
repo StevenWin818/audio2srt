@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:archive/archive.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -46,6 +47,8 @@ class QwenModelInfo {
   final double sizeMB;
   final ModelType type;
   final List<QwenModelFile> files;
+  /// zip 资产解压后需要存在的文件 (完整性检查; 为空则按 files 检查)
+  final List<String>? extractedFiles;
 
   QwenModelInfo({
     required this.id,
@@ -56,6 +59,7 @@ class QwenModelInfo {
     required this.sizeMB,
     required this.type,
     required this.files,
+    this.extractedFiles,
   });
 }
 
@@ -245,22 +249,24 @@ class ModelService {
   static final QwenModelInfo alignerModel = QwenModelInfo(
     id: 'forced-aligner-0.6b',
     name: 'ForcedAligner 0.6B',
-    description: '精准时间轴组件 (词/字级精确对齐)',
+    description: '精准时间轴组件 (词/字级精确对齐, HaujetZhao GGUF 转换版: frontend/backend ONNX int4 + LLM q4_k)',
     dirName: 'forced-aligner-0.6b',
-    size: '450 MB',
-    sizeMB: 450.0,
+    size: '505 MB',
+    sizeMB: 505.0,
     type: ModelType.aligner,
     files: [
       QwenModelFile(
-        filename: 'config.json',
-        urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/config.json',
-        sizeMB: 0.1,
+        filename: 'Qwen3-ForceAligner-0.6B-gguf.zip',
+        urlPath:
+            'https://github.com/HaujetZhao/Qwen3-ASR-GGUF/releases/download/models/Qwen3-ForceAligner-0.6B-gguf.zip',
+        sizeMB: 505.0,
       ),
-      QwenModelFile(
-        filename: 'aligner.onnx',
-        urlPath: 'andrewleech/qwen3-asr-0.6b-onnx/resolve/main/encoder.int4.onnx',
-        sizeMB: 450.0,
-      ),
+    ],
+    // 解压后 Rust 加载器需要的文件 (完整性检查用)
+    extractedFiles: [
+      'qwen3_aligner_encoder_frontend.int4.onnx',
+      'qwen3_aligner_encoder_backend.int4.onnx',
+      'qwen3_aligner_llm.q4_k.gguf',
     ],
   );
 
@@ -592,6 +598,21 @@ class ModelService {
         },
       ));
 
+      // 已解压完整则跳过下载 (zip 解压后会删除, 用解压产物判断)
+      Future<bool> alreadyExtracted() async {
+        final checks = model.extractedFiles ?? model.files.map((f) => f.filename).toList();
+        for (final name in checks) {
+          if (!await File(p.join(targetDir!.path, name)).exists()) return false;
+        }
+        return true;
+      }
+
+      if (await alreadyExtracted()) {
+        onProgress(1.0);
+        onSuccess();
+        return;
+      }
+
       filesToDownload.clear();
       for (final f in model.files) {
         final target = File(p.join(targetDir.path, f.filename));
@@ -599,7 +620,10 @@ class ModelService {
       }
       final realSizes = <String, int>{};
       for (final f in filesToDownload) {
-        final url = '$baseUrl/${f.urlPath}';
+        // 绝对 URL (如 GitHub release 资产) 不走镜像前缀
+        final url = f.urlPath.startsWith('http')
+            ? f.urlPath
+            : '$baseUrl/${f.urlPath}';
         final size = await _fetchRemoteSize(dio, url);
         realSizes[f.filename] = size ?? (f.sizeMB * 1024 * 1024).round();
       }
@@ -609,7 +633,9 @@ class ModelService {
       for (final f in filesToDownload) {
         final targetFile = File(p.join(targetDir.path, f.filename));
         final fileTotal = realSizes[f.filename] ?? (f.sizeMB * 1024 * 1024).round();
-        final url = '$baseUrl/${f.urlPath}';
+        final url = f.urlPath.startsWith('http')
+            ? f.urlPath
+            : '$baseUrl/${f.urlPath}';
         await dio.download(
           url,
           targetFile.path,
@@ -622,6 +648,18 @@ class ModelService {
           },
         );
         completedBytes += fileTotal;
+      }
+
+      // 解压 zip 资产 (HaujetZhao GGUF 包), 成功后删除 zip
+      for (final f in filesToDownload) {
+        if (!f.filename.toLowerCase().endsWith('.zip')) continue;
+        final zipFile = File(p.join(targetDir.path, f.filename));
+        if (await zipFile.exists()) {
+          debugPrint('[ModelService] Extracting ${f.filename} ...');
+          await extractZip(zipFile, targetDir!);
+          await zipFile.delete();
+          debugPrint('[ModelService] Extracted and removed ${f.filename}');
+        }
       }
 
       onProgress(1.0);
@@ -642,6 +680,24 @@ class ModelService {
         onFailure('下载已取消');
       } else {
         onFailure('下载失败: ${e.toString()}');
+      }
+    }
+  }
+
+  /// 解压 zip 到目标目录 (archive 包, 纯 Dart)
+  Future<void> extractZip(File zipFile, Directory targetDir) async {
+    final bytes = await zipFile.readAsBytes();
+    final archive = ZipDecoder().decodeBytes(bytes);
+    for (final file in archive) {
+      if (file.isFile) {
+        final name = file.name.replaceAll('\\', '/');
+        // 忽略顶层目录 (zip 内可能有 model/ 前缀)
+        final parts = name.split('/');
+        final baseName = parts.last;
+        if (baseName.isEmpty) continue;
+        final out = File(p.join(targetDir.path, baseName));
+        await out.create(recursive: true);
+        await out.writeAsBytes(file.content as List<int>, flush: true);
       }
     }
   }
