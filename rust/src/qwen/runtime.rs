@@ -105,6 +105,27 @@ impl QwenRuntime {
         self.asr_encoder.lock().actual_ep.clone()
     }
 
+    /// 清理并重置 ONNX 临时推理内存：
+    pub fn trim_onnx_memory(&self) {
+        let model_dir = self.encoder_model_path();
+        let backend = self.encoder_backend();
+        if let Ok(fresh_enc) = QwenEncoder::load(&model_dir, backend) {
+            println!("[runtime] 正在重置并清理 ONNX Encoder 算子内存池 (Arena)...");
+            *self.asr_encoder.lock() = fresh_enc;
+        }
+        if let Some(ref aligner_mutex) = self.aligner {
+            let decoder_backend = match self.decoder_backend.as_str() {
+                "CUDA" => DecoderBackend::Cuda,
+                "Vulkan" => DecoderBackend::Vulkan,
+                _ => DecoderBackend::Cpu,
+            };
+            if let Ok(fresh_aligner) = QwenAligner::load(&model_dir, decoder_backend) {
+                println!("[runtime] 正在重置并清理 ONNX Aligner 算子内存池 (Arena)...");
+                *aligner_mutex.lock() = fresh_aligner;
+            }
+        }
+    }
+
     /// 仅执行 GGUF/llama.cpp 解码器前向传播。
     pub fn decode_segment(
         &self,

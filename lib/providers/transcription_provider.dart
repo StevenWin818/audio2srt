@@ -492,9 +492,8 @@ class TranscriptionProvider with ChangeNotifier {
       }
     }
     notifyListeners();
-    _preloadWhisperContext();
     _warmupMirrorSpeed();
-    // 模型异步预加载完成后刷新实际后端状态 (encoder/decoder 实际加载位置)
+    // 不做启动预加载: 实测预加载对推理总时长几乎无提升
     Future.delayed(const Duration(seconds: 4), () => refreshQwenRuntimeStatus());
   }
 

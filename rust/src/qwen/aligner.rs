@@ -133,17 +133,23 @@ impl QwenAligner {
         let be_path = dir.join("qwen3_aligner_encoder_backend.int4.onnx");
 
         // 1. ONNX 编码器 (frontend + backend)
+        //    显式注册 CPU EP 并禁用 arena: 推理中间缓冲用完即释放, 避免 arena 保留峰值内存
         let (frontend, backend) = if fe_path.exists() && be_path.exists() {
+            let cpu_ep = || ort::ep::CPU::default().with_arena_allocator(false).build();
             let fe = Session::builder()
                 .map_err(|e| QwenError::OnnxError(format!("aligner frontend builder: {}", e)))?
                 .with_intra_threads(2)
                 .map_err(|e| QwenError::OnnxError(format!("aligner frontend intra_threads: {}", e)))?
+                .with_execution_providers([cpu_ep()])
+                .map_err(|e| QwenError::OnnxError(format!("aligner frontend EP: {}", e)))?
                 .commit_from_file(&fe_path)
                 .map_err(|e| QwenError::OnnxError(format!("aligner frontend commit: {}", e)))?;
             let be = Session::builder()
                 .map_err(|e| QwenError::OnnxError(format!("aligner backend builder: {}", e)))?
                 .with_intra_threads(2)
                 .map_err(|e| QwenError::OnnxError(format!("aligner backend intra_threads: {}", e)))?
+                .with_execution_providers([cpu_ep()])
+                .map_err(|e| QwenError::OnnxError(format!("aligner backend EP: {}", e)))?
                 .commit_from_file(&be_path)
                 .map_err(|e| QwenError::OnnxError(format!("aligner backend commit: {}", e)))?;
             (Some(fe), Some(be))
@@ -193,7 +199,9 @@ impl QwenAligner {
         );
 
         let mut ctx_params = unsafe { ll::llama_context_default_params() };
-        ctx_params.n_ctx = 4096;
+        // 对齐序列 ≈ audio tokens (45s≈585) + 词 tokens + 双 <timestamp> 标记, 2048 足够;
+        // GPU 模式下 KV 在显存, 4096→2048 使显存 KV 占用减半
+        ctx_params.n_ctx = 2048;
         ctx_params.n_batch = 2048;
         ctx_params.n_ubatch = 512;
         ctx_params.n_seq_max = 1;

@@ -370,6 +370,10 @@ pub fn transcribe_stream(
         ) {
             let _ = sink_clone.add(TranscriptionEvent::Failure(e.to_string()));
         }
+        // 推理收尾: 日志 + 归还空闲物理页。
+        // 工作集修剪只释放物理页 (虚拟保留), 立即反映在任务管理器内存占用上。
+        log_process_memory("pipeline end");
+        trim_process_working_set();
     });
 }
 
@@ -379,6 +383,8 @@ fn run_stream_pipeline_inner(
 ) -> Result<()> {
     SHOULD_CANCEL.store(false, Ordering::SeqCst);
     ASR_TASK_SEQ.store(0, Ordering::SeqCst);
+
+    log_process_memory("pipeline start");
 
     #[cfg(target_os = "windows")]
     {
@@ -1303,13 +1309,33 @@ fn spawn_qwen_worker(
     // 编码/解码双线程流水线：段 N 在 GPU 上自回归解码时，段 N+1 已在编码。
     // 编码线程池: encoder 无状态 (每段独立 mel+推理)，CPU 推理时多线程并行编码
     // 可显著提升吞吐 (decoder 侧按 seq 恢复顺序)。
-    let (tx_encoded, rx_encoded) = std::sync::mpsc::sync_channel::<EncodedTask>(16);
+    // 缓冲队列限制为 4 (避免过多单段 6MB+ 原始张量在内存堆积，把峰值压在 ~4.0G 以内)
+    let (tx_encoded, rx_encoded) = std::sync::mpsc::sync_channel::<EncodedTask>(4);
     let actual_ep = runtime.encoder_actual_ep();
     // 编码线程池策略：
     // - GPU 模式 (CUDA/DirectML): 预加载的主 Encoder 结合 GPU 极速计算足够支撑全量吞吐，
-    //   仅使用 1 个 worker 线程复用主 Encoder (预加载已完成)，不加载多余 Session.
-    // - CPU 模式: 仅开启 2 个线程 (主 Worker 复用预加载 Session + 1 个辅助 Worker)
-    let num_encoders = if actual_ep == "CPU" { 2 } else { 1 };
+    //   仅使用 1 个 worker 线程复用主 Encoder，不加载多余 Session.
+    // - CPU 模式: 默认开启 2 个线程 (主 Worker 复用预加载 Session + 1 个辅助 Worker
+    //   懒加载独立 Session 并行编码)。
+    // 内存权衡: 辅助 Worker 的独立 Session 会再加载一份完整 encoder 权重
+    // 默认: 总物理内存 < 12GB 时单 Worker 串行编码;
+    // 大内存机器自动并行。可用环境变量 AUDIO2SRT_ENC_WORKERS=1/2 强制覆盖。
+    let force_workers = std::env::var("AUDIO2SRT_ENC_WORKERS").ok();
+    let enc_parallel = match force_workers.as_deref() {
+        Some("1") => false,
+        Some("2") => true,
+        _ => total_physical_memory_mb() >= 12 * 1024,
+    };
+    if actual_ep == "CPU" {
+        println!(
+            "[encoder] CPU mode: parallel_worker={} (total_mem={}MB, avail_mem={}MB, force={:?})",
+            enc_parallel,
+            total_physical_memory_mb(),
+            system_available_memory_mb(),
+            force_workers
+        );
+    }
+    let num_encoders = if enc_parallel { 2 } else { 1 };
 
     let rx_task_shared = Arc::new(std::sync::Mutex::new(rx_task));
     let mut encoder_handles = Vec::new();
@@ -1442,6 +1468,7 @@ fn spawn_qwen_worker(
     // 主线程不再持有 sender (各 worker 持有 clone)
     drop(tx_encoded);
 
+    let runtime_decoder = runtime.clone();
     let decoder_handle = {
         thread::spawn(move || -> Result<()> {
             register_thread_as_pro_audio();
@@ -1474,7 +1501,7 @@ fn spawn_qwen_worker(
                     process_encoded_task(
                         &mut task,
                         &mut pending,
-                        &runtime,
+                        &runtime_decoder,
                         max_merge_samples,
                         &language,
                         &context_prompt,
@@ -1495,7 +1522,7 @@ fn spawn_qwen_worker(
                         process_encoded_task(
                             &mut task,
                             &mut pending,
-                            &runtime,
+                            &runtime_decoder,
                             max_merge_samples,
                             &language,
                             &context_prompt,
@@ -1521,6 +1548,7 @@ fn spawn_qwen_worker(
         })
     };
 
+    let runtime_finish = runtime.clone();
     thread::spawn(move || {
         let mut enc_ok = true;
         for handle in encoder_handles {
@@ -1538,6 +1566,12 @@ fn spawn_qwen_worker(
             // 编码线程返回 Err 不致命 (单个段编码失败已跳过)，仅当解码失败才视为错误
             return dec_res;
         }
+
+        // 全流水线（包括第二编码线程和主线程）推理完全结束。
+        // 重置清理 CPU 端 ONNX Encoder 及 Aligner 的临时内存池 (Arena)，
+        // 销毁旧 Session，使进程常驻内存减少。
+        runtime_finish.trim_onnx_memory();
+
         Ok(())
     })
 }
@@ -1801,6 +1835,97 @@ fn disable_power_throttling() {
         );
     }
 }
+
+/// 当前进程可用物理内存 (MB)。探测失败返回 u64::MAX (视为充足, 不降级)。
+#[cfg(target_os = "windows")]
+fn system_available_memory_mb() -> u64 {
+    use windows_sys::Win32::System::SystemInformation::{
+        GlobalMemoryStatusEx, MEMORYSTATUSEX,
+    };
+    unsafe {
+        let mut status: MEMORYSTATUSEX = std::mem::zeroed();
+        status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        if GlobalMemoryStatusEx(&mut status) != 0 {
+            status.ullAvailPhys / (1024 * 1024)
+        } else {
+            u64::MAX
+        }
+    }
+}
+
+/// 系统总物理内存 (MB)。探测失败返回 0。
+#[cfg(target_os = "windows")]
+fn total_physical_memory_mb() -> u64 {
+    use windows_sys::Win32::System::SystemInformation::{
+        GlobalMemoryStatusEx, MEMORYSTATUSEX,
+    };
+    unsafe {
+        let mut status: MEMORYSTATUSEX = std::mem::zeroed();
+        status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        if GlobalMemoryStatusEx(&mut status) != 0 {
+            status.ullTotalPhys / (1024 * 1024)
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn system_available_memory_mb() -> u64 {
+    u64::MAX
+}
+
+#[cfg(not(target_os = "windows"))]
+fn total_physical_memory_mb() -> u64 {
+    u64::MAX
+}
+
+/// 打印当前进程内存占用 (Windows): 工作集 (任务管理器"内存") / 私有提交。
+#[cfg(target_os = "windows")]
+fn log_process_memory(label: &str) {
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    unsafe {
+        let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+        counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        if GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) != 0 {
+            println!(
+                "[mem] {}: working_set={:.1}MB pagefile={:.1}MB",
+                label,
+                counters.WorkingSetSize as f64 / 1048576.0,
+                counters.PagefileUsage as f64 / 1048576.0
+            );
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn log_process_memory(_label: &str) {}
+
+/// 修剪进程工作集: 把推理期间触碰的 mmap 模型页 / ORT arena 等空闲物理页
+/// 立即归还系统 (虚拟地址保留, 下次使用再换入)。不影响功能, 只释放物理 RAM。
+#[cfg(target_os = "windows")]
+fn trim_process_working_set() {
+    use windows_sys::Win32::System::Memory::{
+        SetProcessWorkingSetSizeEx, QUOTA_LIMITS_HARDWS_MAX_DISABLE,
+        QUOTA_LIMITS_HARDWS_MIN_DISABLE,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    unsafe {
+        // -1/-1 (usize::MAX): 请求系统修剪工作集; 同时放宽上下限允许临时缩减
+        let _ = SetProcessWorkingSetSizeEx(
+            GetCurrentProcess(),
+            usize::MAX,
+            usize::MAX,
+            QUOTA_LIMITS_HARDWS_MIN_DISABLE | QUOTA_LIMITS_HARDWS_MAX_DISABLE,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn trim_process_working_set() {}
 
 fn get_physical_pcore_mask() -> usize {
     // 优先使用运行时探测的混合架构拓扑 (精确 P 核集合)；

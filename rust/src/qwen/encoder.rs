@@ -192,7 +192,12 @@ impl QwenEncoder {
                 }
                 println!("[encoder] ================================================================");
                 actual_ep = "CPU".to_string();
+                // 显式注册 CPU EP 并禁用内存 arena: 推理中间缓冲用完即释放回 OS,
+                // 避免 ORT arena 在 Session 存活期间保留峰值内存
+                let cpu_ep = ort::ep::CPU::default().with_arena_allocator(false).build();
                 builder
+                    .with_execution_providers([cpu_ep])
+                    .map_err(|e| QwenError::OnnxError(format!("CPU EP register: {}", e)))?
                     .commit_from_file(&chosen_str)
                     .map_err(|e| QwenError::OnnxError(format!("commit_from_file CPU fallback ({}): {}", chosen_str, e)))?
             }

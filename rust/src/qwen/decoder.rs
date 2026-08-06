@@ -221,9 +221,11 @@ impl QwenDecoder {
             actual_backend, offload_info
         );
 
-        // 上下文参数
+        // 上下文参数: n_ctx 覆盖 45s 块的理论上限 (~585 audio tokens + 前后缀 + 生成 ≤768
+        // ≈ 1400), 2048 有充足余量。
+        // KV cache 随 n_ctx 线性增长; GPU 模式下 KV 与权重同在显存
         let mut ctx_params = unsafe { ll::llama_context_default_params() };
-        ctx_params.n_ctx = 4096;
+        ctx_params.n_ctx = 2048;
         ctx_params.n_batch = 1024;
         ctx_params.n_ubatch = 512;
         ctx_params.n_seq_max = 1;
