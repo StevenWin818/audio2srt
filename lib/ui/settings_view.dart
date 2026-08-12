@@ -12,6 +12,10 @@ class SettingsView extends StatefulWidget {
 }
 
 class _SettingsViewState extends State<SettingsView> {
+  // 与 Rust 侧 QwenRuntime::ENCODER_EP_UNLOADED 哨兵值保持一致,
+  // 表示 decoder 已缓存但 encoder 尚未懒加载 (或推理结束已释放)。
+  static const _encoderEpUnloaded = '未加载';
+
   final TextEditingController _ffmpegController = TextEditingController();
   String _testStatus = '';
   Color _testStatusColor = Colors.white;
@@ -277,7 +281,9 @@ class _SettingsViewState extends State<SettingsView> {
               status.encoderEp,
               valueColor: status.encoderEp == 'CPU'
                   ? Colors.orangeAccent
-                  : const Color(0xFFA78BFA),
+                  : status.encoderEp == _encoderEpUnloaded
+                      ? Colors.grey[500]
+                      : const Color(0xFFA78BFA),
             ),
             row(
               'Decoder 加载',

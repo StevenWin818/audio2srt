@@ -1,7 +1,7 @@
 use crate::qwen::backend::{DecoderBackend, EncoderBackend};
 use crate::qwen::runtime::QwenRuntime;
 use parking_lot::Mutex;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RuntimeCacheKey {
@@ -34,21 +34,22 @@ impl QwenContextCache {
         }
     }
 
-    pub fn set(&mut self, key: RuntimeCacheKey, runtime: Arc<QwenRuntime>) {
-        if let Some(old_runtime) = self.runtime.take() {
-            println!("[Rust GLOBAL_QWEN_CACHE] Replacing old runtime & releasing VRAM...");
-            drop(old_runtime);
+    /// 替换缓存的运行时并返回旧运行时。
+    /// 旧运行时不在此处 drop (释放 VRAM 可能耗时):
+    /// 调用方必须在释放 GLOBAL_QWEN_CACHE 锁之后再 drop, 避免阻塞
+    /// 状态轮询 (get_qwen_runtime_status) 与并发加载线程。
+    pub fn set(&mut self, key: RuntimeCacheKey, runtime: Arc<QwenRuntime>) -> Option<Arc<QwenRuntime>> {
+        if self.runtime.is_some() {
+            println!("[Rust GLOBAL_QWEN_CACHE] Replacing old runtime (VRAM 将在锁外释放)...");
         }
         self.current_key = Some(key);
-        self.runtime = Some(runtime);
+        self.runtime.replace(runtime)
     }
 
-    pub fn clear(&mut self) {
+    /// 清空缓存并返回旧运行时 (同样由调用方在锁外 drop)。
+    pub fn clear(&mut self) -> Option<Arc<QwenRuntime>> {
         self.current_key = None;
-        if let Some(old_runtime) = self.runtime.take() {
-            println!("[Rust GLOBAL_QWEN_CACHE] Clearing previous runtime & releasing VRAM...");
-            drop(old_runtime);
-        }
+        self.runtime.take()
     }
 
     /// 当前缓存的运行时状态 (模型目录 / decoder 文件 / encoder EP / decoder 后端 / offload)
@@ -57,7 +58,7 @@ impl QwenContextCache {
             (
                 r.model_dir.clone(),
                 r.decoder_file.clone(),
-                r.encoder_ep.clone(),
+                r.encoder_actual_ep(),
                 r.decoder_backend.clone(),
                 r.decoder_offload.clone(),
             )
@@ -73,5 +74,5 @@ impl QwenContextCache {
     }
 }
 
-pub static GLOBAL_QWEN_CACHE: once_cell::sync::Lazy<Mutex<QwenContextCache>> =
-    once_cell::sync::Lazy::new(|| Mutex::new(QwenContextCache::new()));
+pub static GLOBAL_QWEN_CACHE: LazyLock<Mutex<QwenContextCache>> =
+    LazyLock::new(|| Mutex::new(QwenContextCache::new()));

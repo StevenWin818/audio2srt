@@ -36,13 +36,13 @@ const MID_SENTENCE_BASE: f64 = 120.0;
 const LEADIN_COMMA_BLOCK: f64 = 500.0;
 
 fn is_strong_punct(ch: char) -> bool {
-    matches!(ch, '。' | '！' | '？' | '!' | '?' | '…' | '…')
+    matches!(ch, '。' | '！' | '？' | '!' | '?' | '…')
 }
 
 fn is_weak_punct(ch: char) -> bool {
     matches!(
         ch,
-        '，' | '；' | '、' | ',' | ';' | '：' | ':' | ')' | '）' | '」' | '』' | '"' | '"' | '"'
+        '，' | '；' | '、' | ',' | ';' | '：' | ':' | ')' | '）' | '」' | '』' | '"' | '“' | '”'
     )
 }
 

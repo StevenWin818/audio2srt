@@ -835,7 +835,9 @@ class TranscriptionProvider with ChangeNotifier {
         final modelDir = await _modelService.getModelPath(baseId);
         final alignerDir = _selectedAlignerModel != null ? await _modelService.getModelPath(_selectedAlignerModel!) : null;
         final decoderFile = 'decoder.$quant.gguf';
-        debugPrint('[TranscriptionProvider] Preloading model into GPU VRAM (async background): $modelDir (decoder=$decoderFile, useGpu=$_useGpu)');
+        debugPrint('[TranscriptionProvider] Preloading Qwen decoder (VRAM) in background: $modelDir (decoder=$decoderFile, useGpu=$_useGpu)');
+        // 预加载只加载 decoder GGUF (+ aligner) 到显存/内存缓存;
+        // encoder ONNX (~1GB RAM) 由 Rust 端在推理开始时懒加载, 推理结束后释放。
         rust_stream.preloadQwenModel(
           asrModelDir: modelDir,
           alignerModelDir: alignerDir,

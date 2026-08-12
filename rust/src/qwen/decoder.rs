@@ -387,8 +387,6 @@ impl QwenDecoder {
             .max_new_tokens
             .unwrap_or(256)
             .clamp(256, 768);
-        const MAX_NEW_TOKENS: usize = 256;
-        let max_new_tokens = max_new_tokens.max(MAX_NEW_TOKENS);
         // Token Piece 是任意字节片段，单个片段不保证是有效的 UTF-8 字符。
         // 将所有片段收集完后再统一转换为 UTF-8 字符串，
         // 避免中日韩等多字节字符因跨 Token 切割而导致无声丢弃和乱码。

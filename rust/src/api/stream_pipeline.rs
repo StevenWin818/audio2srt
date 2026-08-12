@@ -14,6 +14,7 @@ use deepfilter_rt::DeepFilterStream;
 use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
 use whisper_rs::{WhisperVadContext, WhisperVadContextParams, WhisperVadParams, WhisperVadSegment};
 use crate::frb_generated::StreamSink;
+use crate::qwen::error::QwenError;
 use crate::api::silero_vad::{
     TranscriptionSegment, TranscriptionEvent, WordItem,
     convert_chinese, register_thread_as_pro_audio,
@@ -39,7 +40,8 @@ pub struct QwenRuntimeStatus {
     pub model_dir: String,
     /// decoder GGUF 文件名 (量化信息)
     pub decoder_file: String,
-    /// encoder 实际执行提供程序 ("CUDA" / "DirectML" / "CPU")
+    /// encoder 实际执行提供程序 ("CUDA" / "DirectML" / "CPU";
+    /// 未加载时为 ENCODER_EP_UNLOADED ("未加载"))
     pub encoder_ep: String,
     /// decoder 实际后端 ("CUDA" / "Vulkan" / "CPU")
     pub decoder_backend: String,
@@ -61,15 +63,11 @@ pub fn get_qwen_runtime_status() -> Option<QwenRuntimeStatus> {
     })
 }
 
-#[flutter_rust_bridge::frb(ignore)]
-pub fn get_or_create_qwen_runtime(
-    qwen_dir: &str,
-    aligner_dir: Option<&str>,
+/// Auto 后端解析为具体后端 (与编译特性 + 平台相关), 用于缓存键与诊断。
+fn resolve_encoder_backend(
     encoder_backend: crate::qwen::backend::EncoderBackend,
-    decoder_backend: crate::qwen::backend::DecoderBackend,
-    decoder_file: Option<&str>,
-) -> Result<Arc<crate::qwen::runtime::QwenRuntime>> {
-    let enc_backend_resolved = match encoder_backend {
+) -> crate::qwen::backend::EncoderBackend {
+    match encoder_backend {
         crate::qwen::backend::EncoderBackend::Auto => {
             if cfg!(any(feature = "cuda", feature = "qwen-cuda")) {
                 crate::qwen::backend::EncoderBackend::Cuda
@@ -80,8 +78,13 @@ pub fn get_or_create_qwen_runtime(
             }
         }
         b => b,
-    };
-    let dec_backend_resolved = match decoder_backend {
+    }
+}
+
+fn resolve_decoder_backend(
+    decoder_backend: crate::qwen::backend::DecoderBackend,
+) -> crate::qwen::backend::DecoderBackend {
+    match decoder_backend {
         crate::qwen::backend::DecoderBackend::Auto => {
             if cfg!(any(feature = "cuda", feature = "qwen-cuda")) {
                 crate::qwen::backend::DecoderBackend::Cuda
@@ -92,32 +95,64 @@ pub fn get_or_create_qwen_runtime(
             }
         }
         b => b,
-    };
+    }
+}
 
+/// 统一构造缓存键 (路径归一化 + 后端已解析)。
+/// 所有入口 (预加载 / warmup / 转写) 必须走这里, 否则同一配置会 cache MISS。
+fn build_runtime_cache_key(
+    qwen_dir: &str,
+    aligner_dir: Option<&str>,
+    encoder_backend: crate::qwen::backend::EncoderBackend,
+    decoder_backend: crate::qwen::backend::DecoderBackend,
+    decoder_file: Option<&str>,
+) -> crate::qwen::context::RuntimeCacheKey {
     let norm_asr = qwen_dir.replace('\\', "/").trim_end_matches('/').to_lowercase();
     let norm_aligner = aligner_dir.map(|s| s.replace('\\', "/").trim_end_matches('/').to_lowercase());
     let norm_decoder_file = decoder_file.map(|s| s.replace('\\', "/").to_lowercase());
 
-    let key = crate::qwen::context::RuntimeCacheKey {
+    crate::qwen::context::RuntimeCacheKey {
         asr_model_id: norm_asr,
         aligner_model_id: norm_aligner,
-        encoder_backend: enc_backend_resolved,
-        decoder_backend: dec_backend_resolved,
+        encoder_backend,
+        decoder_backend,
         decoder_file: norm_decoder_file,
-    };
+    }
+}
 
-    let mut cache = crate::qwen::context::GLOBAL_QWEN_CACHE.lock();
-    if let Some(runtime) = cache.get(&key) {
-        println!("[Rust Cache HIT] 成功秒级复用显存中的预加载 QwenRuntime (Model: {})", qwen_dir);
-        runtime.reset_cancel();
-        return Ok(runtime);
+#[flutter_rust_bridge::frb(ignore)]
+pub fn get_or_create_qwen_runtime(
+    qwen_dir: &str,
+    aligner_dir: Option<&str>,
+    encoder_backend: crate::qwen::backend::EncoderBackend,
+    decoder_backend: crate::qwen::backend::DecoderBackend,
+    decoder_file: Option<&str>,
+    load_encoder: bool,
+) -> Result<Arc<crate::qwen::runtime::QwenRuntime>> {
+    let enc_backend_resolved = resolve_encoder_backend(encoder_backend);
+    let dec_backend_resolved = resolve_decoder_backend(decoder_backend);
+    let key = build_runtime_cache_key(
+        qwen_dir,
+        aligner_dir,
+        enc_backend_resolved,
+        dec_backend_resolved,
+        decoder_file,
+    );
+
+    {
+        let cache = crate::qwen::context::GLOBAL_QWEN_CACHE.lock();
+        if let Some(runtime) = cache.get(&key) {
+            println!("[Rust Cache HIT] 成功秒级复用显存中的预加载 QwenRuntime (Model: {})", qwen_dir);
+            runtime.reset_cancel();
+            return Ok(runtime);
+        }
     }
 
     // 目录或 Backend 变更：先清理旧的 Cache，触发原 QwenDecoder 的 Drop，彻底释放 GPU 显存！
+    // 注意: 锁外加载模型 (可能耗时数秒~数十秒), 避免阻塞 UI 状态轮询与并发预加载线程;
+    // 加载完成后二次检查, 防止并发加载竞态。旧运行时也在锁外 drop (释放 VRAM 耗时)。
     println!("[Rust Cache MISS] 未命中预加载缓存! 请求键: {:?}. 正在释放旧模型并载入新模型...", key);
-    cache.clear();
 
-    println!("[Rust] Loading new QwenRuntime into GPU VRAM from model dir: {}", qwen_dir);
     let runtime = Arc::new(
         crate::qwen::runtime::QwenRuntime::load(
             qwen_dir,
@@ -125,19 +160,33 @@ pub fn get_or_create_qwen_runtime(
             encoder_backend,
             decoder_backend,
             decoder_file,
+            load_encoder,
         )
         .map_err(|e| anyhow!("Failed to load Qwen runtime: {:?}", e))?,
     );
 
-    cache.set(key, runtime.clone());
+    let mut cache = crate::qwen::context::GLOBAL_QWEN_CACHE.lock();
+    if let Some(existing) = cache.get(&key) {
+        println!("[Rust Cache HIT] 锁外加载期间已有并发调用完成加载, 复用其运行时 (Model: {})", qwen_dir);
+        existing.reset_cancel();
+        return Ok(existing);
+    }
+    let old = cache.set(key, runtime.clone());
+    drop(cache);
+    drop(old);
     Ok(runtime)
 }
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn unload_qwen_runtime() {
-    let mut cache = crate::qwen::context::GLOBAL_QWEN_CACHE.lock();
-    println!("[Rust] unload_qwen_runtime: Dropping cached QwenRuntime and freeing GPU VRAM...");
-    cache.clear();
+    let old = {
+        let mut cache = crate::qwen::context::GLOBAL_QWEN_CACHE.lock();
+        cache.clear()
+    };
+    if old.is_some() {
+        println!("[Rust] unload_qwen_runtime: Dropping cached QwenRuntime and freeing GPU VRAM...");
+    }
+    drop(old);
 }
 
 #[flutter_rust_bridge::frb(sync)]
@@ -149,7 +198,7 @@ pub fn preload_qwen_model(
     decoder_backend: crate::qwen::backend::DecoderBackend,
 ) -> Result<(), String> {
     println!(
-        "[Rust] Spawning background thread for preloading Qwen model: {} (decoder={:?}, enc={:?}, dec={:?})",
+        "[Rust] Spawning background thread for preloading Qwen decoder: {} (decoder={:?}, enc={:?}, dec={:?})",
         asr_model_dir, decoder_file, encoder_backend, decoder_backend
     );
     std::thread::spawn(move || {
@@ -165,12 +214,15 @@ pub fn preload_qwen_model(
             return;
         };
 
+        // 预加载只加载 decoder GGUF (+ aligner), encoder ONNX 延迟到推理开始时
+        // 再懒加载 (推理结束后释放, 避免常驻 ~1GB RAM)。
         match get_or_create_qwen_runtime(
             &qwen_dir,
             aligner_model_dir.as_deref(),
             encoder_backend,
             decoder_backend,
             decoder_file.as_deref(),
+            false,
         ) {
             Ok(_) => println!("[Rust Preload] Successfully preloaded model into VRAM: {}", qwen_dir),
             Err(e) => println!("[Rust Preload] Preload model error: {:?}", e),
@@ -351,15 +403,16 @@ pub fn transcribe_stream(
         // 取消后旧线程可能仍在向已关闭的 StreamSink 发消息
         // (frb 报 "Fail to post message to Dart")，若此时并发启动第二次
         // 转写，frb 事件流可能异常导致 Dart 侧收不到任何事件。
-        // 带超时兜底，避免旧线程异常卡死时第二次永远无法启动。
+        // 带超时兜底: 旧线程 30s 仍未退出时不再无限等待, 直接继续执行
+        // (放弃互斥, 接受并发风险), 保证第二次转写一定能启动。
         use std::time::{Duration, Instant};
         let deadline = Instant::now() + Duration::from_secs(30);
-        let _guard = loop {
+        let _guard: Option<parking_lot::MutexGuard<'static, ()>> = loop {
             match TRANS_LOCK.try_lock() {
-                Some(g) => break g,
+                Some(g) => break Some(g),
                 None if Instant::now() > deadline => {
-                    println!("[Rust] previous transcription thread still active after 30s, proceeding anyway");
-                    break TRANS_LOCK.lock();
+                    println!("[Rust] previous transcription thread still active after 30s, proceeding anyway (previous thread may still be running)");
+                    break None;
                 }
                 None => std::thread::sleep(Duration::from_millis(50)),
             }
@@ -422,8 +475,13 @@ fn run_stream_pipeline_inner(
         config.encoder_backend,
         config.decoder_backend,
         config.decoder_file.as_deref(),
+        true,
     )?;
     runtime_arc.reset_cancel();
+    // encoder 懒加载: 预加载阶段只载入 decoder/aligner, 推理开始时才加载 encoder
+    // (缓存 HIT 时从磁盘加载 ~1GB 权重, 幂等)。推理结束由 EncoderReleaseGuard 释放。
+    runtime_arc.ensure_encoder()?;
+    let _encoder_guard = EncoderReleaseGuard(runtime_arc.clone());
 
     let (tx_raw_48k, rx_raw_48k) = sync_channel::<Vec<f32>>(16);
     let (tx_clean_48k, rx_clean_48k) = sync_channel::<Vec<f32>>(16);
@@ -444,6 +502,17 @@ fn run_stream_pipeline_inner(
 
 // ==== 工作线程结构体与辅助函数 ====
 
+/// 推理结束 (成功/失败/取消) 自动释放 encoder 的 RAII guard:
+/// encoder ONNX Session 占用 ~1GB RAM, 推理结束后立即归还,
+/// decoder/aligner 继续缓存在显存/内存供下次推理复用。
+struct EncoderReleaseGuard(Arc<crate::qwen::runtime::QwenRuntime>);
+
+impl Drop for EncoderReleaseGuard {
+    fn drop(&mut self) {
+        self.0.release_encoder();
+    }
+}
+
 struct AsrTask {
     seq: u64,
     samples: Vec<f32>,
@@ -463,20 +532,30 @@ struct FfmpegPumpHandle {
 
 impl FfmpegPumpHandle {
     fn join(self) -> Result<()> {
-        let _ = self.pump_thread.join();
+        let pump_res = match self.pump_thread.join() {
+            Ok(res) => res,
+            Err(_) => Err(anyhow!("FFmpeg pump thread panicked")),
+        };
         let mut child_opt = None;
         if let Ok(mut lock) = ACTIVE_FFMPEG_CHILD.lock() {
             child_opt = lock.take();
         }
-        let stderr_logs = self.stderr_thread.join().unwrap();
+        let stderr_logs = self
+            .stderr_thread
+            .join()
+            .unwrap_or_else(|_| "<FFmpeg stderr thread panicked>".to_string());
         if let Some(mut child) = child_opt {
-            let ffmpeg_status = child.wait().unwrap();
+            let ffmpeg_status = child
+                .wait()
+                .map_err(|e| anyhow!("Failed to wait for FFmpeg process: {}", e))?;
             if SHOULD_CANCEL.load(Ordering::SeqCst) {
                 return Ok(());
             }
             if !ffmpeg_status.success() {
                 return Err(anyhow!("FFmpeg exited with error: {:?}\nStderr logs:\n{}", ffmpeg_status.code(), stderr_logs));
             }
+            // FFmpeg 正常退出但 pump 线程 IO 失败时, 同样视为失败 (避免静默丢失音频)
+            pump_res?;
         }
         Ok(())
     }
@@ -1483,6 +1562,7 @@ fn spawn_qwen_worker(
             let mut next_seq = 0u64;
             let mut ordered: std::collections::BTreeMap<u64, EncodedTask> =
                 std::collections::BTreeMap::new();
+            let mut sink_closed = false;
 
             loop {
                 match rx_encoded.recv() {
@@ -1498,7 +1578,7 @@ fn spawn_qwen_worker(
                 // 按 seq 顺序取出连续可处理的段
                 while let Some(mut task) = ordered.remove(&next_seq) {
                     next_seq += 1;
-                    process_encoded_task(
+                    if !process_encoded_task(
                         &mut task,
                         &mut pending,
                         &runtime_decoder,
@@ -1509,75 +1589,79 @@ fn spawn_qwen_worker(
                         &mut all_segments,
                         to_simplified,
                         total_duration,
-                    )?;
+                    )? {
+                        sink_closed = true;
+                        break;
+                    }
+                }
+                if sink_closed {
+                    break;
                 }
             }
-            // 通道关闭后清空剩余的乱序缓冲 (按序处理)；
-            // 若仍有 seq 空洞 (理论上 worker 已保证连续，这里兜底) 跳过缺失 seq
-            loop {
-                match ordered.keys().next() {
-                    Some(&k) if k == next_seq => {
-                        let mut task = ordered.remove(&k).unwrap();
-                        next_seq += 1;
-                        process_encoded_task(
-                            &mut task,
-                            &mut pending,
-                            &runtime_decoder,
-                            max_merge_samples,
-                            &language,
-                            &context_prompt,
-                            &sink,
-                            &mut all_segments,
-                            to_simplified,
-                            total_duration,
-                        )?;
-                    }
-                    Some(&k) => {
-                        // 空洞: 缺失的 seq 永远不会到达，跳过
-                        println!("[Rust] Qwen: skipping missing seq {} (hole)", next_seq);
-                        while next_seq < k {
+            if !sink_closed {
+                // 通道关闭后清空剩余的乱序缓冲 (按序处理)；
+                // 若仍有 seq 空洞 (理论上 worker 已保证连续，这里兜底) 跳过缺失 seq
+                loop {
+                    match ordered.keys().next() {
+                        Some(&k) if k == next_seq => {
+                            let mut task = ordered.remove(&k).unwrap();
                             next_seq += 1;
+                            if !process_encoded_task(
+                                &mut task,
+                                &mut pending,
+                                &runtime_decoder,
+                                max_merge_samples,
+                                &language,
+                                &context_prompt,
+                                &sink,
+                                &mut all_segments,
+                                to_simplified,
+                                total_duration,
+                            )? {
+                                sink_closed = true;
+                                break;
+                            }
                         }
+                        Some(&k) => {
+                            // 空洞: 缺失的 seq 永远不会到达，跳过
+                            println!("[Rust] Qwen: skipping missing seq {} (hole)", next_seq);
+                            while next_seq < k {
+                                next_seq += 1;
+                            }
+                        }
+                        None => break,
                     }
-                    None => break,
                 }
             }
 
-            let _ = sink.add(TranscriptionEvent::Success(all_segments));
+            if !sink_closed {
+                let _ = sink.add(TranscriptionEvent::Success(all_segments));
+            }
             Ok(())
         })
     };
 
-    let runtime_finish = runtime.clone();
-    thread::spawn(move || {
-        let mut enc_ok = true;
+    thread::spawn(move || -> Result<()> {
+        // 编码线程返回 Err 不致命 (单段编码失败已通过 None 标记跳过)，
+        // 仅 panic 视为错误; 解码线程 panic/Err 直接上抛。
         for handle in encoder_handles {
-            if handle.join().map_err(|_| anyhow!("Qwen encoder thread panicked"))?.is_err() {
-                enc_ok = false;
+            if handle
+                .join()
+                .map_err(|_| anyhow!("Qwen encoder thread panicked"))?
+                .is_err()
+            {
+                println!("[Rust] Qwen encoder thread returned error (segments skipped)");
             }
         }
-        let dec_res = decoder_handle
+        decoder_handle
             .join()
-            .map_err(|_| anyhow!("Qwen decoder thread panicked"))?;
-        if enc_ok {
-            enc_ok = dec_res.is_ok();
-        }
-        if !enc_ok {
-            // 编码线程返回 Err 不致命 (单个段编码失败已跳过)，仅当解码失败才视为错误
-            return dec_res;
-        }
-
-        // 全流水线（包括第二编码线程和主线程）推理完全结束。
-        // 重置清理 CPU 端 ONNX Encoder 及 Aligner 的临时内存池 (Arena)，
-        // 销毁旧 Session，使进程常驻内存减少。
-        runtime_finish.trim_onnx_memory();
-
-        Ok(())
+            .map_err(|_| anyhow!("Qwen decoder thread panicked"))?
     })
 }
 
 /// 解码一个已编码的段 (含合并重试逻辑)，由 decoder 线程按 seq 顺序调用。
-/// 返回 Ok(()) 表示继续处理；sink 关闭或通道结束由调用方处理。
+/// 返回 Ok(true) 表示继续处理; Ok(false) 表示 sink 已关闭 (调用方应立即停止);
+/// Err 上抛给调用方终止管道。
 #[allow(clippy::too_many_arguments)]
 fn process_encoded_task(
     task: &mut EncodedTask,
@@ -1590,10 +1674,10 @@ fn process_encoded_task(
     all_segments: &mut Vec<TranscriptionSegment>,
     to_simplified: bool,
     total_duration: f64,
-) -> Result<()> {
+) -> Result<bool> {
     // 编码失败/跳过的标记段 (enc_out=None): 直接跳过，不参与合并
     let Some(mut enc_out) = task.enc_out.take() else {
-        return Ok(());
+        return Ok(true);
     };
 
     // 与上一个"空结果"片段拼接
@@ -1645,8 +1729,14 @@ fn process_encoded_task(
     ) {
         Ok(res) => res,
         Err(e) => {
-            println!("[Rust] Qwen transcribe segment error: {:?}", e);
-            return Ok(());
+            if matches!(e, QwenError::Cancelled) {
+                return Ok(true);
+            }
+            // 解码失败与空结果一致处理: 保留音频与下一个片段合并重试,
+            // 避免该段语音静默丢失 (合并超过上限仍失败时由 pending 丢弃逻辑兜底)
+            println!("[Rust] Qwen transcribe segment error: {:?}, keep audio for merge retry", e);
+            *pending = Some((task.samples.clone(), task.start_ms, task.timeline.clone()));
+            return Ok(true);
         }
     };
 
@@ -1658,7 +1748,7 @@ fn process_encoded_task(
     if final_text.is_empty() {
         // 模型跳过：保留音频待与下一个片段合并重试
         *pending = Some((task.samples.clone(), task.start_ms, task.timeline.clone()));
-        return Ok(());
+        return Ok(true);
     }
 
     if to_simplified {
@@ -1730,7 +1820,7 @@ fn process_encoded_task(
         all_segments.push(seg.clone());
         if sink.add(TranscriptionEvent::Segment(seg)).is_err() {
             println!("[Rust] Sink closed. Aborting Qwen loop.");
-            return Ok(());
+            return Ok(false);
         }
     }
 
@@ -1738,16 +1828,16 @@ fn process_encoded_task(
     let progress = ((task.end_ms as f64 / 1000.0) / total_duration * 100.0) as i32;
     if sink.add(TranscriptionEvent::Progress(progress.clamp(0, 100))).is_err() {
         println!("[Rust] Sink closed. Aborting Qwen loop.");
-        return Ok(());
+        return Ok(false);
     }
     if sink.add(TranscriptionEvent::ProgressDetail {
         processed_ms: task.end_ms,
         total_ms: (total_duration * 1000.0) as i64,
     }).is_err() {
         println!("[Rust] Sink closed. Aborting Qwen loop.");
-        return Ok(());
+        return Ok(false);
     }
-    Ok(())
+    Ok(true)
 }
 
 // ==== 管道辅助函数 ====

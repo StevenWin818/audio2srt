@@ -6,9 +6,14 @@ use crate::qwen::error::QwenError;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+/// encoder 未加载时的状态哨兵值 (Dart 侧 settings_view 依赖此值显示"未加载"状态)。
+pub const ENCODER_EP_UNLOADED: &str = "未加载";
+
 pub struct QwenRuntime {
-    /// encoder (单实例; 编码线程池各自加载独立 Session 以支持 CPU 并行)
-    pub asr_encoder: parking_lot::Mutex<QwenEncoder>,
+    /// encoder (单实例; 编码线程池各自加载独立 Session 以支持 CPU 并行)。
+    /// Option: 预加载阶段可为 None (仅 decoder/aligner 常驻),
+    /// 首次推理时 ensure_encoder 懒加载, 推理结束后 release_encoder 释放 RAM。
+    pub asr_encoder: parking_lot::Mutex<Option<QwenEncoder>>,
     pub asr_decoder: parking_lot::Mutex<QwenDecoder>,
     pub aligner: Option<parking_lot::Mutex<QwenAligner>>,
     pub cancel: std::sync::Arc<AtomicBool>,
@@ -16,12 +21,12 @@ pub struct QwenRuntime {
     pub model_dir: String,
     /// decoder GGUF 文件名 (量化信息)
     pub decoder_file: String,
-    /// encoder 实际执行提供程序 ("CUDA" / "DirectML" / "CPU")
-    pub encoder_ep: String,
     /// decoder 实际后端 ("CUDA" / "Vulkan" / "CPU")
     pub decoder_backend: String,
     /// decoder offload 状态
     pub decoder_offload: String,
+    /// encoder 请求后端 (懒加载时使用; 实际 EP 见 encoder_actual_ep)
+    encoder_backend_req: EncoderBackend,
 }
 
 impl QwenRuntime {
@@ -31,12 +36,18 @@ impl QwenRuntime {
         encoder_backend: EncoderBackend,
         decoder_backend: DecoderBackend,
         decoder_file: Option<&str>,
+        load_encoder: bool,
     ) -> Result<Self, QwenError> {
         println!(
-            "[runtime] loading Qwen runtime\n  asr_dir={}\n  aligner_dir={:?}\n  enc_backend={:?}\n  dec_backend={:?}\n  decoder_file={:?}",
-            asr_model_dir, aligner_model_dir, encoder_backend, decoder_backend, decoder_file
+            "[runtime] loading Qwen runtime\n  asr_dir={}\n  aligner_dir={:?}\n  enc_backend={:?}\n  dec_backend={:?}\n  decoder_file={:?}\n  load_encoder={}",
+            asr_model_dir, aligner_model_dir, encoder_backend, decoder_backend, decoder_file, load_encoder
         );
-        let encoder = QwenEncoder::load(asr_model_dir, encoder_backend)?;
+        let encoder = if load_encoder {
+            Some(QwenEncoder::load(asr_model_dir, encoder_backend)?)
+        } else {
+            println!("[runtime] encoder 延迟加载 (推理开始时 ensure_encoder)");
+            None
+        };
         let decoder = QwenDecoder::load(asr_model_dir, decoder_backend, decoder_file)?;
         let aligner = if let Some(align_dir) = aligner_model_dir {
             match QwenAligner::load(align_dir, decoder_backend) {
@@ -49,7 +60,6 @@ impl QwenRuntime {
         } else {
             None
         };
-        let encoder_ep = encoder.actual_ep.clone();
         let decoder_backend = decoder.actual_backend.clone();
         let decoder_offload = decoder.offload_info.clone();
         let decoder_file = std::path::Path::new(&decoder.model_path())
@@ -63,10 +73,45 @@ impl QwenRuntime {
             cancel: Arc::new(AtomicBool::new(false)),
             model_dir: asr_model_dir.to_string(),
             decoder_file,
-            encoder_ep,
             decoder_backend,
             decoder_offload,
+            encoder_backend_req: encoder_backend,
         })
+    }
+
+    /// 确保 encoder 已加载 (首次推理/缓存 HIT 后懒加载, 幂等)。
+    /// 加载 ~1.2GB (1.7B FP32) 权重需要数秒, 只在推理开始时调用。
+    /// 注意: 加载在锁外进行 (避免嵌套加锁死锁), 并发调用时可能重复加载,
+    /// 后到者的 Session 会被直接丢弃 (仅浪费一次加载)。
+    pub fn ensure_encoder(&self) -> Result<(), QwenError> {
+        if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(QwenError::Cancelled);
+        }
+        let need = self.asr_encoder.lock().is_none();
+        if need {
+            println!("[runtime] lazy-loading encoder from {}", self.model_dir);
+            let t0 = std::time::Instant::now();
+            let fresh = QwenEncoder::load(&self.model_dir, self.encoder_backend_req)?;
+            println!(
+                "[runtime] encoder loaded in {:.1}s",
+                t0.elapsed().as_secs_f64()
+            );
+            let mut enc = self.asr_encoder.lock();
+            if enc.is_none() {
+                *enc = Some(fresh);
+            }
+        }
+        Ok(())
+    }
+
+    /// 释放 encoder (推理结束后调用): drop ONNX Session, 立即归还 ~1GB RAM。
+    /// decoder/aligner 不受影响, 继续缓存在显存/内存供下次推理复用。
+    pub fn release_encoder(&self) {
+        let mut enc = self.asr_encoder.lock();
+        if enc.is_some() {
+            *enc = None;
+            println!("[runtime] encoder released (ONNX session dropped, RAM freed)");
+        }
     }
 
     pub fn transcribe_segment(
@@ -82,48 +127,45 @@ impl QwenRuntime {
     /// 仅执行 ONNX 编码器前向传播。与 `decode_segment` 拆分后，
     /// 编码线程和解码线程可在不同阶段重叠运行（段 N 解码时，段 N+1 编码）。
     pub fn encode_segment(&self, samples_16k: &[f32]) -> Result<EncoderOutput, QwenError> {
+        self.ensure_encoder()?;
         let mut enc = self.asr_encoder.lock();
-        enc.encode(samples_16k, &self.cancel)
+        match enc.as_mut() {
+            Some(e) => e.encode(samples_16k, &self.cancel),
+            // ensure_encoder 成功后正常路径不会走到这里 (推理期无人 release);
+            // 仅防御并发 release_encoder 的极端竞态, 返回错误而非 panic
+            None => Err(QwenError::BackendUnavailable(
+                "encoder released concurrently".into(),
+            )),
+        }
     }
 
     /// encoder 的模型目录 (供编码线程池加载独立 Session；QwenEncoder::load 接收目录)
     pub fn encoder_model_path(&self) -> String {
-        let p = self.asr_encoder.lock().frontend_path().to_string();
-        std::path::Path::new(&p)
-            .parent()
-            .map(|d| d.to_string_lossy().into_owned())
-            .unwrap_or(p)
+        let guard = self.asr_encoder.lock();
+        if let Some(e) = guard.as_ref() {
+            let p = e.frontend_path().to_string();
+            std::path::Path::new(&p)
+                .parent()
+                .map(|d| d.to_string_lossy().into_owned())
+                .unwrap_or(p)
+        } else {
+            self.model_dir.clone()
+        }
     }
 
     /// encoder 的请求后端 (供编码线程池使用相同 EP)
     pub fn encoder_backend(&self) -> EncoderBackend {
-        self.asr_encoder.lock().backend()
+        self.encoder_backend_req
     }
 
-    /// encoder 实际生效的 EP ("CUDA" / "DirectML" / "CPU")
+    /// encoder 实际生效的 EP ("CUDA" / "DirectML" / "CPU";
+    /// 未加载时返回 ENCODER_EP_UNLOADED)
     pub fn encoder_actual_ep(&self) -> String {
-        self.asr_encoder.lock().actual_ep.clone()
-    }
-
-    /// 清理并重置 ONNX 临时推理内存：
-    pub fn trim_onnx_memory(&self) {
-        let model_dir = self.encoder_model_path();
-        let backend = self.encoder_backend();
-        if let Ok(fresh_enc) = QwenEncoder::load(&model_dir, backend) {
-            println!("[runtime] 正在重置并清理 ONNX Encoder 算子内存池 (Arena)...");
-            *self.asr_encoder.lock() = fresh_enc;
-        }
-        if let Some(ref aligner_mutex) = self.aligner {
-            let decoder_backend = match self.decoder_backend.as_str() {
-                "CUDA" => DecoderBackend::Cuda,
-                "Vulkan" => DecoderBackend::Vulkan,
-                _ => DecoderBackend::Cpu,
-            };
-            if let Ok(fresh_aligner) = QwenAligner::load(&model_dir, decoder_backend) {
-                println!("[runtime] 正在重置并清理 ONNX Aligner 算子内存池 (Arena)...");
-                *aligner_mutex.lock() = fresh_aligner;
-            }
-        }
+        self.asr_encoder
+            .lock()
+            .as_ref()
+            .map(|e| e.actual_ep.clone())
+            .unwrap_or_else(|| ENCODER_EP_UNLOADED.to_string())
     }
 
     /// 仅执行 GGUF/llama.cpp 解码器前向传播。
@@ -236,7 +278,7 @@ mod tests {
         assert!(std::path::Path::new(&model_dir).exists(), "model dir not found: {}", model_dir);
 
         gpu_mem("before load");
-        let runtime = QwenRuntime::load(&model_dir, None, EncoderBackend::Auto, DecoderBackend::Auto, None)
+        let runtime = QwenRuntime::load(&model_dir, None, EncoderBackend::Auto, DecoderBackend::Auto, None, true)
             .expect("runtime load failed");
         gpu_mem("after load (pre-encode)");
 
@@ -253,6 +295,5 @@ mod tests {
             );
         }
         gpu_mem("after encode");
-        assert!(true);
     }
 }

@@ -1261,7 +1261,6 @@ dependencies = [
  "hound",
  "llama-cpp-sys-2",
  "memmap2",
- "once_cell",
  "ort",
  "parking_lot",
  "realfft 1.1.0",
