@@ -20,8 +20,8 @@ const SUB_MAX_MS: i64 = 5000;
 const SENTENCE_MAX_MS: i64 = 9000;
 /// 目标时长 (ms), 靠近该值代价最小
 const SUB_TARGET_MS: i64 = 3500;
-/// 字幕长度硬上限: 中文 ≤20 字符, 西文 ≤20 单词 (标点不计)
-const MAX_UNITS: usize = 20;
+/// 字幕长度硬上限: 中文 ≤25 字符, 西文 ≤25 单词 (标点不计)
+const MAX_UNITS: usize = 25;
 /// 单条偏好的长度 (低于该值无长度代价)
 const PREFER_UNITS: usize = 12;
 /// 开始时间轻微视觉平滑 (ms)
@@ -34,6 +34,12 @@ const PAUSE_STRONG_MS: i64 = 250;
 const MID_SENTENCE_BASE: f64 = 120.0;
 /// 句点后引语逗号 (≤2 词后接逗号) 禁止切分的代价
 const LEADIN_COMMA_BLOCK: f64 = 500.0;
+/// 弱标点 (逗号等) 边界代价: 必须低于句中无标点边界的最小代价 (20.0),
+/// 保证"有标点优先于无标点停顿"的语言学优先级
+const WEAK_PUNCT_COST: f64 = 10.0;
+/// 单条字幕时长硬上限 (ms): DP 剪枝用, 超过此长度的候选段不再计算。
+/// 时间单调时内层循环可提前 break, 长块 (N≈700) 下 DP 近似 O(N)。
+const MAX_SEG_MS: i64 = 15000;
 
 fn is_strong_punct(ch: char) -> bool {
     matches!(ch, '。' | '！' | '？' | '!' | '?' | '…')
@@ -61,25 +67,50 @@ fn is_cjk_char(c: char) -> bool {
         || (0xF900..=0xFAFF).contains(&code)
 }
 
+/// 移除文本中所有的全角句号 "。"
+pub fn remove_periods(text: &str) -> String {
+    text.replace('。', "")
+}
+
+
 /// 缩写保护: 短字母词后的句点 ("Mr." "Dr." "St." "etc." "U.S.") 不是句子边界;
 /// 数字小数点 ("3.5") 同理。返回 true 表示该句点应视为普通句点 (强边界)。
 fn is_real_period(units: &[WordItem], dot_idx: usize) -> bool {
-    // dot_idx 指向句点 unit; 检查其前一个非标点 unit
-    if dot_idx == 0 {
-        return true;
+    let dot_text = &units[dot_idx].text;
+    let core = dot_text.trim_end_matches('.');
+    if core.chars().any(|c| c.is_alphanumeric()) {
+        // 附着格式: 句点与词同 unit, 直接检查该词本身
+        return classify_period_word(core);
     }
-    let prev = &units[dot_idx - 1];
-    let prev_text = prev.text.trim_end_matches('.');
-    let prev_chars: Vec<char> = prev_text.chars().collect();
-    if prev_chars.is_empty() {
+    // 独立/逐字符格式: 向前合并连续 ASCII 字母数字 unit, 还原完整单词再判定。
+    // 注意必须用 is_ascii_alphanumeric: CJK 字符属于 Unicode Alphabetic,
+    // 用 is_alphanumeric 会把中文一并并进"单词" 。
+    // 遇到空格/标点/CJK unit 立即停止
+    let mut word = String::new();
+    let mut k = dot_idx;
+    while k > 0 {
+        k -= 1;
+        let t = units[k].text.trim();
+        if t.is_empty() || !t.chars().all(|c| c.is_ascii_alphanumeric()) {
+            break;
+        }
+        word.insert_str(0, t);
+    }
+    classify_period_word(&word)
+}
+
+/// 判定句点前的"单词"是缩写/数字 (返回 false) 还是真实句末 (返回 true)。
+fn classify_period_word(word: &str) -> bool {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.is_empty() {
         return true;
     }
     // 数字: 小数点
-    if prev_chars.iter().all(|c| c.is_ascii_digit()) {
+    if chars.iter().all(|c| c.is_ascii_digit()) {
         return false;
     }
     // 短字母缩写: Mr. Dr. St. No. etc. (≤4 个字母)
-    if prev_chars.iter().all(|c| c.is_ascii_alphabetic()) && prev_chars.len() <= 4 {
+    if chars.iter().all(|c| c.is_ascii_alphabetic()) && chars.len() <= 4 {
         return false;
     }
     true
@@ -119,7 +150,8 @@ fn mid_sentence_cost(units: &[WordItem], j: usize) -> f64 {
 }
 
 /// 句点后引语逗号边界: 句点后、逗号前的西文单词 ≤2 个时忽略该逗号不切
-/// ("However," "Yeah," "I mean," 等话语标记后不切; 结构化规则, 无需白名单)
+/// ("However," "Yeah," "I mean," 等话语标记后不切; 结构化规则, 无需白名单)。
+/// 语音块开头视为天然句首 (前一句的句点被块边界截断), 段首引语逗号同样受保护。
 fn is_leadin_comma_boundary(units: &[WordItem], j: usize) -> bool {
     if j == 0 {
         return false;
@@ -141,6 +173,10 @@ fn is_leadin_comma_boundary(units: &[WordItem], j: usize) -> bool {
         // 词+逗号同一 unit (如 "way,"): 单词照常计数
         let core = text.trim_end_matches(|c: char| is_comma_punct(c) || is_strong_punct(c) || c == '.');
         if is_comma_punct(tail_ch) {
+            if core.chars().any(|c| is_cjk_char(c)) {
+                // 中文不适用此规则 (西文单词才计数)
+                return false;
+            }
             if core.chars().any(|c| c.is_alphanumeric()) {
                 word_count += 1;
                 if word_count > 2 {
@@ -160,7 +196,9 @@ fn is_leadin_comma_boundary(units: &[WordItem], j: usize) -> bool {
             }
         }
         if idx == 0 {
-            return false; // 走到序列开头仍未遇到句末标点
+            // 序列开头 = 天然句首 (块边界截断了前一句的句点):
+            // 段首 "However," 等引语逗号同样禁止切分, 避免连接词单独成条
+            return word_count <= 2;
         }
         idx -= 1;
     }
@@ -178,7 +216,8 @@ fn count_units(units: &[WordItem], j: usize, i: usize) -> usize {
             continue; // 纯标点不计
         }
         if text.chars().any(|c| is_cjk_char(c)) {
-            count += text.chars().count();
+            // 中文按字符数, 但剔除附着标点 (如 "好，" 只计 1 字)
+            count += text.chars().filter(|c| c.is_alphanumeric()).count();
         } else {
             count += 1;
         }
@@ -190,7 +229,9 @@ fn count_units(units: &[WordItem], j: usize, i: usize) -> usize {
 ///
 /// - `units` 为空时返回空 Vec, 调用方回退为整段一条字幕;
 /// - 拆分点优先落在句末标点/长停顿, 其次句中逗号, 无标点按时长硬切;
-/// - 输出字幕的时间已做轻微视觉平滑且保证相邻不重叠;
+/// - 输出字幕的时间已做轻微视觉平滑且保证相邻不重叠:
+///   平滑重叠时 (上一句尾垫吞掉本句头垫) 在两句真实时间边界之间取中点,
+///   上一句回缩尾垫, 保证本句字幕不晚于其语音起点出现;
 /// - `quality` 为对齐质量标记 (如 "ForcedAligned"/"LinearFallback"),
 ///   透传到输出字幕, 使 UI/SRT 能区分真实对齐与线性回退;
 /// - `block_start_ms`/`block_end_ms` 为块的真实媒体边界:
@@ -207,13 +248,19 @@ pub fn split_subtitles(
         return Vec::new();
     }
 
-    // dp[i] = 把 units[0..i) 拆成若干字幕的最小代价; prev[i] = 最后一段的起点
+    // dp[i] = 把 units[0..i) 拆成若干字幕的最小代价; prev[i] = 最后一段的起点。
+    // 内层 j 从大到小扫描: 时间单调时 j 越小段越长 (dur 越大),
+    // 超过 MAX_SEG_MS 直接剪枝, 长块下 DP 近似 O(N) 而非 O(N^2)。
     let mut dp = vec![f64::INFINITY; n + 1];
     let mut prev = vec![0usize; n + 1];
     dp[0] = 0.0;
 
     for i in 1..=n {
-        for j in 0..i {
+        for j in (0..i).rev() {
+            let dur = units[i - 1].end_ms - units[j].start_ms;
+            if dur > MAX_SEG_MS {
+                break;
+            }
             let total = dp[j] + segment_cost(units, j, i);
             if total < dp[i] {
                 dp[i] = total;
@@ -234,16 +281,20 @@ pub fn split_subtitles(
     // 组装字幕 + 轻微视觉平滑 (前垫/后延, 不重叠, 不越出块的真实媒体边界)
     let block_start = block_start_ms.min(units[0].start_ms);
     let block_end = block_end_ms.max(units[n - 1].end_ms);
-    let mut out = Vec::with_capacity(bounds.len() - 1);
+    let mut out: Vec<TranscriptionSegment> = Vec::with_capacity(bounds.len() - 1);
     let mut prev_end = block_start;
+    let mut prev_real_end = block_start;
     for w in bounds.windows(2) {
         let (j, i) = (w[0], w[1]);
         if j >= i {
             continue;
         }
-        let text: String = units[j..i].iter().map(|u| u.text.as_str()).collect();
-        let mut start = units[j].start_ms - START_PAD_MS;
-        let mut end = units[i - 1].end_ms + END_PAD_MS;
+        let raw_text: String = units[j..i].iter().map(|u| u.text.as_str()).collect();
+        let text = remove_periods(&raw_text);
+        let real_start = units[j].start_ms;
+        let real_end = units[i - 1].end_ms;
+        let mut start = real_start - START_PAD_MS;
+        let mut end = real_end + END_PAD_MS;
         if start < block_start {
             start = block_start;
         }
@@ -251,12 +302,27 @@ pub fn split_subtitles(
             end = block_end;
         }
         if start < prev_end {
-            start = prev_end;
+            // 平滑重叠: 在两句真实时间边界之间取中点,
+            // 上一句回缩尾垫, 本句保留部分头垫 —— 避免本句字幕
+            // 被推迟到语音起点之后 (最多晚 ~200ms) 才显示
+            let mid = (prev_real_end + real_start) / 2;
+            if mid < prev_end {
+                if let Some(last) = out.last_mut() {
+                    last.end_ms = mid.max(last.start_ms);
+                    prev_end = last.end_ms;
+                }
+            }
+            start = mid;
+            if start < prev_end {
+                // 保底 (时间逆序等异常对齐数据): 绝不与前一条重叠
+                start = prev_end;
+            }
         }
         if end <= start {
             end = start + 1;
         }
         prev_end = end;
+        prev_real_end = real_end;
         out.push(TranscriptionSegment {
             start_ms: start,
             end_ms: end,
@@ -266,6 +332,26 @@ pub fn split_subtitles(
         });
     }
     out
+}
+
+/// 边界 (units[j] 之前) 的切分代价, 优先级 (由低到高):
+/// 句末标点/长停顿 (0) > 弱标点逗号 (WEAK_PUNCT_COST) > 句中无标点 (按停顿大小);
+/// 句点后引语逗号 (≤2 词) 禁止切分 (LEADIN_COMMA_BLOCK)。
+fn boundary_cost(units: &[WordItem], j: usize) -> f64 {
+    if j == 0 {
+        return 0.0;
+    }
+    let prev_ch = units[j - 1].text.chars().last().unwrap_or(' ');
+    let pause = units[j].start_ms - units[j - 1].end_ms;
+    if is_leadin_comma_boundary(units, j) {
+        LEADIN_COMMA_BLOCK
+    } else if strong_punct_boundary(units, j) || pause >= PAUSE_STRONG_MS {
+        0.0
+    } else if is_weak_punct(prev_ch) {
+        WEAK_PUNCT_COST
+    } else {
+        mid_sentence_cost(units, j)
+    }
 }
 
 /// 一段字幕 (units[j..i)) 的拆分代价。
@@ -300,9 +386,9 @@ fn segment_cost(units: &[WordItem], j: usize, i: usize) -> f64 {
         cost += (dur - SUB_TARGET_MS).abs() as f64 * 0.004;
     }
 
-    // 字数/词数约束: 中文 ≤20 字符, 西文 ≤20 单词。
-    // 超过 20 的惩罚仅用于"迫使拆分", 不压制停顿边界的选择 ——
-    // 拆在哪由边界代价决定 (停顿最长处优先), 而非固定 20 字位置。
+    // 字数/词数约束: 中文 ≤MAX_UNITS 字符, 西文 ≤MAX_UNITS 单词。
+    // 超过 MAX_UNITS 的惩罚仅用于"迫使拆分", 不压制停顿边界的选择
+    // 拆在哪由边界代价决定 (停顿最长处优先), 而非固定字数位置。
     let count = count_units(units, j, i);
     if count > MAX_UNITS {
         cost += (count - MAX_UNITS) as f64 * 60.0;
@@ -310,23 +396,11 @@ fn segment_cost(units: &[WordItem], j: usize, i: usize) -> f64 {
         cost += (count - PREFER_UNITS) as f64 * 0.5;
     }
 
-    // 边界质量 (段首前的边界): 句点后引语逗号 (≤2 词) 禁止切分 >
-    // 句末标点 > 停顿 > 句中逗号 > 无标点 (按停顿大小)
-    if j > 0 {
-        let prev_ch = units[j - 1].text.chars().last().unwrap_or(' ');
-        let pause = units[j].start_ms - units[j - 1].end_ms;
-        cost += if is_leadin_comma_boundary(units, j) {
-            LEADIN_COMMA_BLOCK
-        } else if strong_punct_boundary(units, j) || pause >= PAUSE_STRONG_MS {
-            0.0
-        } else if is_weak_punct(prev_ch) {
-            30.0
-        } else {
-            mid_sentence_cost(units, j)
-        };
-    }
+    cost += boundary_cost(units, j);
     cost
 }
+
+// ================= 以下测试 =======================
 
 #[cfg(test)]
 mod tests {
@@ -363,11 +437,18 @@ mod tests {
     }
 
     #[test]
+    fn removes_full_stop_periods() {
+        assert_eq!(remove_periods("你好。世界。"), "你好世界");
+        assert_eq!(remove_periods("这是。一个。测试。"), "这是一个测试");
+        assert_eq!(remove_periods("Hello. World!"), "Hello. World!");
+    }
+
+    #[test]
     fn short_block_stays_one_subtitle() {
         let units = units_from_text("你好世界。", 0, 400);
         let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
         assert_eq!(segs.len(), 1);
-        assert_eq!(segs[0].text, "你好世界。");
+        assert_eq!(segs[0].text, "你好世界");
     }
 
     #[test]
@@ -378,14 +459,13 @@ mod tests {
         let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
         assert!(segs.len() >= 2, "expected >=2 subtitles, got {}", segs.len());
         let joined: String = segs.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(joined, text);
+        assert_eq!(joined, text.replace('。', ""));
     }
 
     #[test]
     fn long_sentence_splits_at_longest_pause() {
-        // 20 字单句 (100ms/字), 第 10 字后 300ms 真实间隙 -> 必须在停顿最长处切,
-        // 而不是固定 15 字位置
-        let text = "今天天气很好我们出去走走今天天气很好我们出去走走。";
+        // 25 字单句 (100ms/字), 第 10 字后 300ms 真实间隙 -> 必须在停顿最长处切
+        let text = "今天天气很好我们出去走走今天天气很好我们出去走走很有趣。";
         let mut units = units_from_text(text, 0, 100);
         // 在第 10 个字符后插入 300ms 停顿: 后续所有 unit 时间平移 300ms
         for u in units.iter_mut().skip(10) {
@@ -394,16 +474,15 @@ mod tests {
         }
         let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
         assert!(segs.len() >= 2, "expected >=2 subtitles, got {}", segs.len());
-        // 第一段结束在第 10 字 (停顿处), 而非 15 字处
         assert_eq!(segs[0].text, "今天天气很好我们出去");
         let joined: String = segs.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(joined, text);
+        assert_eq!(joined, text.replace('。', ""));
     }
 
     #[test]
-    fn long_sentence_splits_under_15_when_no_pause() {
-        // 20 字无停顿: 拆分且每段 ≤15 字
-        let text = "今天天气很好我们出去走走今天天气很好我们出去走走。";
+    fn long_sentence_splits_under_max_units_when_no_pause() {
+        // 48 字无句尾标点无停顿: 强制拆分且每段 ≤MAX_UNITS
+        let text = "今天天气很好我们出去走走今天天气很好我们出去走走今天天气很好我们出去走走今天天气很好我们出去走走";
         let units = units_from_text(text, 0, 100);
         let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
         assert!(segs.len() >= 2, "expected >=2 subtitles, got {}", segs.len());
@@ -411,17 +490,17 @@ mod tests {
             assert!(count_units(&s.words, 0, s.words.len()) <= MAX_UNITS);
         }
         let joined: String = segs.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(joined, text);
+        assert_eq!(joined, text.replace('。', ""));
     }
 
     #[test]
     fn short_sentence_stays_whole() {
-        // 14 字单句: 在 15 上限内 -> 单独成条, 绝不切
+        // 14 字单句: 在 20 上限内 -> 单独成条, 绝不切
         let text = "今天天气很好我们出去走走。";
         let units = units_from_text(text, 0, 100);
         let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
         assert_eq!(segs.len(), 1, "14-char sentence must stay whole");
-        assert_eq!(segs[0].text, text);
+        assert_eq!(segs[0].text, "今天天气很好我们出去走走");
     }
 
     #[test]
@@ -431,9 +510,9 @@ mod tests {
         let second = units_from_text("今天天气很好我们出去走走今天天气很好我们出去走走。", 900, 100);
         units.extend(second);
         let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
-        assert_eq!(segs[0].text, "第一句。", "short sentence must stay separate");
+        assert_eq!(segs[0].text, "第一句", "short sentence must stay separate");
         let rest: String = segs.iter().skip(1).map(|s| s.text.as_str()).collect();
-        assert_eq!(rest, "今天天气很好我们出去走走今天天气很好我们出去走走。");
+        assert_eq!(rest, "今天天气很好我们出去走走今天天气很好我们出去走走");
     }
 
     #[test]
@@ -478,9 +557,9 @@ mod tests {
         // 3 词引语: "By the way," 不阻断 (超出规则范围)
         let units = word_units("Hello. By the way, the world", 0, 200);
         assert!(!is_leadin_comma_boundary(&units, 4), "3-word leadin must NOT block");
-        // 无句点: "Well, the" 不阻断
+        // 块首引语 (块起点即句首, 前一句句点被块边界截断): "Well," 同样阻断
         let units = word_units("Well, the world", 0, 200);
-        assert!(!is_leadin_comma_boundary(&units, 1), "no period -> no block");
+        assert!(is_leadin_comma_boundary(&units, 1), "block-start leadin must block");
         // 中文: 不适用
         let units = units_from_text("你好，好", 0, 200);
         assert!(!is_leadin_comma_boundary(&units, 3), "chinese -> no block");

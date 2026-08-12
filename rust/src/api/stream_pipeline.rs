@@ -1808,7 +1808,7 @@ fn process_encoded_task(
         vec![TranscriptionSegment {
             start_ms: task.start_ms,
             end_ms: task.end_ms,
-            text: final_text,
+            text: super::subtitle_split::remove_periods(&final_text),
             timestamp_quality: align_quality.clone(),
             words: word_items,
         }]
