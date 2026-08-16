@@ -528,14 +528,15 @@ class ModelService {
 
       for (final f in filesToDownload) {
         final targetFile = File(p.join(targetDir.path, f.filename));
+        final partFile = File(p.join(targetDir.path, '${f.filename}.part'));
         final fileTotal = realSizes[f.filename] ?? (f.sizeMB * 1024 * 1024).round();
         final url = '$baseUrl/${f.urlPath}';
 
-        debugPrint('[ModelService] Downloading $url -> ${targetFile.path} ($fileTotal bytes)');
+        debugPrint('[ModelService] Downloading $url -> ${partFile.path} ($fileTotal bytes)');
 
         await dio.download(
           url,
-          targetFile.path,
+          partFile.path,
           cancelToken: _cancelToken,
           onReceiveProgress: (received, total) {
             final fileBytes = total > 0 ? total.toDouble() : fileTotal.toDouble();
@@ -545,6 +546,11 @@ class ModelService {
           },
         );
 
+        if (await targetFile.exists()) {
+          await targetFile.delete();
+        }
+        await partFile.rename(targetFile.path);
+
         completedBytes += fileTotal;
       }
 
@@ -552,14 +558,13 @@ class ModelService {
       onSuccess();
     } catch (e) {
       debugPrint('[ModelService] Download error: $e');
-      // 清理本次会话下载的文件，防止残片被误判为已下载 (下载中断留下 >50MB 残片时，
-      // isQuantDownloaded 会误判，导致下次跳过下载而转写加载损坏文件)
+      // 清理本次会话未完成的 .part 文件
       for (final f in filesToDownload) {
         try {
-          final target = File(p.join(targetDir?.path ?? '', f.filename));
-          if (await target.exists()) {
-            await target.delete();
-            debugPrint('[ModelService] Cleaned partial file ${f.filename}');
+          final part = File(p.join(targetDir?.path ?? '', '${f.filename}.part'));
+          if (await part.exists()) {
+            await part.delete();
+            debugPrint('[ModelService] Cleaned partial file ${part.path}');
           }
         } catch (_) {}
       }
@@ -598,11 +603,12 @@ class ModelService {
         },
       ));
 
-      // 已解压完整则跳过下载 (zip 解压后会删除, 用解压产物判断)
+      // 已解压完整则跳过下载 (zip 解压后会删除, 用解压产物判断大小与完整度)
       Future<bool> alreadyExtracted() async {
         final checks = model.extractedFiles ?? model.files.map((f) => f.filename).toList();
         for (final name in checks) {
-          if (!await File(p.join(targetDir!.path, name)).exists()) return false;
+          final f = File(p.join(targetDir!.path, name));
+          if (!await f.exists() || await f.length() < 1024 * 1024) return false;
         }
         return true;
       }
@@ -632,13 +638,14 @@ class ModelService {
 
       for (final f in filesToDownload) {
         final targetFile = File(p.join(targetDir.path, f.filename));
+        final partFile = File(p.join(targetDir.path, '${f.filename}.part'));
         final fileTotal = realSizes[f.filename] ?? (f.sizeMB * 1024 * 1024).round();
         final url = f.urlPath.startsWith('http')
             ? f.urlPath
             : '$baseUrl/${f.urlPath}';
         await dio.download(
           url,
-          targetFile.path,
+          partFile.path,
           cancelToken: _cancelToken,
           onReceiveProgress: (received, total) {
             final fileBytes = total > 0 ? total.toDouble() : fileTotal.toDouble();
@@ -647,6 +654,10 @@ class ModelService {
             onProgress(pct);
           },
         );
+        if (await targetFile.exists()) {
+          await targetFile.delete();
+        }
+        await partFile.rename(targetFile.path);
         completedBytes += fileTotal;
       }
 
@@ -666,13 +677,13 @@ class ModelService {
       onSuccess();
     } catch (e) {
       debugPrint('[ModelService] Aligner download error: $e');
-      // 清理本次会话下载的文件，防止残片被误判为已下载
+      // 清理本次会话未完成的 .part 临时文件
       for (final f in filesToDownload) {
         try {
-          final target = File(p.join(targetDir?.path ?? '', f.filename));
-          if (await target.exists()) {
-            await target.delete();
-            debugPrint('[ModelService] Cleaned partial file ${f.filename}');
+          final part = File(p.join(targetDir?.path ?? '', '${f.filename}.part'));
+          if (await part.exists()) {
+            await part.delete();
+            debugPrint('[ModelService] Cleaned partial file ${part.path}');
           }
         } catch (_) {}
       }

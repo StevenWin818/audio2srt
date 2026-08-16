@@ -131,12 +131,13 @@ class TranscriptionProvider with ChangeNotifier {
     _safeNotifyListeners();
   }
 
-  Future<void> _probeAudioTracks(File file) async {
+  Future<void> _probeAudioTracks(File file, int gen) async {
     try {
       final tracks = await rust_ffmpeg.probeAudioTracks(
         ffmpegPath: _ffmpegService.ffmpegPath,
         filePath: file.path,
       );
+      if (gen != _fileGeneration) return;
       _availableTracks = tracks;
       if (_availableTracks.isNotEmpty) {
         _selectedTrack = _availableTracks.first;
@@ -145,6 +146,7 @@ class TranscriptionProvider with ChangeNotifier {
       }
       _safeNotifyListeners();
     } catch (e) {
+      if (gen != _fileGeneration) return;
       debugPrint('[TranscriptionProvider] 探测音轨失败: $e');
     }
   }
@@ -700,7 +702,10 @@ class TranscriptionProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  int _fileGeneration = 0;
+
   void setInputFile(File file) {
+    final gen = ++_fileGeneration;
     _inputMediaFile = file;
     _status = TranscriptionStatus.idle;
     _progress = 0;
@@ -715,18 +720,19 @@ class TranscriptionProvider with ChangeNotifier {
     // 清空旧音轨状态并触发异步探测
     _availableTracks = [];
     _selectedTrack = null;
-    _probeAudioTracks(file);
-    _probeMediaDuration(file);
-    _extractThumbnail(file);
+    _probeAudioTracks(file, gen);
+    _probeMediaDuration(file, gen);
+    _extractThumbnail(file, gen);
 
     _syncHighFreqNotifiers();
     _safeNotifyListeners();
   }
 
-  Future<void> _extractThumbnail(File file) async {
+  Future<void> _extractThumbnail(File file, int gen) async {
     final ext = p.extension(file.path).toLowerCase();
     final isVideoExt = ['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm'].contains(ext);
     if (!isVideoExt) {
+      if (gen != _fileGeneration) return;
       _thumbnailPath = null;
       _safeNotifyListeners();
       return;
@@ -748,6 +754,7 @@ class TranscriptionProvider with ChangeNotifier {
           thumbPath,
         ],
       );
+      if (gen != _fileGeneration) return;
       if (result.exitCode == 0 && await File(thumbPath).exists()) {
         _thumbnailPath = thumbPath;
         _safeNotifyListeners();
@@ -756,18 +763,20 @@ class TranscriptionProvider with ChangeNotifier {
         _safeNotifyListeners();
       }
     } catch (e) {
+      if (gen != _fileGeneration) return;
       debugPrint('[TranscriptionProvider] Extract thumbnail failed: $e');
       _thumbnailPath = null;
       _safeNotifyListeners();
     }
   }
 
-  Future<void> _probeMediaDuration(File file) async {
+  Future<void> _probeMediaDuration(File file, int gen) async {
     try {
       final result = await Process.run(
         _ffmpegService.ffmpegPath,
         ['-i', file.path],
       );
+      if (gen != _fileGeneration) return;
       final output = result.stderr.toString();
       final durationRegex = RegExp(r'Duration:\s*(\d+):(\d+):(\d+\.\d+)');
       final match = durationRegex.firstMatch(output);
@@ -783,6 +792,7 @@ class TranscriptionProvider with ChangeNotifier {
         _preloadWhisperContext();
       }
     } catch (e) {
+      if (gen != _fileGeneration) return;
       debugPrint('[TranscriptionProvider] Probe duration failed: $e');
     }
   }
@@ -1255,6 +1265,10 @@ class TranscriptionProvider with ChangeNotifier {
     try {
       final texts = _subtitles.map((e) => e.text).toList();
       final converted = await rust_whisper.convertChineseList(texts: texts, toSimplified: toSimplified);
+      if (converted.length != _subtitles.length) {
+        debugPrint('[TranscriptionProvider] Converted list length mismatch: expected ${_subtitles.length}, got ${converted.length}');
+        return;
+      }
       final newList = <SubtitleItem>[];
       for (var i = 0; i < _subtitles.length; i++) {
         newList.add(SubtitleItem(
@@ -1376,11 +1390,14 @@ class TranscriptionProvider with ChangeNotifier {
     }
   }
 
+  static DynamicLibrary? _user32;
+
   // Windows FFI 动态查找并闪烁状态栏/任务栏图标
   void _flashTaskbarIcon() {
     if (!Platform.isWindows) return;
     try {
-      final user32 = DynamicLibrary.open('user32.dll');
+      _user32 ??= DynamicLibrary.open('user32.dll');
+      final user32 = _user32!;
       final findWindow = user32.lookupFunction<_FindWindowWFunc, _FindWindowW>('FindWindowW');
       final flashWindow = user32.lookupFunction<_FlashWindowFunc, _FlashWindow>('FlashWindow');
 

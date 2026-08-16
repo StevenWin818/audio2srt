@@ -520,10 +520,24 @@ fn run_stream_pipeline_inner(
     let vad_handle = spawn_vad_worker(&config, rx_clean_48k, tx_asr_task);
     let qwen_handle = spawn_qwen_worker(runtime_arc, &config, total_duration, rx_asr_task, sink);
 
-    ffmpeg_handle.join()?;
-    dfn_handle.join().map_err(|_| anyhow!("DFN3 thread panicked"))??;
-    vad_handle.join().map_err(|_| anyhow!("VAD thread panicked"))??;
-    qwen_handle.join().map_err(|_| anyhow!("Failed to join Qwen GPU thread"))??;
+    let ffmpeg_res = ffmpeg_handle.join();
+    if ffmpeg_res.is_err() {
+        SHOULD_CANCEL.store(true, Ordering::SeqCst);
+    }
+    let dfn_res = dfn_handle.join().map_err(|_| anyhow!("DFN3 thread panicked"));
+    if dfn_res.is_err() {
+        SHOULD_CANCEL.store(true, Ordering::SeqCst);
+    }
+    let vad_res = vad_handle.join().map_err(|_| anyhow!("VAD thread panicked"));
+    if vad_res.is_err() {
+        SHOULD_CANCEL.store(true, Ordering::SeqCst);
+    }
+    let qwen_res = qwen_handle.join().map_err(|_| anyhow!("Failed to join Qwen GPU thread"));
+
+    ffmpeg_res?;
+    dfn_res??;
+    vad_res??;
+    qwen_res??;
 
     Ok(())
 }
@@ -825,30 +839,35 @@ fn spawn_dfn_worker(
 
                 while let Ok(task) = rx.recv() {
                     let DfnTask { seq_id, warmup_samples, real_samples } = task;
-                    let mut cleaned_samples = Vec::with_capacity(real_samples.len());
                     let start_time = std::time::Instant::now();
 
-                    // 1. 重置 GRU 隐藏状态
-                    stream.reset();
+                    // 执行降噪处理，若出错则安全回退使用未降噪的原始数据，保证 seq_id 连续不产生空洞
+                    let process_res: Result<Vec<f32>> = (|| {
+                        let mut out = Vec::with_capacity(real_samples.len());
+                        stream.reset();
+                        if !warmup_samples.is_empty() {
+                            let _ = stream.process(&warmup_samples)
+                                .map_err(|e| anyhow!("Worker {} warmup error: {:?}", worker_id, e))?;
+                        }
+                        let cleaned = stream.process(&real_samples)
+                            .map_err(|e| anyhow!("Worker {} processing error: {:?}", worker_id, e))?;
+                        out.extend_from_slice(&cleaned);
+                        let flushed = stream.flush()
+                            .map_err(|e| anyhow!("Worker {} flush error: {:?}", worker_id, e))?;
+                        out.extend_from_slice(&flushed);
+                        Ok(out)
+                    })();
 
-                    // 2. 状态预热 (Warm-up) - 丢弃此区间的输出
-                    if !warmup_samples.is_empty() {
-                        let _ = stream.process(&warmup_samples)
-                            .map_err(|e| anyhow!("Worker {} warmup error: {:?}", worker_id, e))?;
-                    }
-
-                    // 3. 真实数据降噪
-                    let cleaned = stream.process(&real_samples)
-                        .map_err(|e| anyhow!("Worker {} processing error: {:?}", worker_id, e))?;
-                    cleaned_samples.extend_from_slice(&cleaned);
-
-                    // 4. 冲刷缓存
-                    let flushed = stream.flush()
-                        .map_err(|e| anyhow!("Worker {} flush error: {:?}", worker_id, e))?;
-                    cleaned_samples.extend_from_slice(&flushed);
+                    let cleaned_samples = match process_res {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("[Rust] DFN worker {} failed on seq_id {}, fallback to raw audio: {:?}", worker_id, seq_id, e);
+                            real_samples
+                        }
+                    };
 
                     let _elapsed_ms = start_time.elapsed().as_millis() as u64;
-                    let _audio_dur_sec = real_samples.len() as f64 / 48000.0;
+                    let _audio_dur_sec = cleaned_samples.len() as f64 / 48000.0;
                     log_perf!("DFN3", _elapsed_ms, _audio_dur_sec);
 
                     if tx.send(DfnResult { seq_id, cleaned_samples }).is_err() {
@@ -1056,7 +1075,7 @@ fn spawn_vad_worker(
         let mut block_start_ms: i64 = 0;
         let mut block_end_ms: i64 = 0;
         let mut block_spans: Vec<crate::qwen::aligner::TimelineSpan> = Vec::new();
-        let mut flush_block =
+        let flush_block =
             |samples: &mut Vec<f32>,
              start: &mut i64,
              end: &mut i64,
@@ -1382,7 +1401,6 @@ fn spawn_vad_worker(
             );
         }
 
-        drop(flush_block);
         drop(tx_asr_task);
         Ok(())
     })

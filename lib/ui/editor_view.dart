@@ -43,8 +43,14 @@ class _EditorViewState extends State<EditorView> {
   void _saveEditing(TranscriptionProvider provider) {
     if (_editingIndex == null) return;
     
-    final start = int.tryParse(_startEditController.text) ?? 0;
-    final end = int.tryParse(_endEditController.text) ?? 0;
+    final start = int.tryParse(_startEditController.text);
+    final end = int.tryParse(_endEditController.text);
+    if (start == null || end == null || start < 0 || end < start) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('时间戳格式无效：起始时间必须为非负整数且小于等于结束时间')),
+      );
+      return;
+    }
     
     provider.updateSubtitleText(_editingIndex!, _textEditController.text);
     provider.updateSubtitleTimes(_editingIndex!, start, end);

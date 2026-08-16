@@ -107,7 +107,8 @@ pub struct QwenAligner {
     audio_end_id: i32,
     timestamp_id: i32,
     step_ms: f64,
-    use_gpu: bool,
+    #[allow(dead_code)]
+    pub use_gpu: bool,
 }
 
 unsafe impl Send for QwenAligner {}

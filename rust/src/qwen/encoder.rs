@@ -129,7 +129,7 @@ impl QwenEncoder {
             _ => false,
         };
         #[cfg(not(any(feature = "cuda", feature = "qwen-cuda")))]
-        let cuda_usable = false;
+        let _cuda_usable = false;
 
         let mut session_res: Option<Session> = None;
 

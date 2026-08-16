@@ -46,9 +46,15 @@ fn run_ffmpeg_with_progress(
 
     let mut total_duration_secs = 0.0;
     let mut last_progress = -1;
+    let mut stderr_tail = std::collections::VecDeque::with_capacity(20);
 
     for line_result in reader.lines() {
         if let Ok(line) = line_result {
+            if stderr_tail.len() >= 20 {
+                stderr_tail.pop_front();
+            }
+            stderr_tail.push_back(line.clone());
+
             // Duration: 00:01:23.45,
             if line.contains("Duration:") && total_duration_secs == 0.0 {
                 if let Some(duration_str) = line.split("Duration:").nth(1) {
@@ -83,7 +89,13 @@ fn run_ffmpeg_with_progress(
     if status.success() {
         let _ = sink.add(FfmpegEvent { progress: None, success: Some(output_path), error: None });
     } else {
-        let _ = sink.add(FfmpegEvent { progress: None, success: None, error: Some("FFmpeg 执行失败".to_string()) });
+        let tail_lines: Vec<String> = stderr_tail.into_iter().collect();
+        let err_detail = if tail_lines.is_empty() {
+            "FFmpeg 执行失败".to_string()
+        } else {
+            format!("FFmpeg 执行失败:\n{}", tail_lines.join("\n"))
+        };
+        let _ = sink.add(FfmpegEvent { progress: None, success: None, error: Some(err_detail) });
     }
     
     Ok(())
