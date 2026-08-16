@@ -734,6 +734,41 @@ class ModelService {
     return cleaned;
   }
 
+  /// ForcedAligner 组件是否损坏: 校验解压产物是否齐全且体积合理。
+  /// 注意: 基础模型的 isBaseCorrupted (encoder/config 逻辑) 不适用于 aligner 目录。
+  Future<bool> isAlignerCorrupted(String dirName) async {
+    if (dirName != alignerModel.dirName) return false;
+    final path = await getModelPath(dirName);
+    final dir = Directory(path);
+    if (!await dir.exists()) return false; // 未下载不算损坏
+    final checks = alignerModel.extractedFiles ?? const [];
+    if (checks.isEmpty) return false;
+    for (final name in checks) {
+      try {
+        final f = File(p.join(path, name));
+        // 残留的半截解压产物 (小文件) 视为损坏
+        if (!await f.exists() || await f.length() < 1024 * 1024) {
+          debugPrint('[ModelService] Aligner file corrupted/missing: $name');
+          return true;
+        }
+      } catch (e) {
+        debugPrint('[ModelService] Aligner check error for $name: $e');
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// 修复 ForcedAligner: 删除整个组件目录 (下次下载时重建)
+  Future<void> repairAligner() async {
+    final path = await getModelPath(alignerModel.dirName);
+    final dir = Directory(path);
+    if (await dir.exists()) {
+      await dir.delete(recursive: true);
+      debugPrint('[ModelService] Repair: removed corrupted aligner dir $path');
+    }
+  }
+
   Future<void> deleteAligner() async {
     final path = await getModelPath(alignerModel.dirName);
     final dir = Directory(path);
