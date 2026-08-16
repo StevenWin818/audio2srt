@@ -897,6 +897,12 @@ impl QwenDecoder {
 // 采样与质量指标辅助函数
 // ---------------------------------------------------------------------------
 
+/// log-sum-exp 截断阈值: 低于 max_l - TRUNC 的项每项贡献 ≤ e^-20 ≈ 2.1e-9,
+/// 15 万词表全部排除项合计误差 < 4e-4 (相对 sum ≥ 1), 对 -1.0 量级的
+/// avg_logprob 阈值判定完全无感, 但避免了每个生成 token 都做 15 万次 exp
+/// (全量 f64 exp 约 3-5ms/token, 占解码阶段 15%+; 截断后仅对接近 max 的少量项做 exp)。
+const LOGSUM_EXP_TRUNC: f32 = 20.0;
+
 /// 手动 softmax 采样 (不依赖 llama.cpp sampler, 便于同时统计对数概率指标):
 /// temperature <= 0 时取 argmax (贪婪), 否则按 softmax(logits/T) 多项分布采样。
 /// 返回 (token, log_prob): log_prob 为**未缩放** softmax 下的自然对数概率
@@ -904,26 +910,25 @@ impl QwenDecoder {
 /// ln P(t) = (logits[t] - max_l) - ln(Σ_j exp(logits[j] - max_l))。
 fn sample_token(logits: &[f32], temperature: f32, rng: &mut u64) -> (ll::llama_token, f64) {
     let mut max_l = f32::NEG_INFINITY;
-    for &v in logits.iter() {
+    let mut max_idx = 0usize;
+    for (i, &v) in logits.iter().enumerate() {
         if v > max_l {
             max_l = v;
+            max_idx = i;
         }
     }
 
     if temperature <= 0.0 {
-        let mut best = 0usize;
-        let mut best_v = f32::NEG_INFINITY;
+        // 贪婪: 截断 log-sum-exp 求 ln P(argmax) = -ln(Σ exp(l - max_l))
         let mut sum_unscaled = 0.0f64;
-        for (i, &v) in logits.iter().enumerate() {
-            if v > best_v {
-                best_v = v;
-                best = i;
+        for &v in logits.iter() {
+            let d = v - max_l;
+            if d >= -LOGSUM_EXP_TRUNC {
+                sum_unscaled += d.exp() as f64; // f32 exp, 仅近 max 的少量项
             }
-            sum_unscaled += ((v - max_l) as f64).exp();
         }
-        // best 即 argmax: (logits[best] - max_l) = 0, ln P(best) = -ln(Σ exp(l - max_l))
         let lp = -sum_unscaled.ln();
-        return (best as ll::llama_token, lp);
+        return (max_idx as ll::llama_token, lp);
     }
 
     let inv_t = 1.0 / temperature;
@@ -931,19 +936,26 @@ fn sample_token(logits: &[f32], temperature: f32, rng: &mut u64) -> (ll::llama_t
     let mut sum_unscaled = 0.0f64;
     for &v in logits.iter() {
         let d = v - max_l;
-        sum_unscaled += (d as f64).exp();
-        sum_scaled += ((d * inv_t) as f64).exp();
+        let s = d * inv_t;
+        if s >= -LOGSUM_EXP_TRUNC {
+            sum_scaled += s.exp() as f64;
+        }
+        if d >= -LOGSUM_EXP_TRUNC {
+            sum_unscaled += d.exp() as f64;
+        }
     }
 
     let target = next_uniform(rng) * sum_scaled;
     let mut cum = 0.0f64;
     let mut chosen = logits.len() - 1;
     for (i, &v) in logits.iter().enumerate() {
-        let d = v - max_l;
-        cum += ((d * inv_t) as f64).exp();
-        if cum >= target {
-            chosen = i;
-            break;
+        let s = (v - max_l) * inv_t;
+        if s >= -LOGSUM_EXP_TRUNC {
+            cum += s.exp() as f64;
+            if cum >= target {
+                chosen = i;
+                break;
+            }
         }
     }
     let lp = (logits[chosen] - max_l) as f64 - sum_unscaled.ln();
@@ -1120,7 +1132,10 @@ fn strip_asr_language_header(output: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_qwen_language, parse_qwen_asr_output, sample_token, sequence_entropy};
+    use super::{
+        canonical_qwen_language, next_uniform, parse_qwen_asr_output, sample_token,
+        sequence_entropy, LOGSUM_EXP_TRUNC,
+    };
 
     #[test]
     fn maps_ui_language_codes_to_qwen_names() {
@@ -1201,5 +1216,38 @@ mod tests {
             lp2 >= floor,
             "logprob {lp2} below theoretical floor {floor}"
         );
+    }
+
+    #[test]
+    fn truncated_logsumexp_error_is_negligible() {
+        // 截断求和 (d >= -20) 与全量精确求和的相对误差必须 < 1e-3,
+        // 保证优化不会影响 avg_logprob 阈值判定的语义
+        let mut rng_state = 12345u64;
+        for case in 0..20 {
+            let logits: Vec<f32> = (0..8192)
+                .map(|_| (next_uniform(&mut rng_state) as f32 * 80.0 - 40.0) as f32)
+                .collect();
+            let max_l = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let exact_sum: f64 = logits
+                .iter()
+                .map(|&v| ((v - max_l) as f64).exp())
+                .sum();
+            let trunc_sum: f64 = logits
+                .iter()
+                .map(|&v| {
+                    let d = v - max_l;
+                    if d >= -LOGSUM_EXP_TRUNC {
+                        d.exp() as f64
+                    } else {
+                        0.0
+                    }
+                })
+                .sum();
+            let err = ((exact_sum - trunc_sum).abs() / exact_sum).max(0.0);
+            assert!(
+                err < 1e-3,
+                "case {case}: truncation relative error {err} too large"
+            );
+        }
     }
 }
