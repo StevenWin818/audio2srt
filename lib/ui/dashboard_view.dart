@@ -468,7 +468,6 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
 
   Widget _buildRightColumn(TranscriptionProvider provider) {
     final selectedLanguage = provider.selectedLanguage;
-    final translateToEnglish = provider.translateToEnglish;
     final availableTracks = provider.availableTracks;
     final selectedTrack = provider.selectedTrack;
 
@@ -489,28 +488,6 @@ class _DashboardViewState extends State<DashboardView> with SingleTickerProvider
           onChanged: (val) {
             if (val != null) provider.setSelectedLanguage(val);
           },
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            const Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('英语翻译模式', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white)),
-                  SizedBox(height: 2),
-                  Text('自动翻译识别文本为英文', style: TextStyle(fontSize: 11, color: Colors.grey)),
-                ],
-              ),
-            ),
-            Switch(
-              value: translateToEnglish,
-              activeColor: const Color(0xFF8B5CF6),
-              onChanged: (val) {
-                provider.setTranslate(val);
-              },
-            ),
-          ],
         ),
         if (availableTracks.length > 1) ...[
           const SizedBox(height: 16),

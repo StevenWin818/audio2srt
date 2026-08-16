@@ -32,6 +32,7 @@ class _SettingsViewState extends State<SettingsView> {
 
   Future<void> _loadPaths() async {
     final dir = await getApplicationSupportDirectory();
+    if (!mounted) return;
     setState(() {
       _appSupportDir = dir.path;
     });
@@ -51,6 +52,7 @@ class _SettingsViewState extends State<SettingsView> {
 
     provider.ffmpegService.ffmpegPath = _ffmpegController.text;
     final available = await provider.ffmpegService.checkFFmpegAvailable();
+    if (!mounted) return;
 
     setState(() {
       if (available) {
@@ -317,7 +319,7 @@ class _SettingsViewState extends State<SettingsView> {
           ),
           const SizedBox(height: 8),
           Text(
-            '针对 Whisper 模型在推理静音段或较长音频时容易陷入幻觉和无限重复句子的优化配置。',
+            '针对 Qwen3-ASR 在推理静音段或较长音频时容易陷入幻觉和无限重复句子的优化配置。',
             style: TextStyle(fontSize: 13, color: Colors.grey[400]),
           ),
           const SizedBox(height: 20),
@@ -605,7 +607,7 @@ class _SettingsViewState extends State<SettingsView> {
                 },
               ),
               Text(
-                '文本生成的压缩率/混沌程度阈值。若生成的熵过高（文字混乱无逻辑），触发降级重试机制。默认 2.4。',
+                '生成序列的香农熵阈值。重复循环（如无限重复同一句）时熵显著降低，低于此值时触发升温回退重试。默认 2.4。',
                 style: TextStyle(fontSize: 11, color: Colors.grey[500]),
               ),
             ],
@@ -642,42 +644,6 @@ class _SettingsViewState extends State<SettingsView> {
               ),
               Text(
                 '模型输出词的平均对数概率下限阈值。若低于此值（不确信度高），触发回退重试。默认 -1.0。',
-                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          
-          // 静音概率阈值 No Speech Threshold
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    '无声判定阈值 (No Speech Threshold)',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-                  ),
-                  Text(
-                    provider.noSpeechThold.toStringAsFixed(2),
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFFA78BFA)),
-                  ),
-                ],
-              ),
-              Slider(
-                value: provider.noSpeechThold,
-                min: 0.0,
-                max: 1.0,
-                divisions: 20,
-                activeColor: const Color(0xFF8B5CF6),
-                inactiveColor: const Color(0x1FFFFFFF),
-                onChanged: (val) {
-                  provider.setNoSpeechThold(val);
-                },
-              ),
-              Text(
-                '当模型自身预测此处为静音的概率高于该值时，直接舍弃对应文本。默认 0.60。',
                 style: TextStyle(fontSize: 11, color: Colors.grey[500]),
               ),
             ],

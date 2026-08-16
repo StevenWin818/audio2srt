@@ -16,6 +16,8 @@ Future<QwenHardwareInfo> getQwenRuntimeInfo() =>
 Future<ModelInfo> validateQwenModelDir({required String modelDir}) =>
     RustLib.instance.api.crateApiQwenValidateQwenModelDir(modelDir: modelDir);
 
+/// 预热运行时: 与转写管道共用同一缓存键构造与缓存逻辑,
+/// 保证 warmup 之后的首轮转写能直接 cache HIT (后端解析 + 路径归一化一致)。
 Future<void> warmupQwenRuntime({required QwenWarmupConfig config}) =>
     RustLib.instance.api.crateApiQwenWarmupQwenRuntime(config: config);
 

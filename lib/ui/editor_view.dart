@@ -392,6 +392,8 @@ class _EditorViewState extends State<EditorView> {
   }
 
   void _showExportDialog(BuildContext context, TranscriptionProvider provider) {
+    // await 前捕获 messenger, 避免跨异步间隙使用已弹出对话框的 context
+    final messenger = ScaffoldMessenger.of(context);
     showDialog(
       context: context,
       builder: (context) {
@@ -412,7 +414,7 @@ class _EditorViewState extends State<EditorView> {
                 if (path != null) {
                   await provider.exportSubtitles(path, isVtt: false);
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    messenger.showSnackBar(
                       SnackBar(content: Text('已成功保存字幕到 $path')),
                     );
                   }
@@ -433,7 +435,7 @@ class _EditorViewState extends State<EditorView> {
                 if (path != null) {
                   await provider.exportSubtitles(path, isVtt: true);
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    messenger.showSnackBar(
                       SnackBar(content: Text('已成功保存字幕到 $path')),
                     );
                   }
@@ -449,12 +451,17 @@ class _EditorViewState extends State<EditorView> {
 
   void _showMuxDialog(BuildContext context, TranscriptionProvider provider) {
     bool hardBurn = false;
+    // 跨异步间隙使用前先捕获 messenger (BUG4: 避免 await 后使用已失效的 dialog context)
+    final messenger = ScaffoldMessenger.of(context);
 
     showDialog(
       context: context,
-      builder: (context) {
+      // muxing 期间禁止点击遮罩关闭: 否则异步流程回来时 setDialogState 会作用在
+      // 已销毁的 route 上, 并可能误 pop 其他页面
+      barrierDismissible: false,
+      builder: (dialogContext) {
         return StatefulBuilder(
-          builder: (context, setDialogState) {
+          builder: (dialogContext, setDialogState) {
             return AlertDialog(
               title: const Text('将字幕封装/硬压制到视频中'),
               content: Column(
@@ -495,7 +502,7 @@ class _EditorViewState extends State<EditorView> {
               ),
               actions: [
                 TextButton(
-                  onPressed: _isMuxing ? null : () => Navigator.pop(context),
+                  onPressed: _isMuxing ? null : () => Navigator.pop(dialogContext),
                   child: const Text('取消'),
                 ),
                 ElevatedButton(
@@ -526,9 +533,11 @@ class _EditorViewState extends State<EditorView> {
                             );
 
                             if (outPath != null) {
-                              setDialogState(() {
-                                _muxStatus = 'FFmpeg 合成中，这需要一些时间，请稍候...';
-                              });
+                              if (dialogContext.mounted) {
+                                setDialogState(() {
+                                  _muxStatus = 'FFmpeg 合成中，这需要一些时间，请稍候...';
+                                });
+                              }
 
                               await provider.muxSubtitlesToVideo(
                                 srtPath: tempSrtPath,
@@ -536,24 +545,34 @@ class _EditorViewState extends State<EditorView> {
                                 hardBurn: hardBurn,
                               );
 
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
+                              if (dialogContext.mounted) {
+                                messenger.showSnackBar(
                                   SnackBar(content: Text('集成视频合成成功！已保存到 $outPath')),
                                 );
                               }
                             }
                           } catch (e) {
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
+                            if (dialogContext.mounted) {
+                              messenger.showSnackBar(
                                 SnackBar(content: Text('合成失败: $e')),
                               );
                             }
                           } finally {
-                            setDialogState(() {
-                              _isMuxing = false;
-                              _muxStatus = '';
-                            });
-                            Navigator.pop(context);
+                            if (dialogContext.mounted) {
+                              setDialogState(() {
+                                _isMuxing = false;
+                                _muxStatus = '';
+                              });
+                              Navigator.pop(dialogContext);
+                            } else {
+                              // 对话框已被销毁 (如窗口关闭): 仅复位本 State 字段
+                              if (mounted) {
+                                setState(() {
+                                  _isMuxing = false;
+                                  _muxStatus = '';
+                                });
+                              }
+                            }
                           }
                         },
                   style: ElevatedButton.styleFrom(backgroundColor: const Color(0x1F8B5CF6)),

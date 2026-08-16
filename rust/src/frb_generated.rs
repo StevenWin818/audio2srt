@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 2035100308;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -415595327;
 
 // Section: executor
 
@@ -708,6 +708,40 @@ fn wire__crate__api__silero_vad__register_thread_as_pro_audio_impl(
                     let output_ok = Result::<_, ()>::Ok({
                         crate::api::silero_vad::register_thread_as_pro_audio();
                     })?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__subtitle_split__remove_periods_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "remove_periods",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_text = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok =
+                        Result::<_, ()>::Ok(crate::api::subtitle_split::remove_periods(&api_text))?;
                     Ok(output_ok)
                 })())
             }
@@ -1596,12 +1630,15 @@ impl SseDecode for crate::api::stream_pipeline::PipelineConfig {
         let mut var_timestampMode =
             <crate::api::stream_pipeline::TimestampMode>::sse_decode(deserializer);
         let mut var_language = <Option<String>>::sse_decode(deserializer);
-        let mut var_translate = <bool>::sse_decode(deserializer);
         let mut var_threads = <Option<i32>>::sse_decode(deserializer);
         let mut var_useGpu = <bool>::sse_decode(deserializer);
         let mut var_toSimplified = <bool>::sse_decode(deserializer);
         let mut var_noContext = <bool>::sse_decode(deserializer);
         let mut var_noStateHistory = <bool>::sse_decode(deserializer);
+        let mut var_temperature = <f32>::sse_decode(deserializer);
+        let mut var_temperatureInc = <f32>::sse_decode(deserializer);
+        let mut var_entropyThold = <f32>::sse_decode(deserializer);
+        let mut var_logprobThold = <f32>::sse_decode(deserializer);
         let mut var_enableDenoise = <bool>::sse_decode(deserializer);
         let mut var_vadEnabled = <bool>::sse_decode(deserializer);
         let mut var_vadThreshold = <f64>::sse_decode(deserializer);
@@ -1622,12 +1659,15 @@ impl SseDecode for crate::api::stream_pipeline::PipelineConfig {
             decoder_backend: var_decoderBackend,
             timestamp_mode: var_timestampMode,
             language: var_language,
-            translate: var_translate,
             threads: var_threads,
             use_gpu: var_useGpu,
             to_simplified: var_toSimplified,
             no_context: var_noContext,
             no_state_history: var_noStateHistory,
+            temperature: var_temperature,
+            temperature_inc: var_temperatureInc,
+            entropy_thold: var_entropyThold,
+            logprob_thold: var_logprobThold,
             enable_denoise: var_enableDenoise,
             vad_enabled: var_vadEnabled,
             vad_threshold: var_vadThreshold,
@@ -1910,44 +1950,47 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        21 => wire__crate__api__subtitle_split__split_subtitles_impl(
+        20 => {
+            wire__crate__api__subtitle_split__remove_periods_impl(port, ptr, rust_vec_len, data_len)
+        }
+        22 => wire__crate__api__subtitle_split__split_subtitles_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        22 => wire__crate__api__silero_vad__transcribe_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__stream_pipeline__transcribe_stream_impl(
+        23 => wire__crate__api__silero_vad__transcribe_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__stream_pipeline__transcribe_stream_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        24 => wire__crate__api__silero_vad__transcription_segment_default_impl(
+        25 => wire__crate__api__silero_vad__transcription_segment_default_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        25 => wire__crate__api__qwen__unload_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__models__validate_qwen_model_impl(port, ptr, rust_vec_len, data_len),
-        28 => {
+        26 => wire__crate__api__qwen__unload_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__models__validate_qwen_model_impl(port, ptr, rust_vec_len, data_len),
+        29 => {
             wire__crate__api__qwen__validate_qwen_model_dir_impl(port, ptr, rust_vec_len, data_len)
         }
-        29 => wire__crate__api__silero_vad__vulkan_device_info_default_impl(
+        30 => wire__crate__api__silero_vad__vulkan_device_info_default_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        30 => wire__crate__api__qwen__warmup_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__silero_vad__warmup_whisper_context_impl(
+        31 => wire__crate__api__qwen__warmup_qwen_runtime_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__silero_vad__warmup_whisper_context_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        32 => {
+        33 => {
             wire__crate__api__silero_vad__word_item_default_impl(port, ptr, rust_vec_len, data_len)
         }
         _ => unreachable!(),
@@ -1971,12 +2014,12 @@ fn pde_ffi_dispatcher_sync_impl(
         17 => {
             wire__crate__api__stream_pipeline__preload_qwen_model_impl(ptr, rust_vec_len, data_len)
         }
-        20 => wire__crate__api__stream_pipeline__set_rust_perf_logging_impl(
+        21 => wire__crate__api__stream_pipeline__set_rust_perf_logging_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        26 => {
+        27 => {
             wire__crate__api__stream_pipeline__unload_qwen_runtime_impl(ptr, rust_vec_len, data_len)
         }
         _ => unreachable!(),
@@ -2174,12 +2217,15 @@ impl flutter_rust_bridge::IntoDart for crate::api::stream_pipeline::PipelineConf
             self.decoder_backend.into_into_dart().into_dart(),
             self.timestamp_mode.into_into_dart().into_dart(),
             self.language.into_into_dart().into_dart(),
-            self.translate.into_into_dart().into_dart(),
             self.threads.into_into_dart().into_dart(),
             self.use_gpu.into_into_dart().into_dart(),
             self.to_simplified.into_into_dart().into_dart(),
             self.no_context.into_into_dart().into_dart(),
             self.no_state_history.into_into_dart().into_dart(),
+            self.temperature.into_into_dart().into_dart(),
+            self.temperature_inc.into_into_dart().into_dart(),
+            self.entropy_thold.into_into_dart().into_dart(),
+            self.logprob_thold.into_into_dart().into_dart(),
             self.enable_denoise.into_into_dart().into_dart(),
             self.vad_enabled.into_into_dart().into_dart(),
             self.vad_threshold.into_into_dart().into_dart(),
@@ -2730,12 +2776,15 @@ impl SseEncode for crate::api::stream_pipeline::PipelineConfig {
         <crate::qwen::backend::DecoderBackend>::sse_encode(self.decoder_backend, serializer);
         <crate::api::stream_pipeline::TimestampMode>::sse_encode(self.timestamp_mode, serializer);
         <Option<String>>::sse_encode(self.language, serializer);
-        <bool>::sse_encode(self.translate, serializer);
         <Option<i32>>::sse_encode(self.threads, serializer);
         <bool>::sse_encode(self.use_gpu, serializer);
         <bool>::sse_encode(self.to_simplified, serializer);
         <bool>::sse_encode(self.no_context, serializer);
         <bool>::sse_encode(self.no_state_history, serializer);
+        <f32>::sse_encode(self.temperature, serializer);
+        <f32>::sse_encode(self.temperature_inc, serializer);
+        <f32>::sse_encode(self.entropy_thold, serializer);
+        <f32>::sse_encode(self.logprob_thold, serializer);
         <bool>::sse_encode(self.enable_denoise, serializer);
         <bool>::sse_encode(self.vad_enabled, serializer);
         <f64>::sse_encode(self.vad_threshold, serializer);

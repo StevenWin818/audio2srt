@@ -33,6 +33,11 @@ static SHOULD_CANCEL: AtomicBool = AtomicBool::new(false);
 static TRANS_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 static ACTIVE_FFMPEG_CHILD: Mutex<Option<std::process::Child>> = Mutex::new(None);
 
+/// 模型加载串行化锁: 预加载线程与转写线程并发加载模型时,
+/// 避免两份 decoder GGUF / encoder ONNX 同时占用显存导致 OOM。
+/// 模型加载可达数秒~数十秒, 排在后面的线程等待完成后直接复用缓存。
+static MODEL_LOAD_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 /// 当前缓存的 Qwen 运行时状态 (供 UI 显示模型实际加载在哪)。
 #[derive(Debug, Clone)]
 pub struct QwenRuntimeStatus {
@@ -148,10 +153,25 @@ pub fn get_or_create_qwen_runtime(
         }
     }
 
-    // 目录或 Backend 变更：先清理旧的 Cache，触发原 QwenDecoder 的 Drop，彻底释放 GPU 显存！
-    // 注意: 锁外加载模型 (可能耗时数秒~数十秒), 避免阻塞 UI 状态轮询与并发预加载线程;
-    // 加载完成后二次检查, 防止并发加载竞态。旧运行时也在锁外 drop (释放 VRAM 耗时)。
+    // 串行化加载: 预加载与转写并发 MISS 时, 只允许一个线程加载模型,
+    // 其余线程排队等待后复用缓存 (避免双份模型挤爆显存/OOM)。
+    // 注意: 锁外加载模型 (可能耗时数秒~数十秒), 避免阻塞 UI 状态轮询;
+    // 加载完成后二次检查, 防止排队期间其他线程已完成加载。
     println!("[Rust Cache MISS] 未命中预加载缓存! 请求键: {:?}. 正在释放旧模型并载入新模型...", key);
+
+    let _load_guard = MODEL_LOAD_LOCK.lock();
+    {
+        let cache = crate::qwen::context::GLOBAL_QWEN_CACHE.lock();
+        if let Some(runtime) = cache.get(&key) {
+            println!("[Rust Cache HIT] 排队等待期间已有并发调用完成加载, 复用其运行时 (Model: {})", qwen_dir);
+            runtime.reset_cancel();
+            return Ok(runtime);
+        }
+    }
+    // 排队等待期间用户取消了任务: 不再浪费显存加载模型
+    if SHOULD_CANCEL.load(Ordering::SeqCst) {
+        return Err(anyhow!("Model load cancelled before start"));
+    }
 
     let runtime = Arc::new(
         crate::qwen::runtime::QwenRuntime::load(
@@ -167,6 +187,7 @@ pub fn get_or_create_qwen_runtime(
 
     let mut cache = crate::qwen::context::GLOBAL_QWEN_CACHE.lock();
     if let Some(existing) = cache.get(&key) {
+        // 持锁加载时不可能出现, 仅作防御性兜底
         println!("[Rust Cache HIT] 锁外加载期间已有并发调用完成加载, 复用其运行时 (Model: {})", qwen_dir);
         existing.reset_cancel();
         return Ok(existing);
@@ -374,14 +395,21 @@ pub struct PipelineConfig {
     pub encoder_backend: crate::qwen::backend::EncoderBackend,
     pub decoder_backend: crate::qwen::backend::DecoderBackend,
     pub timestamp_mode: TimestampMode,
-    // Whisper 设置
+    // Qwen3-ASR 解码设置 (原 Whisper 防重复参数, 已绑定到 Qwen 解码器)
     pub language: Option<String>,
-    pub translate: bool,
     pub threads: Option<i32>,
     pub use_gpu: bool,
     pub to_simplified: bool,
     pub no_context: bool,
     pub no_state_history: bool,
+    /// 初始采样温度 (0 = 贪婪)
+    pub temperature: f32,
+    /// 质量回退时温度增量
+    pub temperature_inc: f32,
+    /// 生成序列尾部香农熵阈值 (重复循环检测, 低于则回退)
+    pub entropy_thold: f32,
+    /// 平均 token 对数概率阈值
+    pub logprob_thold: f32,
     // VAD & DFN 设置
     pub enable_denoise: bool,
     pub vad_enabled: bool,
@@ -1384,6 +1412,12 @@ fn spawn_qwen_worker(
     let to_simplified = config.to_simplified;
     let language = config.language.clone();
     let context_prompt = config.context_prompt.clone();
+    let no_context = config.no_context;
+    let no_state_history = config.no_state_history;
+    let temperature = config.temperature;
+    let temperature_inc = config.temperature_inc;
+    let entropy_thold = config.entropy_thold;
+    let logprob_thold = config.logprob_thold;
 
     // 编码/解码双线程流水线：段 N 在 GPU 上自回归解码时，段 N+1 已在编码。
     // 编码线程池: encoder 无状态 (每段独立 mel+推理)，CPU 推理时多线程并行编码
@@ -1578,17 +1612,31 @@ fn spawn_qwen_worker(
                 // 按 seq 顺序取出连续可处理的段
                 while let Some(mut task) = ordered.remove(&next_seq) {
                     next_seq += 1;
+                    // 上下文记忆: 未禁用上下文时, 把上一段转写文本注入 system prompt,
+                    // 帮助模型保持术语/说话风格一致性 (默认关闭, 与 Whisper no_context 语义一致)
+                    let context_for_next: Option<String> = context_prompt.clone().or_else(|| {
+                        if no_context {
+                            None
+                        } else {
+                            all_segments.last().map(|s| s.text.clone())
+                        }
+                    });
                     if !process_encoded_task(
                         &mut task,
                         &mut pending,
                         &runtime_decoder,
                         max_merge_samples,
                         &language,
-                        &context_prompt,
+                        &context_for_next,
                         &sink,
                         &mut all_segments,
                         to_simplified,
                         total_duration,
+                        no_state_history,
+                        temperature,
+                        temperature_inc,
+                        entropy_thold,
+                        logprob_thold,
                     )? {
                         sink_closed = true;
                         break;
@@ -1606,17 +1654,29 @@ fn spawn_qwen_worker(
                         Some(&k) if k == next_seq => {
                             let mut task = ordered.remove(&k).unwrap();
                             next_seq += 1;
+                            let context_for_next: Option<String> = context_prompt.clone().or_else(|| {
+                                if no_context {
+                                    None
+                                } else {
+                                    all_segments.last().map(|s| s.text.clone())
+                                }
+                            });
                             if !process_encoded_task(
                                 &mut task,
                                 &mut pending,
                                 &runtime_decoder,
                                 max_merge_samples,
                                 &language,
-                                &context_prompt,
+                                &context_for_next,
                                 &sink,
                                 &mut all_segments,
                                 to_simplified,
                                 total_duration,
+                                no_state_history,
+                                temperature,
+                                temperature_inc,
+                                entropy_thold,
+                                logprob_thold,
                             )? {
                                 sink_closed = true;
                                 break;
@@ -1674,6 +1734,11 @@ fn process_encoded_task(
     all_segments: &mut Vec<TranscriptionSegment>,
     to_simplified: bool,
     total_duration: f64,
+    no_state_history: bool,
+    temperature: f32,
+    temperature_inc: f32,
+    entropy_thold: f32,
+    logprob_thold: f32,
 ) -> Result<bool> {
     // 编码失败/跳过的标记段 (enc_out=None): 直接跳过，不参与合并
     let Some(mut enc_out) = task.enc_out.take() else {
@@ -1726,6 +1791,11 @@ fn process_encoded_task(
         language.as_deref(),
         context_prompt.as_deref(),
         max_new_tokens,
+        temperature,
+        temperature_inc,
+        entropy_thold,
+        logprob_thold,
+        no_state_history,
     ) {
         Ok(res) => res,
         Err(e) => {
@@ -2324,7 +2394,10 @@ mod tests {
             decoder_backend: crate::qwen::backend::DecoderBackend::Cpu,
             timestamp_mode: TimestampMode::Fast,
             language: Some("zh".to_string()),
-            translate: false,
+            temperature: 0.0,
+            temperature_inc: 0.2,
+            entropy_thold: 2.4,
+            logprob_thold: -1.0,
             threads: Some(4),
             use_gpu: true,
             to_simplified: true,
@@ -2433,7 +2506,10 @@ mod tests {
                 decoder_backend: crate::qwen::backend::DecoderBackend::Cpu,
                 timestamp_mode: TimestampMode::Fast,
                 language: Some("auto".to_string()),
-                translate: false,
+                temperature: 0.0,
+            temperature_inc: 0.2,
+            entropy_thold: 2.4,
+            logprob_thold: -1.0,
                 threads: Some(4),
                 use_gpu: true,
                 to_simplified: true,

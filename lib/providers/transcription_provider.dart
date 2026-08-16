@@ -183,9 +183,6 @@ class TranscriptionProvider with ChangeNotifier {
   String _selectedLanguage = 'auto';
   String get selectedLanguage => _selectedLanguage;
 
-  bool _translateToEnglish = false;
-  bool get translateToEnglish => _translateToEnglish;
-
   bool _enableDenoise = false;
   bool get enableDenoise => _enableDenoise;
 
@@ -242,9 +239,6 @@ class TranscriptionProvider with ChangeNotifier {
 
   double _logprobThold = -1.0;
   double get logprobThold => _logprobThold;
-
-  double _noSpeechThold = 0.6;
-  double get noSpeechThold => _noSpeechThold;
 
   bool _noContext = true;
   bool get noContext => _noContext;
@@ -414,6 +408,21 @@ class TranscriptionProvider with ChangeNotifier {
   }
 
   Future<bool> checkAndRepairModel(String dirName) async {
+    // ForcedAligner 目录的文件布局与基础模型完全不同,
+    // 不能用 encoder/config 逻辑判断 (否则恒误报损坏)
+    if (dirName == ModelService.alignerModel.dirName) {
+      final corrupted = await _modelService.isAlignerCorrupted(dirName);
+      if (!corrupted) return false;
+      debugPrint('[TranscriptionProvider] Aligner $dirName corrupted. Auto repairing...');
+      await _modelService.repairAligner();
+      if (_selectedAlignerModel == dirName) {
+        _selectedAlignerModel = null;
+      }
+      _statusMessage = '检测到 ForcedAligner 组件损坏，已自动清除。请前往模型管理器重新下载。';
+      _safeNotifyListeners();
+      return true;
+    }
+
     final isCorrupted = await _modelService.isBaseCorrupted(dirName);
     if (isCorrupted) {
       debugPrint('[TranscriptionProvider] Model $dirName base files corrupted. Auto repairing...');
@@ -640,10 +649,48 @@ class TranscriptionProvider with ChangeNotifier {
     }
   }
 
+  /// 查找指定基础模型下已下载的量化 (f16 优先, 其次按官方档位顺序)
+  Future<String?> _findDownloadedQuant(String baseId) async {
+    if (await _modelService.isQuantDownloaded(baseId, 'f16')) return 'f16';
+    final base = ModelService.baseById(baseId);
+    if (base != null) {
+      for (final q in base.quants) {
+        if (await _modelService.isQuantDownloaded(baseId, q.id)) return q.id;
+      }
+    }
+    return null;
+  }
+
   Future<void> deleteQuant(String baseId, String quantId) async {
     await _modelService.deleteQuant(baseId, quantId);
     _downloadedModels = await _modelService.getDownloadedBases();
     await _refreshReadyQuants();
+
+    // 删除的是当前正在使用的量化时, 自动回退到该模型其他已下载档位;
+    // 若该模型已无任何量化, 则切换到其他已下载模型, 避免转写启动时报"未下载"
+    if (_selectedModelBase == baseId && _selectedQuant == quantId) {
+      final fallback = await _findDownloadedQuant(baseId);
+      if (fallback != null) {
+        _selectedQuant = fallback;
+        _saveSelectedModelPref('$baseId|$fallback');
+        _preloadWhisperContext();
+      } else {
+        final otherBase = _downloadedModels.firstWhere(
+          (id) => id != baseId,
+          orElse: () => baseId,
+        );
+        if (otherBase != baseId) {
+          _selectedModelBase = otherBase;
+          _selectedQuant = await _findDownloadedQuant(otherBase) ?? 'f16';
+          _saveSelectedModelPref('$otherBase|$_selectedQuant');
+          _preloadWhisperContext();
+        } else {
+          // 全部量化均已删除: 保留模型选择, 下次下载后自动复用
+          _selectedQuant = 'f16';
+          _saveSelectedModelPref('$baseId|f16');
+        }
+      }
+    }
     notifyListeners();
   }
 
@@ -782,11 +829,6 @@ class TranscriptionProvider with ChangeNotifier {
     _safeNotifyListeners();
   }
 
-  void setTranslate(bool translate) {
-    _translateToEnglish = translate;
-    _safeNotifyListeners();
-  }
-
   void setUseGpu(bool value) {
     _useGpu = value;
     _safeNotifyListeners();
@@ -915,11 +957,6 @@ class TranscriptionProvider with ChangeNotifier {
     _safeNotifyListeners();
   }
 
-  void setNoSpeechThold(double value) {
-    _noSpeechThold = value;
-    _safeNotifyListeners();
-  }
-
   void setNoContext(bool value) {
     _noContext = value;
     _safeNotifyListeners();
@@ -1032,7 +1069,6 @@ class TranscriptionProvider with ChangeNotifier {
           vadModelPath: vadModelPath,
           dfModelPath: dfModelPath,
           language: _selectedLanguage == 'auto' ? null : _selectedLanguage,
-          translate: _translateToEnglish,
           threads: 4,
           useGpu: _useGpu,
           toSimplified: _selectedLanguage == 'zh' || _selectedLanguage == 'auto',
@@ -1043,6 +1079,10 @@ class TranscriptionProvider with ChangeNotifier {
           vadMinSilenceMs: _vadMinSilenceMs,
           noContext: _noContext,
           noStateHistory: _noStateHistory,
+          temperature: _temperature,
+          temperatureInc: _temperatureInc,
+          entropyThold: _entropyThold,
+          logprobThold: _logprobThold,
           selectedAudioTrack: _selectedTrack?.index,
         ),
       );
@@ -1136,13 +1176,18 @@ class TranscriptionProvider with ChangeNotifier {
                   field0.contains('Corrupt') ||
                   field0.contains('ONNX') ||
                   field0.contains('manifest')) {
+                var repaired = false;
                 if (_selectedModelBase != null) {
-                  await checkAndRepairModel(_selectedModelBase!);
+                  repaired = await checkAndRepairModel(_selectedModelBase!) || repaired;
                 }
                 if (_selectedAlignerModel != null) {
-                  await checkAndRepairModel(_selectedAlignerModel!);
+                  repaired = await checkAndRepairModel(_selectedAlignerModel!) || repaired;
                 }
-                _setError('模型加载失败（检测到文件已损毁），已自动清除损坏缓存！请在模型管理器中重新下载。');
+                if (repaired) {
+                  _setError('模型加载失败（检测到文件已损毁），已自动清除损坏缓存！请在模型管理器中重新下载。');
+                } else {
+                  _setError('模型加载失败: $field0');
+                }
               } else {
                 _setError('转写失败: $field0');
               }

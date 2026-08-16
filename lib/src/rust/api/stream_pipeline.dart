@@ -8,9 +8,9 @@ import '../qwen/backend.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'silero_vad.dart';
 
-// These functions are ignored because they are not marked as `pub`: `add_perf_record`, `bind_vad_to_e_cores`, `cached_cpu_topology`, `core_pinning_disabled`, `detect_cpu_topology`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_media_duration_secs`, `get_physical_pcore_mask`, `is_qwen_model_dir`, `join`, `lock_high_priority`, `parse_duration_str`, `process_encoded_task`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `set_thread_group_affinity`, `set_worker_pcore_affinity`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_qwen_worker`, `spawn_vad_worker`, `vad_scan`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AsrTask`, `CoreSet`, `EncodedTask`, `FfmpegPumpHandle`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `add_perf_record`, `bind_vad_to_e_cores`, `build_runtime_cache_key`, `cached_cpu_topology`, `core_pinning_disabled`, `detect_cpu_topology`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_media_duration_secs`, `get_physical_pcore_mask`, `is_qwen_model_dir`, `join`, `lock_high_priority`, `log_process_memory`, `parse_duration_str`, `process_encoded_task`, `resolve_decoder_backend`, `resolve_encoder_backend`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `set_thread_group_affinity`, `set_worker_pcore_affinity`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_qwen_worker`, `spawn_vad_worker`, `system_available_memory_mb`, `total_physical_memory_mb`, `trim_process_working_set`, `vad_scan`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AsrTask`, `CoreSet`, `EncodedTask`, `EncoderReleaseGuard`, `FfmpegPumpHandle`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `get_or_create_qwen_runtime`
 // These functions are ignored (category: IgnoreBecauseNotAllowedOwner): `add`
 
@@ -64,12 +64,23 @@ class PipelineConfig {
   final DecoderBackend decoderBackend;
   final TimestampMode timestampMode;
   final String? language;
-  final bool translate;
   final int? threads;
   final bool useGpu;
   final bool toSimplified;
   final bool noContext;
   final bool noStateHistory;
+
+  /// 初始采样温度 (0 = 贪婪)
+  final double temperature;
+
+  /// 质量回退时温度增量
+  final double temperatureInc;
+
+  /// 生成文本熵(压缩率)阈值
+  final double entropyThold;
+
+  /// 平均 token 对数概率阈值
+  final double logprobThold;
   final bool enableDenoise;
   final bool vadEnabled;
   final double vadThreshold;
@@ -91,12 +102,15 @@ class PipelineConfig {
     required this.decoderBackend,
     required this.timestampMode,
     this.language,
-    required this.translate,
     this.threads,
     required this.useGpu,
     required this.toSimplified,
     required this.noContext,
     required this.noStateHistory,
+    required this.temperature,
+    required this.temperatureInc,
+    required this.entropyThold,
+    required this.logprobThold,
     required this.enableDenoise,
     required this.vadEnabled,
     required this.vadThreshold,
@@ -120,12 +134,15 @@ class PipelineConfig {
       decoderBackend.hashCode ^
       timestampMode.hashCode ^
       language.hashCode ^
-      translate.hashCode ^
       threads.hashCode ^
       useGpu.hashCode ^
       toSimplified.hashCode ^
       noContext.hashCode ^
       noStateHistory.hashCode ^
+      temperature.hashCode ^
+      temperatureInc.hashCode ^
+      entropyThold.hashCode ^
+      logprobThold.hashCode ^
       enableDenoise.hashCode ^
       vadEnabled.hashCode ^
       vadThreshold.hashCode ^
@@ -151,12 +168,15 @@ class PipelineConfig {
           decoderBackend == other.decoderBackend &&
           timestampMode == other.timestampMode &&
           language == other.language &&
-          translate == other.translate &&
           threads == other.threads &&
           useGpu == other.useGpu &&
           toSimplified == other.toSimplified &&
           noContext == other.noContext &&
           noStateHistory == other.noStateHistory &&
+          temperature == other.temperature &&
+          temperatureInc == other.temperatureInc &&
+          entropyThold == other.entropyThold &&
+          logprobThold == other.logprobThold &&
           enableDenoise == other.enableDenoise &&
           vadEnabled == other.vadEnabled &&
           vadThreshold == other.vadThreshold &&
@@ -173,7 +193,8 @@ class QwenRuntimeStatus {
   /// decoder GGUF 文件名 (量化信息)
   final String decoderFile;
 
-  /// encoder 实际执行提供程序 ("CUDA" / "DirectML" / "CPU")
+  /// encoder 实际执行提供程序 ("CUDA" / "DirectML" / "CPU";
+  /// 未加载时为 ENCODER_EP_UNLOADED ("未加载"))
   final String encoderEp;
 
   /// decoder 实际后端 ("CUDA" / "Vulkan" / "CPU")
