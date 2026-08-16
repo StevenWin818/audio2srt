@@ -27,6 +27,8 @@ pub struct QwenRuntime {
     pub decoder_offload: String,
     /// encoder 请求后端 (懒加载时使用; 实际 EP 见 encoder_actual_ep)
     encoder_backend_req: EncoderBackend,
+    /// encoder 懒加载串行化锁: 并发 ensure_encoder 只加载一份 ~1GB 权重
+    encoder_load_lock: parking_lot::Mutex<()>,
 }
 
 impl QwenRuntime {
@@ -76,29 +78,30 @@ impl QwenRuntime {
             decoder_backend,
             decoder_offload,
             encoder_backend_req: encoder_backend,
+            encoder_load_lock: parking_lot::Mutex::new(()),
         })
     }
 
     /// 确保 encoder 已加载 (首次推理/缓存 HIT 后懒加载, 幂等)。
     /// 加载 ~1.2GB (1.7B FP32) 权重需要数秒, 只在推理开始时调用。
-    /// 注意: 加载在锁外进行 (避免嵌套加锁死锁), 并发调用时可能重复加载,
-    /// 后到者的 Session 会被直接丢弃 (仅浪费一次加载)。
+    /// 编码线程池 / 解码线程可能并发调用: 用专用锁串行化, 避免重复加载两份权重
+    /// (预加载与转写并发时曾出现双份 encoder 挤爆内存)。
     pub fn ensure_encoder(&self) -> Result<(), QwenError> {
         if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(QwenError::Cancelled);
         }
-        let need = self.asr_encoder.lock().is_none();
-        if need {
-            println!("[runtime] lazy-loading encoder from {}", self.model_dir);
-            let t0 = std::time::Instant::now();
-            let fresh = QwenEncoder::load(&self.model_dir, self.encoder_backend_req)?;
-            println!(
-                "[runtime] encoder loaded in {:.1}s",
-                t0.elapsed().as_secs_f64()
-            );
-            let mut enc = self.asr_encoder.lock();
-            if enc.is_none() {
-                *enc = Some(fresh);
+        if self.asr_encoder.lock().is_none() {
+            let _load_guard = self.encoder_load_lock.lock();
+            // 排队期间其他线程可能已完成加载, 二次检查
+            if self.asr_encoder.lock().is_none() {
+                println!("[runtime] lazy-loading encoder from {}", self.model_dir);
+                let t0 = std::time::Instant::now();
+                let fresh = QwenEncoder::load(&self.model_dir, self.encoder_backend_req)?;
+                println!(
+                    "[runtime] encoder loaded in {:.1}s",
+                    t0.elapsed().as_secs_f64()
+                );
+                *self.asr_encoder.lock() = Some(fresh);
             }
         }
         Ok(())
@@ -121,7 +124,17 @@ impl QwenRuntime {
         context_prompt: Option<&str>,
     ) -> Result<DecodeResult, QwenError> {
         let enc_out = self.encode_segment(samples_16k)?;
-        self.decode_segment(&enc_out, language, context_prompt, None)
+        self.decode_segment(
+            &enc_out,
+            language,
+            context_prompt,
+            None,
+            0.0,
+            0.2,
+            2.4,
+            -1.0,
+            true,
+        )
     }
 
     /// 仅执行 ONNX 编码器前向传播。与 `decode_segment` 拆分后，
@@ -169,18 +182,29 @@ impl QwenRuntime {
     }
 
     /// 仅执行 GGUF/llama.cpp 解码器前向传播。
+    #[allow(clippy::too_many_arguments)]
     pub fn decode_segment(
         &self,
         encoder_output: &EncoderOutput,
         language: Option<&str>,
         context_prompt: Option<&str>,
         max_new_tokens: Option<usize>,
+        temperature: f32,
+        temperature_inc: f32,
+        entropy_thold: f32,
+        logprob_thold: f32,
+        clear_kv: bool,
     ) -> Result<DecodeResult, QwenError> {
         let req = DecodeRequest {
             encoder_output,
             language,
             context: context_prompt,
             max_new_tokens,
+            temperature,
+            temperature_inc,
+            entropy_thold,
+            logprob_thold,
+            clear_kv,
         };
         let mut dec = self.asr_decoder.lock();
         dec.decode(&req, &self.cancel)

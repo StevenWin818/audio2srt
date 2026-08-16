@@ -74,7 +74,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 2035100308;
+  int get rustContentHash => -415595327;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -156,6 +156,8 @@ abstract class RustLibApi extends BaseApi {
   });
 
   Future<void> crateApiSileroVadRegisterThreadAsProAudio();
+
+  Future<String> crateApiSubtitleSplitRemovePeriods({required String text});
 
   void crateApiStreamPipelineSetRustPerfLogging({required bool enable});
 
@@ -858,13 +860,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiSubtitleSplitRemovePeriods({required String text}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(text, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 20,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSubtitleSplitRemovePeriodsConstMeta,
+        argValues: [text],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSubtitleSplitRemovePeriodsConstMeta =>
+      const TaskConstMeta(debugName: "remove_periods", argNames: ["text"]);
+
+  @override
   void crateApiStreamPipelineSetRustPerfLogging({required bool enable}) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_bool(enable, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 20)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -901,7 +931,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 22,
             port: port_,
           );
         },
@@ -971,7 +1001,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 22,
+              funcId: 23,
               port: port_,
             );
           },
@@ -1049,7 +1079,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 23,
+              funcId: 24,
               port: port_,
             );
           },
@@ -1081,7 +1111,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 25,
             port: port_,
           );
         },
@@ -1111,7 +1141,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1135,7 +1165,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 26)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1163,7 +1193,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 28,
             port: port_,
           );
         },
@@ -1196,7 +1226,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 29,
             port: port_,
           );
         },
@@ -1226,7 +1256,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 30,
             port: port_,
           );
         },
@@ -1259,7 +1289,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 31,
             port: port_,
           );
         },
@@ -1296,7 +1326,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 32,
             port: port_,
           );
         },
@@ -1326,7 +1356,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 32,
+            funcId: 33,
             port: port_,
           );
         },
@@ -1661,8 +1691,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PipelineConfig dco_decode_pipeline_config(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 25)
-      throw Exception('unexpected arr length: expect 25 but see ${arr.length}');
+    if (arr.length != 28)
+      throw Exception('unexpected arr length: expect 28 but see ${arr.length}');
     return PipelineConfig(
       ffmpegPath: dco_decode_String(arr[0]),
       inputPath: dco_decode_String(arr[1]),
@@ -1677,18 +1707,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       decoderBackend: dco_decode_decoder_backend(arr[10]),
       timestampMode: dco_decode_timestamp_mode(arr[11]),
       language: dco_decode_opt_String(arr[12]),
-      translate: dco_decode_bool(arr[13]),
-      threads: dco_decode_opt_box_autoadd_i_32(arr[14]),
-      useGpu: dco_decode_bool(arr[15]),
-      toSimplified: dco_decode_bool(arr[16]),
-      noContext: dco_decode_bool(arr[17]),
-      noStateHistory: dco_decode_bool(arr[18]),
-      enableDenoise: dco_decode_bool(arr[19]),
-      vadEnabled: dco_decode_bool(arr[20]),
-      vadThreshold: dco_decode_f_64(arr[21]),
-      vadMinSpeechMs: dco_decode_i_32(arr[22]),
-      vadMinSilenceMs: dco_decode_i_32(arr[23]),
-      selectedAudioTrack: dco_decode_opt_box_autoadd_usize(arr[24]),
+      threads: dco_decode_opt_box_autoadd_i_32(arr[13]),
+      useGpu: dco_decode_bool(arr[14]),
+      toSimplified: dco_decode_bool(arr[15]),
+      noContext: dco_decode_bool(arr[16]),
+      noStateHistory: dco_decode_bool(arr[17]),
+      temperature: dco_decode_f_32(arr[18]),
+      temperatureInc: dco_decode_f_32(arr[19]),
+      entropyThold: dco_decode_f_32(arr[20]),
+      logprobThold: dco_decode_f_32(arr[21]),
+      enableDenoise: dco_decode_bool(arr[22]),
+      vadEnabled: dco_decode_bool(arr[23]),
+      vadThreshold: dco_decode_f_64(arr[24]),
+      vadMinSpeechMs: dco_decode_i_32(arr[25]),
+      vadMinSilenceMs: dco_decode_i_32(arr[26]),
+      selectedAudioTrack: dco_decode_opt_box_autoadd_usize(arr[27]),
     );
   }
 
@@ -2271,12 +2304,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_decoderBackend = sse_decode_decoder_backend(deserializer);
     var var_timestampMode = sse_decode_timestamp_mode(deserializer);
     var var_language = sse_decode_opt_String(deserializer);
-    var var_translate = sse_decode_bool(deserializer);
     var var_threads = sse_decode_opt_box_autoadd_i_32(deserializer);
     var var_useGpu = sse_decode_bool(deserializer);
     var var_toSimplified = sse_decode_bool(deserializer);
     var var_noContext = sse_decode_bool(deserializer);
     var var_noStateHistory = sse_decode_bool(deserializer);
+    var var_temperature = sse_decode_f_32(deserializer);
+    var var_temperatureInc = sse_decode_f_32(deserializer);
+    var var_entropyThold = sse_decode_f_32(deserializer);
+    var var_logprobThold = sse_decode_f_32(deserializer);
     var var_enableDenoise = sse_decode_bool(deserializer);
     var var_vadEnabled = sse_decode_bool(deserializer);
     var var_vadThreshold = sse_decode_f_64(deserializer);
@@ -2297,12 +2333,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       decoderBackend: var_decoderBackend,
       timestampMode: var_timestampMode,
       language: var_language,
-      translate: var_translate,
       threads: var_threads,
       useGpu: var_useGpu,
       toSimplified: var_toSimplified,
       noContext: var_noContext,
       noStateHistory: var_noStateHistory,
+      temperature: var_temperature,
+      temperatureInc: var_temperatureInc,
+      entropyThold: var_entropyThold,
+      logprobThold: var_logprobThold,
       enableDenoise: var_enableDenoise,
       vadEnabled: var_vadEnabled,
       vadThreshold: var_vadThreshold,
@@ -2924,12 +2963,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_decoder_backend(self.decoderBackend, serializer);
     sse_encode_timestamp_mode(self.timestampMode, serializer);
     sse_encode_opt_String(self.language, serializer);
-    sse_encode_bool(self.translate, serializer);
     sse_encode_opt_box_autoadd_i_32(self.threads, serializer);
     sse_encode_bool(self.useGpu, serializer);
     sse_encode_bool(self.toSimplified, serializer);
     sse_encode_bool(self.noContext, serializer);
     sse_encode_bool(self.noStateHistory, serializer);
+    sse_encode_f_32(self.temperature, serializer);
+    sse_encode_f_32(self.temperatureInc, serializer);
+    sse_encode_f_32(self.entropyThold, serializer);
+    sse_encode_f_32(self.logprobThold, serializer);
     sse_encode_bool(self.enableDenoise, serializer);
     sse_encode_bool(self.vadEnabled, serializer);
     sse_encode_f_64(self.vadThreshold, serializer);

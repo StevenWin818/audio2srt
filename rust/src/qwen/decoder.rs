@@ -16,6 +16,26 @@ pub struct DecodeRequest<'a> {
     pub context: Option<&'a str>,
     /// 最大生成 token 数: 按音频时长动态设置, None 时用默认 256
     pub max_new_tokens: Option<usize>,
+    /// 采样温度 (0.0 = 贪婪解码; Whisper 兼容参数)
+    pub temperature: f32,
+    /// 质量回退时的温度增量 (每次重试 +inc, 上限 1.0)
+    pub temperature_inc: f32,
+    /// 生成文本压缩率(熵)阈值: 超过则升温回退重试
+    pub entropy_thold: f32,
+    /// 平均 token 对数概率下限: 低于则升温回退重试
+    pub logprob_thold: f32,
+    /// true = 每段解码前清空 KV 缓存 (禁用跨段状态记忆)
+    pub clear_kv: bool,
+}
+
+/// 单次解码尝试的内部产物 (质量指标用于回退判定, 不对外暴露)
+struct AttemptOutput {
+    text: String,
+    detected_language: Option<String>,
+    generated_tokens: usize,
+    prompt_tokens: usize,
+    avg_logprob: f64,
+    entropy: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +60,10 @@ pub struct QwenDecoder {
     pub actual_backend: String,
     /// offload 状态 ("GPU (N/N layers)" / "CPU")
     pub offload_info: String,
+    /// KV 缓存已消费的位置: 禁用状态历史时恒为 0, 保留跨段历史时随解码推进
+    kv_cache_pos: usize,
+    /// 上下文长度上限 (KV 溢出时强制清空历史)
+    n_ctx: usize,
 }
 
 unsafe impl Send for QwenDecoder {}
@@ -235,6 +259,7 @@ impl QwenDecoder {
         // 生成生成式使用：无池化、因果注意力机制
         ctx_params.pooling_type = ll::LLAMA_POOLING_TYPE_NONE as _;
         ctx_params.embeddings = false;
+        let n_ctx = ctx_params.n_ctx as usize;
 
         let context = unsafe { ll::llama_init_from_model(model, ctx_params) };
         if context.is_null() {
@@ -254,6 +279,8 @@ impl QwenDecoder {
             use_gpu,
             actual_backend,
             offload_info,
+            kv_cache_pos: 0,
+            n_ctx,
         })
     }
 
@@ -267,10 +294,69 @@ impl QwenDecoder {
         }
         let start_time = std::time::Instant::now();
 
-        // 清理 KV Cache
-        let mem = unsafe { ll::llama_get_memory(self.context) };
-        unsafe { ll::llama_memory_clear(mem, true) };
+        // 质量回退循环 (Whisper 兼容参数):
+        // 生成结果的平均对数概率过低或文本压缩率(熵)过高时, 按 temperature_inc
+        // 升温重试; 最后一次尝试的结果直接返回 (与 whisper.cpp 语义一致)。
+        let mut temperature = req.temperature.clamp(0.0_f32, 1.0_f32);
+        const MAX_ATTEMPTS: u32 = 5;
+        let mut last: Option<AttemptOutput> = None;
+        for attempt in 0..MAX_ATTEMPTS {
+            let out = match self.decode_attempt(req, cancel, temperature, attempt) {
+                Ok(o) => o,
+                Err(e) => {
+                    // 出错/取消后重置 KV 状态, 防止污染下一次解码
+                    self.reset_kv();
+                    return Err(e);
+                }
+            };
+            let quality_fail = out.generated_tokens > 0
+                && (out.avg_logprob < req.logprob_thold as f64
+                    || out.entropy > req.entropy_thold as f64);
+            let is_last_attempt = attempt + 1 >= MAX_ATTEMPTS
+                || req.temperature_inc <= 0.0
+                || temperature + req.temperature_inc > 1.0 + 1e-4;
+            if quality_fail {
+                println!(
+                    "[decoder] quality fallback: avg_logprob={:.3} entropy={:.3} (thresholds logprob={:.2} entropy={:.2})",
+                    out.avg_logprob, out.entropy, req.logprob_thold, req.entropy_thold
+                );
+            }
+            last = Some(out);
+            if !quality_fail || is_last_attempt {
+                break;
+            }
+            temperature += req.temperature_inc.max(0.0);
+            println!("[decoder] retry with temperature={:.2}", temperature);
+        }
 
+        let out = last.expect("decode attempt loop always produces at least one result");
+        let elapsed_ms = start_time.elapsed().as_millis() as u64;
+        println!(
+            "[decoder] Transcribed {} tokens in {}ms: '{}'",
+            out.generated_tokens, elapsed_ms, out.text
+        );
+        Ok(DecodeResult {
+            text: out.text,
+            detected_language: out.detected_language,
+            generated_tokens: out.generated_tokens,
+            prompt_tokens: out.prompt_tokens,
+            elapsed_ms,
+        })
+    }
+
+    /// 单次解码尝试: 构建 prompt、注入音频嵌入、自回归生成并统计质量指标。
+    /// KV 缓存策略: 首次尝试且启用状态历史时续用上次 KV (位置继续推进),
+    /// 否则 (禁用历史 / 回退重试 / 上下文将溢出) 清空后从 0 开始。
+    fn decode_attempt(
+        &mut self,
+        req: &DecodeRequest,
+        cancel: &AtomicBool,
+        temperature: f32,
+        attempt_index: u32,
+    ) -> Result<AttemptOutput, QwenError> {
+        let attempt_start = std::time::Instant::now();
+
+        // ---- 1. 维度校验 ----
         let enc_shape = &req.encoder_output.shape;
         let n_embd = self.n_embd as usize;
         let enc_len = req.encoder_output.embeddings.len();
@@ -299,7 +385,13 @@ impl QwenDecoder {
             )));
         }
 
-        // 精确匹配 Qwen3-ASR 官方对话 Prompt 模板。
+        let n_audio_tokens = if n_embd > 0 { enc_len / n_embd } else { 0 };
+        let max_new_tokens = req
+            .max_new_tokens
+            .unwrap_or(256)
+            .clamp(256, 768);
+
+        // ---- 2. 精确匹配 Qwen3-ASR 官方对话 Prompt 模板。----
         // 模型在训练时将音频特征作为完整的 user 消息。
         // 在 <|audio_end|> 之后添加额外的自然语言指令，
         // 会偏离其 ASR 专属输出协议，导致无法稳定触发正常自回归转写。
@@ -318,26 +410,6 @@ impl QwenDecoder {
             prefix_tokens.append(&mut tag_tokens);
         }
 
-        // 1) 提交前缀 Token (System Prompt + <|audio_start|>)
-        self.submit_token_batch(&prefix_tokens, 0)?;
-        let mut current_pos = prefix_tokens.len();
-
-        // 2) 将声学 Embedding 向量注入 LLM KV Cache
-        let embeddings = &req.encoder_output.embeddings;
-        let n_audio_tokens = if n_embd > 0 { embeddings.len() / n_embd } else { 0 };
-
-        if n_audio_tokens > 0 {
-            println!(
-                "[decoder] Ingesting {} audio embedding vectors (dim={}) into llama.cpp GPU KV cache",
-                n_audio_tokens, n_embd
-            );
-            self.submit_embedding_batch(embeddings, n_audio_tokens, current_pos)?;
-            current_pos += n_audio_tokens;
-        } else {
-            println!("[decoder] Warning: No audio embeddings available from ONNX encoder!");
-        }
-
-        // 3) 准备并提交后缀 Token (<|audio_end|> + 用户 Prompt + Assistant 标记)
         let mut suffix_tokens = Vec::new();
         if audio_end_tok >= 0 {
             suffix_tokens.push(audio_end_tok);
@@ -357,52 +429,79 @@ impl QwenDecoder {
         let mut user_suffix_tokens = self.tokenize_str(&user_suffix_str)?;
         suffix_tokens.append(&mut user_suffix_tokens);
 
+        // ---- 3. KV 状态决策 (跨段状态历史 / 回退重试 / 上下文溢出) ----
+        let keep_history = !req.clear_kv;
+        let need_clear = attempt_index > 0 || !keep_history;
+        if need_clear {
+            self.reset_kv();
+        } else {
+            let est_len = self.kv_cache_pos
+                + prefix_tokens.len()
+                + n_audio_tokens
+                + suffix_tokens.len()
+                + max_new_tokens;
+            if est_len > self.n_ctx {
+                println!(
+                    "[decoder] KV context would overflow ({} tokens needed, n_ctx={}), clearing history",
+                    est_len, self.n_ctx
+                );
+                self.reset_kv();
+            }
+        }
+        let start_pos = self.kv_cache_pos;
+
+        // ---- 4. 提交前缀 Token (System Prompt + <|audio_start|>) ----
+        self.submit_token_batch(&prefix_tokens, start_pos)?;
+        let mut current_pos = start_pos + prefix_tokens.len();
+
+        // ---- 5. 将声学 Embedding 向量注入 LLM KV Cache ----
+        let embeddings = &req.encoder_output.embeddings;
+        if n_audio_tokens > 0 {
+            println!(
+                "[decoder] Ingesting {} audio embedding vectors (dim={}) into llama.cpp GPU KV cache",
+                n_audio_tokens, n_embd
+            );
+            self.submit_embedding_batch(embeddings, n_audio_tokens, current_pos)?;
+            current_pos += n_audio_tokens;
+        } else {
+            println!("[decoder] Warning: No audio embeddings available from ONNX encoder!");
+        }
+
+        // ---- 6. 提交后缀 Token (<|audio_end|> + 用户 Prompt + Assistant 标记) ----
         self.submit_token_batch(&suffix_tokens, current_pos)?;
         current_pos += suffix_tokens.len();
 
-        // 4) Qwen3-ASR 官方推理使用 temperature=0.0。
-        let chain_params = unsafe { ll::llama_sampler_chain_default_params() };
-        let sampler = unsafe { ll::llama_sampler_chain_init(chain_params) };
-        if sampler.is_null() {
-            return Err(QwenError::DecoderError(
-                "llama_sampler_chain_init returned NULL".into(),
-            ));
-        }
-
-        let greedy_sampler = unsafe { ll::llama_sampler_init_greedy() };
-        if greedy_sampler.is_null() {
-            unsafe { ll::llama_sampler_free(sampler) };
-            return Err(QwenError::DecoderError(
-                "llama_sampler_init_greedy returned NULL".into(),
-            ));
-        }
-        unsafe { ll::llama_sampler_chain_add(sampler, greedy_sampler) };
-
+        // ---- 7. 自回归生成 (手动 softmax 采样, 同时统计质量指标) ----
         let eos_tok = unsafe { ll::llama_vocab_eos(self.vocab) };
         let eot_tok = unsafe { ll::llama_vocab_eot(self.vocab) };
+        let vocab_n = unsafe { ll::llama_vocab_n_tokens(self.vocab) } as usize;
 
-        // 45s 快语速块可能需要 400+ token: 按音频时长动态放宽, 避免截断
-        // (默认 256; 每 100ms 音频约 1 token + 64 余量, 上限 768)
-        let max_new_tokens = req
-            .max_new_tokens
-            .unwrap_or(256)
-            .clamp(256, 768);
         // Token Piece 是任意字节片段，单个片段不保证是有效的 UTF-8 字符。
         // 将所有片段收集完后再统一转换为 UTF-8 字符串，
         // 避免中日韩等多字节字符因跨 Token 切割而导致无声丢弃和乱码。
         let mut output_bytes = Vec::<u8>::new();
-        let mut generated = 0usize;
+        let mut generated_tokens: Vec<ll::llama_token> = Vec::with_capacity(max_new_tokens);
+        let mut sum_logprob = 0.0f64;
+        let mut rng_state = new_rng_seed();
 
         for _ in 0..max_new_tokens {
             if cancel.load(Ordering::Relaxed) {
-                unsafe { ll::llama_sampler_free(sampler) };
                 return Err(QwenError::Cancelled);
             }
 
-            let next = unsafe { ll::llama_sampler_sample(sampler, self.context, -1) };
+            let logits_ptr = unsafe { ll::llama_get_logits(self.context) };
+            let (next, logprob) = if logits_ptr.is_null() || vocab_n == 0 {
+                (-1, 0.0)
+            } else {
+                let logits = unsafe { std::slice::from_raw_parts(logits_ptr, vocab_n) };
+                sample_token(logits, temperature, &mut rng_state)
+            };
             if next < 0 {
                 break;
             }
+
+            sum_logprob += logprob;
+            generated_tokens.push(next);
 
             let is_eog = unsafe { ll::llama_vocab_is_eog(self.vocab, next) };
             if is_eog
@@ -420,8 +519,6 @@ impl QwenDecoder {
 
             output_bytes.extend_from_slice(&self.token_piece(next)?);
 
-            generated += 1;
-
             if output_bytes.ends_with(b"\n\n") {
                 break;
             }
@@ -430,8 +527,18 @@ impl QwenDecoder {
             current_pos += 1;
         }
 
-        unsafe { ll::llama_sampler_free(sampler) };
+        // 记录 KV 位置: 保留历史时下一次解码从此处继续
+        self.kv_cache_pos = current_pos;
 
+        let generated = generated_tokens.len();
+        let avg_logprob = if generated > 0 {
+            sum_logprob / generated as f64
+        } else {
+            0.0
+        };
+        let entropy = compression_entropy(&generated_tokens);
+
+        // ---- 8. 解析输出 ----
         let output = String::from_utf8_lossy(&output_bytes).into_owned();
         let (detected_language, asr_text) =
             parse_qwen_asr_output(&output, forced_language);
@@ -449,18 +556,37 @@ impl QwenDecoder {
             .trim()
             .to_string();
 
-        let elapsed_ms = start_time.elapsed().as_millis() as u64;
-        println!("[decoder] Transcribed {} tokens in {}ms: '{}'", generated, elapsed_ms, cleaned);
-
         let prompt_len = prefix_tokens.len() + n_audio_tokens + suffix_tokens.len();
+        println!(
+            "[decoder] attempt #{}: {} tokens in {}ms, avg_logprob={:.3}, entropy={:.3}",
+            attempt_index,
+            generated,
+            attempt_start.elapsed().as_millis(),
+            avg_logprob,
+            entropy
+        );
 
-        Ok(DecodeResult {
+        Ok(AttemptOutput {
             text: cleaned,
             detected_language,
             generated_tokens: generated,
             prompt_tokens: prompt_len,
-            elapsed_ms,
+            avg_logprob,
+            entropy,
         })
+    }
+
+    /// 出错/取消后重置 KV 缓存与位置, 防止污染下一次解码
+    fn reset_kv(&mut self) {
+        unsafe {
+            if !self.context.is_null() {
+                let mem = ll::llama_get_memory(self.context);
+                if !mem.is_null() {
+                    ll::llama_memory_clear(mem, true);
+                }
+            }
+        }
+        self.kv_cache_pos = 0;
     }
 
     /// 供 ForcedAligner 复用: 用当前 GGUF 词表对单个词做 BPE 编码。
@@ -744,6 +870,108 @@ impl QwenDecoder {
     pub fn use_gpu(&self) -> bool {
         self.use_gpu
     }
+}
+
+// ---------------------------------------------------------------------------
+// 采样与质量指标辅助函数
+// ---------------------------------------------------------------------------
+
+/// 手动 softmax 采样 (不依赖 llama.cpp sampler, 便于同时统计对数概率指标):
+/// temperature <= 0 时取 argmax (贪婪), 否则按 softmax(logits/T) 多项分布采样。
+/// 返回 (token, log_prob): log_prob 为**未缩放** softmax 下的自然对数概率
+/// (与 whisper.cpp 的 avg_logprob 指标口径一致)。
+fn sample_token(logits: &[f32], temperature: f32, rng: &mut u64) -> (ll::llama_token, f64) {
+    let mut max_l = f32::NEG_INFINITY;
+    for &v in logits.iter() {
+        if v > max_l {
+            max_l = v;
+        }
+    }
+
+    if temperature <= 0.0 {
+        let mut best = 0usize;
+        let mut best_v = f32::NEG_INFINITY;
+        let mut sum_unscaled = 0.0f64;
+        for (i, &v) in logits.iter().enumerate() {
+            if v > best_v {
+                best_v = v;
+                best = i;
+            }
+            sum_unscaled += ((v - max_l) as f64).exp();
+        }
+        let log_sum = (max_l as f64) + sum_unscaled.ln();
+        let lp = (logits[best] - max_l) as f64 - log_sum;
+        return (best as ll::llama_token, lp);
+    }
+
+    let inv_t = 1.0 / temperature;
+    let mut sum_scaled = 0.0f64;
+    let mut sum_unscaled = 0.0f64;
+    for &v in logits.iter() {
+        let d = v - max_l;
+        sum_unscaled += (d as f64).exp();
+        sum_scaled += ((d * inv_t) as f64).exp();
+    }
+    let log_sum = (max_l as f64) + sum_unscaled.ln();
+
+    let target = next_uniform(rng) * sum_scaled;
+    let mut cum = 0.0f64;
+    let mut chosen = logits.len() - 1;
+    for (i, &v) in logits.iter().enumerate() {
+        let d = v - max_l;
+        cum += ((d * inv_t) as f64).exp();
+        if cum >= target {
+            chosen = i;
+            break;
+        }
+    }
+    let lp = (logits[chosen] - max_l) as f64 - log_sum;
+    (chosen as ll::llama_token, lp)
+}
+
+/// 生成文本压缩率 (1~4-gram 唯一组合占比): 与 whisper.cpp 的
+/// entropy / compression_ratio 指标一致, 重复循环时该值显著偏高。
+fn compression_entropy(tokens: &[ll::llama_token]) -> f64 {
+    if tokens.len() < 2 {
+        return 0.0;
+    }
+    let max_n = tokens.len().min(4);
+    let mut unique_total = 0usize;
+    let mut total = 0usize;
+    for n in 1..=max_n {
+        let mut set = std::collections::HashSet::new();
+        for i in 0..=(tokens.len() - n) {
+            set.insert(tokens[i..i + n].to_vec());
+        }
+        unique_total += set.len();
+        total += tokens.len() - n + 1;
+    }
+    unique_total as f64 / total as f64
+}
+
+/// SplitMix64: 无外部依赖的小型伪随机数发生器 (温度采样用)
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+fn next_uniform(rng: &mut u64) -> f64 {
+    (splitmix64(rng) >> 11) as f64 / ((1u64 << 53) as f64)
+}
+
+fn new_rng_seed() -> u64 {
+    use std::sync::atomic::AtomicU64;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0x9E37_79B9_7F4A_7C15);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let salt = COUNTER.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed);
+    nanos ^ salt.rotate_left(17)
 }
 
 impl Drop for QwenDecoder {
