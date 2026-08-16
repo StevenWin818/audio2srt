@@ -406,7 +406,7 @@ pub struct PipelineConfig {
     pub temperature: f32,
     /// 质量回退时温度增量
     pub temperature_inc: f32,
-    /// 生成文本熵(压缩率)阈值
+    /// 生成序列尾部香农熵阈值 (重复循环检测, 低于则回退)
     pub entropy_thold: f32,
     /// 平均 token 对数概率阈值
     pub logprob_thold: f32,

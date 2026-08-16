@@ -20,7 +20,7 @@ pub struct DecodeRequest<'a> {
     pub temperature: f32,
     /// 质量回退时的温度增量 (每次重试 +inc, 上限 1.0)
     pub temperature_inc: f32,
-    /// 生成文本压缩率(熵)阈值: 超过则升温回退重试
+    /// 生成序列尾部香农熵阈值: 低于则视为重复循环, 升温回退重试
     pub entropy_thold: f32,
     /// 平均 token 对数概率下限: 低于则升温回退重试
     pub logprob_thold: f32,
@@ -294,14 +294,14 @@ impl QwenDecoder {
         }
         let start_time = std::time::Instant::now();
 
-        // 质量回退循环 (Whisper 兼容参数):
-        // 生成结果的平均对数概率过低或文本压缩率(熵)过高时, 按 temperature_inc
-        // 升温重试; 最后一次尝试的结果直接返回 (与 whisper.cpp 语义一致)。
+        // 质量回退循环 (与 whisper.cpp 语义一致):
+        // 1. avg_logprob < logprob_thold -> 不确信, 升温重试;
+        // 2. 生成 token 数 > 32 且尾部序列香农熵 < entropy_thold -> 重复循环, 升温重试。
+        // 温度序列与 whisper.cpp 相同: [temperature, +inc, ...] 直到 >= 1.0。
         let mut temperature = req.temperature.clamp(0.0_f32, 1.0_f32);
-        const MAX_ATTEMPTS: u32 = 5;
-        let mut last: Option<AttemptOutput> = None;
-        for attempt in 0..MAX_ATTEMPTS {
-            let out = match self.decode_attempt(req, cancel, temperature, attempt) {
+        let mut attempt_index = 0u32;
+        let out: AttemptOutput = loop {
+            let out = match self.decode_attempt(req, cancel, temperature, attempt_index) {
                 Ok(o) => o,
                 Err(e) => {
                     // 出错/取消后重置 KV 状态, 防止污染下一次解码
@@ -309,27 +309,25 @@ impl QwenDecoder {
                     return Err(e);
                 }
             };
-            let quality_fail = out.generated_tokens > 0
-                && (out.avg_logprob < req.logprob_thold as f64
-                    || out.entropy > req.entropy_thold as f64);
-            let is_last_attempt = attempt + 1 >= MAX_ATTEMPTS
-                || req.temperature_inc <= 0.0
-                || temperature + req.temperature_inc > 1.0 + 1e-4;
+            let logprob_fail = out.avg_logprob < req.logprob_thold as f64;
+            let entropy_fail = out.generated_tokens > 32 && out.entropy < req.entropy_thold as f64;
+            let quality_fail = logprob_fail || entropy_fail;
+            let can_retry =
+                req.temperature_inc > 0.0 && temperature + req.temperature_inc < 1.0 + 1e-6;
             if quality_fail {
                 println!(
                     "[decoder] quality fallback: avg_logprob={:.3} entropy={:.3} (thresholds logprob={:.2} entropy={:.2})",
                     out.avg_logprob, out.entropy, req.logprob_thold, req.entropy_thold
                 );
             }
-            last = Some(out);
-            if !quality_fail || is_last_attempt {
-                break;
+            if !quality_fail || !can_retry {
+                break out;
             }
             temperature += req.temperature_inc.max(0.0);
+            attempt_index += 1;
             println!("[decoder] retry with temperature={:.2}", temperature);
-        }
+        };
 
-        let out = last.expect("decode attempt loop always produces at least one result");
         let elapsed_ms = start_time.elapsed().as_millis() as u64;
         println!(
             "[decoder] Transcribed {} tokens in {}ms: '{}'",
@@ -536,7 +534,7 @@ impl QwenDecoder {
         } else {
             0.0
         };
-        let entropy = compression_entropy(&generated_tokens);
+        let entropy = sequence_entropy(&generated_tokens);
 
         // ---- 8. 解析输出 ----
         let output = String::from_utf8_lossy(&output_bytes).into_owned();
@@ -929,24 +927,27 @@ fn sample_token(logits: &[f32], temperature: f32, rng: &mut u64) -> (ll::llama_t
     (chosen as ll::llama_token, lp)
 }
 
-/// 生成文本压缩率 (1~4-gram 唯一组合占比): 与 whisper.cpp 的
-/// entropy / compression_ratio 指标一致, 重复循环时该值显著偏高。
-fn compression_entropy(tokens: &[ll::llama_token]) -> f64 {
-    if tokens.len() < 2 {
+/// 生成序列尾部 32 个 token 的香农熵 (自然对数):
+/// 与 whisper.cpp `whisper_sequence_score` 的 entropy 口径完全一致,
+/// 重复循环 (如 "你好你好你好") 时熵显著降低, 用于触发升温回退。
+fn sequence_entropy(tokens: &[ll::llama_token]) -> f64 {
+    const WINDOW: usize = 32;
+    if tokens.is_empty() {
         return 0.0;
     }
-    let max_n = tokens.len().min(4);
-    let mut unique_total = 0usize;
-    let mut total = 0usize;
-    for n in 1..=max_n {
-        let mut set = std::collections::HashSet::new();
-        for i in 0..=(tokens.len() - n) {
-            set.insert(tokens[i..i + n].to_vec());
-        }
-        unique_total += set.len();
-        total += tokens.len() - n + 1;
+    let start = tokens.len().saturating_sub(WINDOW);
+    let window = &tokens[start..];
+    let mut counts = std::collections::HashMap::new();
+    for &t in window {
+        *counts.entry(t).or_insert(0usize) += 1;
     }
-    unique_total as f64 / total as f64
+    let n = window.len() as f64;
+    let mut entropy = 0.0f64;
+    for &c in counts.values() {
+        let p = c as f64 / n;
+        entropy -= p * p.ln();
+    }
+    entropy
 }
 
 /// SplitMix64: 无外部依赖的小型伪随机数发生器 (温度采样用)
@@ -1096,7 +1097,7 @@ fn strip_asr_language_header(output: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_qwen_language, parse_qwen_asr_output};
+    use super::{canonical_qwen_language, parse_qwen_asr_output, sample_token, sequence_entropy};
 
     #[test]
     fn maps_ui_language_codes_to_qwen_names() {
@@ -1126,5 +1127,31 @@ mod tests {
             parse_qwen_asr_output("language English<asr_text>hello world", Some("English"));
         assert_eq!(language.as_deref(), Some("English"));
         assert_eq!(text, "hello world");
+    }
+
+    #[test]
+    fn sequence_entropy_detects_repetition() {
+        // 重复 token 序列熵显著低于多样序列 (与 whisper.cpp 重复检测口径一致)
+        let repetitive = vec![1_i32; 40];
+        let diverse: Vec<i32> = (0..40).collect();
+        assert!(sequence_entropy(&repetitive) < 0.5);
+        assert!(sequence_entropy(&repetitive) < sequence_entropy(&diverse));
+        // 空序列与单 token 序列熵为 0
+        assert_eq!(sequence_entropy(&[]), 0.0);
+        assert_eq!(sequence_entropy(&[1]), 0.0);
+    }
+
+    #[test]
+    fn sample_token_greedy_and_temperature() {
+        let logits = vec![0.0f32, 0.1, 0.2, 0.3, -5.0];
+        let mut rng = 42u64;
+        // 贪婪: 恒选 argmax, logprob 为未缩放 softmax 对数概率
+        let (tok, lp) = sample_token(&logits, 0.0, &mut rng);
+        assert_eq!(tok, 3);
+        assert!(lp < 0.0 && lp > -10.0);
+        // 温度采样: 返回合法 token id 与负对数概率
+        let (tok2, lp2) = sample_token(&logits, 1.0, &mut rng);
+        assert!((0..5).contains(&tok2));
+        assert!(lp2 < 0.0);
     }
 }

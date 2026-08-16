@@ -607,7 +607,7 @@ class _SettingsViewState extends State<SettingsView> {
                 },
               ),
               Text(
-                '文本生成的压缩率/混沌程度阈值。若生成的熵过高（文字混乱无逻辑），触发降级重试机制。默认 2.4。',
+                '生成序列的香农熵阈值。重复循环（如无限重复同一句）时熵显著降低，低于此值时触发升温回退重试。默认 2.4。',
                 style: TextStyle(fontSize: 11, color: Colors.grey[500]),
               ),
             ],
