@@ -29,6 +29,7 @@ pub struct DecodeRequest<'a> {
 }
 
 /// 单次解码尝试的内部产物 (质量指标用于回退判定, 不对外暴露)
+#[derive(Clone)]
 struct AttemptOutput {
     text: String,
     detected_language: Option<String>,
@@ -300,32 +301,54 @@ impl QwenDecoder {
         // 温度序列与 whisper.cpp 相同: [temperature, +inc, ...] 直到 >= 1.0。
         let mut temperature = req.temperature.clamp(0.0_f32, 1.0_f32);
         let mut attempt_index = 0u32;
-        let out: AttemptOutput = loop {
-            let out = match self.decode_attempt(req, cancel, temperature, attempt_index) {
-                Ok(o) => o,
-                Err(e) => {
-                    // 出错/取消后重置 KV 状态, 防止污染下一次解码
-                    self.reset_kv();
-                    return Err(e);
+        let out: AttemptOutput = {
+            // 内容安全网: 升温回退的最终结果为空时, 退回最近一次非空尝试,
+            // 避免"空输出 -> pending 合并 -> 整段音频被丢弃"
+            let mut last_non_empty: Option<AttemptOutput> = None;
+            let out = loop {
+                let out = match self.decode_attempt(req, cancel, temperature, attempt_index) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        // 出错/取消后重置 KV 状态, 防止污染下一次解码
+                        self.reset_kv();
+                        return Err(e);
+                    }
+                };
+                if !out.text.trim().is_empty() {
+                    last_non_empty = Some(out.clone());
                 }
+                let logprob_fail = out.avg_logprob < req.logprob_thold as f64;
+                let entropy_fail =
+                    out.generated_tokens > 32 && out.entropy < req.entropy_thold as f64;
+                let quality_fail = logprob_fail || entropy_fail;
+                let can_retry =
+                    req.temperature_inc > 0.0 && temperature + req.temperature_inc < 1.0 + 1e-6;
+                if quality_fail {
+                    println!(
+                        "[decoder] quality fallback: avg_logprob={:.3} entropy={:.3} (thresholds logprob={:.2} entropy={:.2})",
+                        out.avg_logprob, out.entropy, req.logprob_thold, req.entropy_thold
+                    );
+                }
+                if !quality_fail || !can_retry {
+                    break out;
+                }
+                temperature += req.temperature_inc.max(0.0);
+                attempt_index += 1;
+                println!("[decoder] retry with temperature={:.2}", temperature);
             };
-            let logprob_fail = out.avg_logprob < req.logprob_thold as f64;
-            let entropy_fail = out.generated_tokens > 32 && out.entropy < req.entropy_thold as f64;
-            let quality_fail = logprob_fail || entropy_fail;
-            let can_retry =
-                req.temperature_inc > 0.0 && temperature + req.temperature_inc < 1.0 + 1e-6;
-            if quality_fail {
-                println!(
-                    "[decoder] quality fallback: avg_logprob={:.3} entropy={:.3} (thresholds logprob={:.2} entropy={:.2})",
-                    out.avg_logprob, out.entropy, req.logprob_thold, req.entropy_thold
-                );
+            if out.text.trim().is_empty() {
+                if let Some(prev) = last_non_empty {
+                    println!(
+                        "[decoder] final attempt empty, falling back to last non-empty attempt ({} tokens)",
+                        prev.generated_tokens
+                    );
+                    prev
+                } else {
+                    out
+                }
+            } else {
+                out
             }
-            if !quality_fail || !can_retry {
-                break out;
-            }
-            temperature += req.temperature_inc.max(0.0);
-            attempt_index += 1;
-            println!("[decoder] retry with temperature={:.2}", temperature);
         };
 
         let elapsed_ms = start_time.elapsed().as_millis() as u64;
@@ -877,7 +900,8 @@ impl QwenDecoder {
 /// 手动 softmax 采样 (不依赖 llama.cpp sampler, 便于同时统计对数概率指标):
 /// temperature <= 0 时取 argmax (贪婪), 否则按 softmax(logits/T) 多项分布采样。
 /// 返回 (token, log_prob): log_prob 为**未缩放** softmax 下的自然对数概率
-/// (与 whisper.cpp 的 avg_logprob 指标口径一致)。
+/// (与 whisper.cpp 的 avg_logprob 指标口径一致), 即
+/// ln P(t) = (logits[t] - max_l) - ln(Σ_j exp(logits[j] - max_l))。
 fn sample_token(logits: &[f32], temperature: f32, rng: &mut u64) -> (ll::llama_token, f64) {
     let mut max_l = f32::NEG_INFINITY;
     for &v in logits.iter() {
@@ -897,8 +921,8 @@ fn sample_token(logits: &[f32], temperature: f32, rng: &mut u64) -> (ll::llama_t
             }
             sum_unscaled += ((v - max_l) as f64).exp();
         }
-        let log_sum = (max_l as f64) + sum_unscaled.ln();
-        let lp = (logits[best] - max_l) as f64 - log_sum;
+        // best 即 argmax: (logits[best] - max_l) = 0, ln P(best) = -ln(Σ exp(l - max_l))
+        let lp = -sum_unscaled.ln();
         return (best as ll::llama_token, lp);
     }
 
@@ -910,7 +934,6 @@ fn sample_token(logits: &[f32], temperature: f32, rng: &mut u64) -> (ll::llama_t
         sum_unscaled += (d as f64).exp();
         sum_scaled += ((d * inv_t) as f64).exp();
     }
-    let log_sum = (max_l as f64) + sum_unscaled.ln();
 
     let target = next_uniform(rng) * sum_scaled;
     let mut cum = 0.0f64;
@@ -923,7 +946,7 @@ fn sample_token(logits: &[f32], temperature: f32, rng: &mut u64) -> (ll::llama_t
             break;
         }
     }
-    let lp = (logits[chosen] - max_l) as f64 - log_sum;
+    let lp = (logits[chosen] - max_l) as f64 - sum_unscaled.ln();
     (chosen as ll::llama_token, lp)
 }
 
@@ -1153,5 +1176,30 @@ mod tests {
         let (tok2, lp2) = sample_token(&logits, 1.0, &mut rng);
         assert!((0..5).contains(&tok2));
         assert!(lp2 < 0.0);
+    }
+
+    #[test]
+    fn sample_token_logprob_matches_softmax() {
+        // 回归测试: 此前 log_sum 把 max_l 扣了两次, 导致 lp ≈ -max_l ≈ -40,
+        // 正常文本被误判为低质量并触发 6 次升温回退, 最终用 temperature=1.0
+        // 的随机结果覆盖正确转写 (并因空输出触发 pending 合并丢弃整段音频)。
+        // 峰值分布: 贪婪 token 的 logprob 应接近 0
+        let mut peaked = vec![-100.0f32; 128];
+        peaked[7] = 40.0;
+        let mut rng = 42u64;
+        let (tok, lp) = sample_token(&peaked, 0.0, &mut rng);
+        assert_eq!(tok, 7);
+        assert!(
+            lp > -1.0,
+            "greedy logprob should be near 0 for peaked logits, got {lp}"
+        );
+        // 平坦分布: logprob 不可能低于 -ln(词表大小)
+        let flat = vec![0.0f32; 1024];
+        let (_, lp2) = sample_token(&flat, 0.0, &mut rng);
+        let floor = -(1024.0f64).ln() - 1e-3;
+        assert!(
+            lp2 >= floor,
+            "logprob {lp2} below theoretical floor {floor}"
+        );
     }
 }
