@@ -120,7 +120,7 @@ impl AudioProcessor {
     /// NeMo 风格的 log-mel 频谱图，带有可选的每话语 CMVN。
     /// 返回形状为 [N_MELS, T_frames] 的平面行优先 `Vec<f32>`。
     pub fn log_mel(samples: &[f32]) -> Result<(Vec<f32>, usize), QwenError> {
-        let (mut feats, n_frames) = Self::log_mel_impl(samples, true)?;
+        let (feats, n_frames) = Self::log_mel_impl(samples, true)?;
 
         let min_f = feats.iter().fold(f32::INFINITY, |a, &b| a.min(b));
         let max_f2 = feats.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));

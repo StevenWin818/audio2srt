@@ -1,4 +1,5 @@
 pub mod ffmpeg;
+pub mod fire_vad;
 pub mod hardware;
 pub mod models;
 pub mod qwen;

@@ -31,10 +31,10 @@ const END_PAD_MS: i64 = 200;
 /// 词间停顿超过该值视为强边界 (ms)
 const PAUSE_STRONG_MS: i64 = 250;
 /// 句中无停顿拆分的基准代价 (必须拆时优先选最长停顿)
-const MID_SENTENCE_BASE: f64 = 120.0;
+const MID_SENTENCE_BASE: f64 = 1000.0;
 /// 句点后引语逗号 (≤2 词后接逗号) 禁止切分的代价
 const LEADIN_COMMA_BLOCK: f64 = 500.0;
-/// 弱标点 (逗号等) 边界代价: 必须低于句中无标点边界的最小代价 (20.0),
+/// 弱标点 (逗号等) 边界代价: 必须远低于句中无标点边界的最小代价 (500.0),
 /// 保证"有标点优先于无标点停顿"的语言学优先级
 const WEAK_PUNCT_COST: f64 = 10.0;
 /// 单条字幕时长硬上限 (ms): DP 剪枝用, 超过此长度的候选段不再计算。
@@ -128,6 +128,18 @@ fn strong_punct_boundary(units: &[WordItem], j: usize) -> bool {
     is_strong_punct(ch)
 }
 
+/// 边界 (unit j 之前) 是否为标点边界 (强标点或逗号等弱标点)。
+fn is_punct_boundary(units: &[WordItem], j: usize) -> bool {
+    if j == 0 {
+        return true;
+    }
+    let ch = units[j - 1].text.chars().last().unwrap_or(' ');
+    if ch == '.' {
+        return is_real_period(units, j - 1);
+    }
+    is_strong_punct(ch) || is_weak_punct(ch)
+}
+
 /// 段尾 (units[i-1]) 是否为强标点。
 fn strong_punct_end(units: &[WordItem], i: usize) -> bool {
     if i == 0 {
@@ -140,13 +152,22 @@ fn strong_punct_end(units: &[WordItem], i: usize) -> bool {
     is_strong_punct(ch)
 }
 
+/// 段尾 (units[i-1]) 是否为弱标点 (逗号、分号等)。
+fn weak_punct_end(units: &[WordItem], i: usize) -> bool {
+    if i == 0 {
+        return false;
+    }
+    let ch = units[i - 1].text.chars().last().unwrap_or(' ');
+    is_weak_punct(ch)
+}
+
 /// 句中边界的代价: 停顿越大代价越低, 必须拆分时优先选最长停顿处
 fn mid_sentence_cost(units: &[WordItem], j: usize) -> f64 {
     let pause = units[j]
         .start_ms
         .saturating_sub(units[j - 1].end_ms)
         .min(100) as f64;
-    (MID_SENTENCE_BASE - pause).max(20.0)
+    (MID_SENTENCE_BASE - pause).max(500.0)
 }
 
 /// 句点后引语逗号边界: 句点后、逗号前的西文单词 ≤2 个时忽略该逗号不切
@@ -359,14 +380,19 @@ fn boundary_cost(units: &[WordItem], j: usize) -> f64 {
 /// 完整句子:
 ///   单独成条, 不拆中间 —— 无 2~5s 限制, 上限放宽到 SENTENCE_MAX_MS;
 ///   段尾强标点给小额奖励, 使相邻句子保持各自成条而不是被合并。
-/// 非完整句子: 2~5s 目标时长 + 字数 + 边界质量。
-/// 句中边界: 停顿越大代价越低 (必须拆分时优先选最长停顿)。
+/// 完整分句 (逗号/分号等天然分句):
+///   优先在逗号处拆分，放宽到 8000ms。
+/// 句中无标点边界:
+///   严格 2~5s 约束 + 高昂的切词惩罚。
 fn segment_cost(units: &[WordItem], j: usize, i: usize) -> f64 {
     let dur = units[i - 1].end_ms - units[j].start_ms;
     let mut cost = 0.0;
 
     let sentence_start = j == 0 || strong_punct_boundary(units, j);
     let sentence_end = strong_punct_end(units, i);
+    let clause_start = j == 0 || is_punct_boundary(units, j);
+    let clause_end = strong_punct_end(units, i) || weak_punct_end(units, i);
+
     if sentence_start && sentence_end {
         // 完整句子: 单独成条; 段尾强标点给强奖励 (使相邻句子保持各自成条,
         // 不会被短句时长偏好或字数惩罚合并)
@@ -375,8 +401,14 @@ fn segment_cost(units: &[WordItem], j: usize, i: usize) -> f64 {
         }
         cost += (dur - SUB_TARGET_MS).abs() as f64 * 0.001;
         cost -= 30.0;
+    } else if clause_start && clause_end {
+        // 完整分句 (逗号/分号/句号边界完整): 允许保持分句完整，上限放宽到 8000ms
+        if dur > 8000 {
+            cost += (dur - 8000) as f64 * 0.15;
+        }
+        cost += (dur - SUB_TARGET_MS).abs() as f64 * 0.002;
     } else {
-        // 非完整句子: 2~5s 约束
+        // 句中无标点硬切: 严格 2~5s 约束
         if dur < SUB_MIN_MS {
             cost += (SUB_MIN_MS - dur) as f64 * 0.02;
         }
@@ -577,5 +609,16 @@ mod tests {
         // 首条字幕有前垫 (块真实起点 0 起), 末条不越界
         assert!(segs[0].start_ms >= 0);
         assert!(segs.last().unwrap().end_ms <= units.last().unwrap().end_ms);
+    }
+
+    #[test]
+    fn comma_splits_instead_of_breaking_words() {
+        // 用户真实案例: 30 字符长句 (~9.6s), 必须在逗号处断句, 严禁在“热烈之中”等词语中间断开
+        let text = "而一池荷花教给我们的是，热烈之中仍可怀有一寸自己的月白风清。";
+        let units = units_from_text(text, 0, 320); // 30 字 × 320ms = 9.6s
+        let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
+        assert_eq!(segs.len(), 2, "9.6s sentence should split into 2 subtitles at comma");
+        assert_eq!(segs[0].text, "而一池荷花教给我们的是，");
+        assert_eq!(segs[1].text, "热烈之中仍可怀有一寸自己的月白风清");
     }
 }

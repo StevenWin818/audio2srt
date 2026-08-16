@@ -667,7 +667,7 @@ class ModelService {
         final zipFile = File(p.join(targetDir.path, f.filename));
         if (await zipFile.exists()) {
           debugPrint('[ModelService] Extracting ${f.filename} ...');
-          await extractZip(zipFile, targetDir!);
+          await extractZip(zipFile, targetDir);
           await zipFile.delete();
           debugPrint('[ModelService] Extracted and removed ${f.filename}');
         }
@@ -846,17 +846,23 @@ class ModelService {
       await modelDir.create(recursive: true);
     }
 
-    final targetPath = p.join(modelDir.path, 'ggml-silero-v5.1.2.bin');
-    final targetFile = File(targetPath);
+    final aedPath = p.join(modelDir.path, 'fireredvad_aed.onnx');
+    final aedFile = File(aedPath);
+    final cmvnPath = p.join(modelDir.path, 'cmvn.ark');
+    final cmvnFile = File(cmvnPath);
 
-    if (await targetFile.exists() && await targetFile.length() > 1024 * 1024) {
-      return targetPath;
+    if (!await aedFile.exists() || await aedFile.length() < 1024 * 1024) {
+      final data = await rootBundle.load('assets/models/fireredvad_aed.onnx');
+      final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+      await aedFile.writeAsBytes(bytes);
     }
 
-    final data = await rootBundle.load('assets/models/ggml-silero-v5.1.2.bin');
-    final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
-    await targetFile.writeAsBytes(bytes);
+    if (!await cmvnFile.exists() || await cmvnFile.length() < 500) {
+      final data = await rootBundle.load('assets/models/cmvn.ark');
+      final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+      await cmvnFile.writeAsBytes(bytes);
+    }
 
-    return targetPath;
+    return aedPath;
   }
 }

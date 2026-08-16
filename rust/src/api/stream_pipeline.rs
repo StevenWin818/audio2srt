@@ -12,7 +12,7 @@ use flate2::read::GzDecoder;
 use tar::Archive;
 use deepfilter_rt::DeepFilterStream;
 use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
-use whisper_rs::{WhisperVadContext, WhisperVadContextParams, WhisperVadParams, WhisperVadSegment};
+use crate::api::fire_vad::{FireVadConfig, FireVadEngine, VadSegment};
 use crate::frb_generated::StreamSink;
 use crate::qwen::error::QwenError;
 use crate::api::silero_vad::{
@@ -983,27 +983,19 @@ fn spawn_dfn_worker(
     })
 }
 
-/// VAD 增量扫描的重叠长度: 每次把上次扫描位置回退 0.5s 一起喂入,
-/// 捕捉跨扫描边界结束的语音尾部, 防止短句丢失。
-const VAD_SCAN_OVERLAP: usize = 8000; // 0.5s @ 16kHz
-
 /// 语音块最小/最大时长 (秒): VAD 切出的短段先合并成 20~45s 大块,
 /// 整块交给 ASR 后由"标点+DP"分条器在块内拆分字幕。
 const BLOCK_MIN_SECONDS: i64 = 20;
 const BLOCK_MAX_SECONDS: i64 = 45;
 
-/// 对给定音频切片运行一次 Silero VAD 扫描。
-/// whisper.cpp 的 VAD 每次只处理传入的采样 (无内部累积), 可安全重复调用。
+/// 对给定音频切片运行一次 FireRedVAD 扫描。
+/// FireRedVAD 非流式模型每次只处理传入的采样 (无内部状态), 可安全重复调用。
 /// 错误必须上抛: 调用方不得把推理失败当成"无语音"。
 fn vad_scan(
-    vad_ctx: &mut WhisperVadContext,
-    vad_params: &WhisperVadParams,
+    vad: &mut FireVadEngine,
     audio: &[f32],
-) -> Result<Vec<WhisperVadSegment>, String> {
-    vad_ctx
-        .segments_from_samples(vad_params.clone(), audio)
-        .map(|segs| segs.into_iter().collect())
-        .map_err(|e| format!("Silero VAD inference error: {:?}", e))
+) -> Result<Vec<VadSegment>, String> {
+    vad.detect(audio)
 }
 
 fn spawn_vad_worker(
@@ -1041,15 +1033,18 @@ fn spawn_vad_worker(
         let mut current_offset_ms: i64 = 0;
 
         let mut vad = if vad_enabled {
-            println!("[Rust] 正在为流式处理初始化 Silero VAD 模型: {}", vad_model_path);
-            let mut vad_ctx_params = WhisperVadContextParams::new();
-            // 增量扫描后每次 VAD 计算量很小 (毫秒级), 单线程即可;
-            // 且线程已绑 E 核, GGML 池线程不受线程亲和性约束 (会跑到 P 核抢资源)
-            vad_ctx_params.set_n_threads(1);
-            match WhisperVadContext::new(&vad_model_path, vad_ctx_params) {
+            println!("[Rust] 正在为流式处理初始化 FireRedVAD 模型: {}", vad_model_path);
+            // 阈值/最小段长沿用配置 (ms -> 10ms 帧), 其余用 FireRedVAD 官方默认
+            let vad_cfg = FireVadConfig {
+                threshold: if vad_threshold > 0.0 && vad_threshold < 1.0 { vad_threshold as f32 } else { 0.4 },
+                min_speech_frame: (vad_min_speech_ms.max(10) / 10) as usize,
+                min_silence_frame: (vad_min_silence_ms.max(10) / 10) as usize,
+                ..Default::default()
+            };
+            match FireVadEngine::load(&vad_model_path, vad_cfg) {
                 Ok(v) => Some(v),
                 Err(e) => {
-                    println!("[Rust] 初始化 WhisperVadContext 失败: {:?}", e);
+                    println!("[Rust] 初始化 FireVadEngine 失败: {}", e);
                     None
                 }
             }
@@ -1057,17 +1052,7 @@ fn spawn_vad_worker(
             None
         };
 
-        let mut vad_params = WhisperVadParams::new();
-        vad_params.set_min_silence_duration(vad_min_silence_ms as i32);
-        vad_params.set_min_speech_duration(vad_min_speech_ms as i32);
-        let prob_threshold = if vad_threshold > 0.0 && vad_threshold < 1.0 { vad_threshold as f32 } else { 0.5f32 };
-        vad_params.set_threshold(prob_threshold);
-
-        // 增量扫描游标: audio_buffer 中已喂给 VAD 的起始位置。whisper.cpp 的 VAD
-        // 每次只处理传入的采样 (无内部累积), 之前每次全量喂整个缓冲导致扫描成本
         let mut vad_scan_cursor = 0usize;
-        // 缓冲内已知最早的语音起点 (供 30s 保底强切时尽量保留语音不丢)
-        let mut speech_anchor = 0usize;
 
         // 语音块累积 (20~45s): VAD 切出的短段先并入大块, 达到下限后整块交给 ASR,
         // 分条在块内完成 (标点+DP)。块越大 ASR 上下文越完整, 识别更准。
@@ -1134,7 +1119,7 @@ fn spawn_vad_worker(
             let _audio_dur_sec = audio_to_process.len() as f64 / 16000.0;
             audio_buffer.extend_from_slice(&audio_to_process);
 
-            // 步长过滤：仅当新增采样点 >= 8000 (500ms 音频) 时才触发神经网络 VAD 计算，
+            // 步长过滤：仅当新增采样点 >= 8000 (500ms 音频) 时才触发神经网络 VAD 计算
             if audio_buffer.len().saturating_sub(vad_scan_cursor) < 8000 {
                 continue;
             }
@@ -1143,101 +1128,73 @@ fn spawn_vad_worker(
             while check_and_cut {
                 check_and_cut = false;
 
-                if let Some(ref mut vad_ctx) = vad {
-                    // 增量扫描: 只喂"上次扫描之后新增的音频 + 0.5s 重叠"。
-                    // 重叠用于捕捉跨扫描边界结束的语音尾部 (防止短句丢失)。
-                    let mut scan_base = vad_scan_cursor.saturating_sub(VAD_SCAN_OVERLAP);
-                    let mut segs_vec = match vad_scan(vad_ctx, &vad_params, &audio_buffer[scan_base..]) {
+                if let Some(ref mut vad_engine) = vad {
+                    let segs_vec = match vad_scan(vad_engine, &audio_buffer) {
                         Ok(s) => s,
                         Err(e) => {
-                            // VAD 推理失败: 本次跳过切段/清理, 避免误删真实语音
                             println!("[VAD] scan error (skip this round): {}", e);
                             vad_scan_cursor = audio_buffer.len();
                             continue;
                         }
                     };
 
-                    // 增量窗口内无语音但缓冲已积累较多: 语音可能刚在扫描窗口前结束
-                    // (窗口截断会漏掉跨边界的段尾), 对全缓冲重扫一次验证,
-                    // 避免"语音结束未切段 -> 静音清理把整段语音丢掉"。
-                    if segs_vec.is_empty() && audio_buffer.len() > 80000 && scan_base > 0 {
-                        match vad_scan(vad_ctx, &vad_params, &audio_buffer) {
-                            Ok(full) => {
-                                if !full.is_empty() {
-                                    segs_vec = full;
-                                    // 全缓冲扫描的段索引相对缓冲起点 (0), 基准随之切换
-                                    scan_base = 0;
-                                }
-                            }
-                            Err(e) => {
-                                println!("[VAD] full-scan error (skip this round): {}", e);
-                                vad_scan_cursor = audio_buffer.len();
-                                continue;
-                            }
-                        }
-                    }
-
-                    // 记录缓冲内已知最早的"真实语音起点": 仅当段起点在窗口内部
-                    // (first.start > 0) 才更新 —— 起点落在窗口开头说明该段可能从更早
-                    // 延续而来 (起点被截断到窗口开头), 用 min 保住最早真实起点;
-                    // 切段时从锚点起算, 避免跨窗口的语音开头被丢弃
-                    if let Some(first) = segs_vec.first() {
-                        if (first.start as usize * 160) > 0 {
-                            let abs = scan_base + (first.start as usize * 160);
-                            if speech_anchor == 0 || abs < speech_anchor {
-                                speech_anchor = abs;
-                            }
-                        }
-                    }
                     let mut cut_performed = false;
                     for (i, s) in segs_vec.iter().enumerate() {
-                        // 段时间戳 (0.01s 单位) 是相对喂入窗口的, 换算回缓冲绝对位置
-                        let start_idx =
-                            (scan_base + (s.start as usize * 160)).min(audio_buffer.len());
-                        let end_idx =
-                            (scan_base + (s.end as usize * 160)).min(audio_buffer.len());
+                        let start_idx = (s.start as usize * 160).min(audio_buffer.len());
+                        let end_idx = (s.end as usize * 160).min(audio_buffer.len());
 
                         // 智能切段判定:
                         // 1. 后面已出现下一个语音段 (i + 1 < segs_vec.len()): 证明当前段已百分之百结束，触发极速切段！
-                        // 2. 当前是最后一个语音段: 需等待缓冲区末尾有 >= 2400 采样点 (150ms 静音余量)
+                        // 2. 当前是最后一个语音段: 需等待缓冲区末尾有 >= 2400 采样点 (150ms 静音余量) 证明当前段已自然结束
                         let is_followed_by_next = i + 1 < segs_vec.len();
                         let has_silence_tail = audio_buffer.len() >= end_idx + 2400;
 
                         if is_followed_by_next || has_silence_tail {
-                            // 用语音锚点找回真正起点的两种情形:
-                            // 1. 段起点被截断到窗口开头 (start_idx == scan_base):
-                            //    语音从更早延续而来, 起点落在窗口外;
-                            // 2. 段起点明显晚于锚点 (旧语音结尾已滑出窗口):
-                            //    Silero 可能把旧语音+新语音合并成一个段导致未切,
-                            //    窗口推进后旧语音只剩在缓冲里, 此时新段出现必须
-                            //    从锚点起算, 否则 drain 会把旧语音整段丢掉。
-                            let cut_start = if speech_anchor != 0
-                                && (start_idx <= scan_base + 2
-                                    || speech_anchor < start_idx.saturating_sub(16000))
-                            {
-                                speech_anchor.min(audio_buffer.len())
+                            let safe_start = start_idx.saturating_sub(800); 
+                            // 当存在下一段语音时，安全截断点绝不能延伸超过两段语音之间的静音中点，
+                            // 严防侵入下一句开头的第一个音节（如“建”、“开”）
+                            let max_safe_end = if let Some(next_seg) = segs_vec.get(i + 1) {
+                                let next_start = next_seg.start as usize * 160;
+                                if next_start > end_idx {
+                                    (end_idx + next_start) / 2
+                                } else {
+                                    end_idx
+                                }
                             } else {
-                                start_idx
+                                audio_buffer.len()
                             };
-                            let safe_start = cut_start.saturating_sub(3200); 
-                            let safe_end = (end_idx + 3200).min(audio_buffer.len()); 
+                            let safe_end = (end_idx + 800).min(max_safe_end).min(audio_buffer.len()); 
                             
                             let segment_samples = audio_buffer[safe_start..safe_end].to_vec();
                             let start_ms = current_offset_ms + (safe_start as i64 * 1000 / 16000);
                             let end_ms = current_offset_ms + (safe_end as i64 * 1000 / 16000);
 
-                            // 诊断: 记录每次切段的真实时间戳与锚点, 便于定位首条字幕延迟
                             println!(
-                                "[VAD] cut: start_ms={} end_ms={} len={}ms (anchor={} start_idx={} end_idx={})",
+                                "[VAD] cut: start_ms={} end_ms={} len={}ms (start_idx={} end_idx={})",
                                 start_ms,
                                 end_ms,
                                 segment_samples.len() * 1000 / 16000,
-                                speech_anchor,
                                 start_idx,
                                 end_idx
                             );
 
-                            if segment_samples.len() > 3200 {
+                            if segment_samples.len() > 1600 {
+                                // 自然场景/话题/转场大停顿保护:
+                                // 若当前累积块已有内容, 且当前段起点与上一段终点间隔 >= 1500ms (存在长静音/转场配乐/场景切换),
+                                // 上一个语音块代表一段完整表述, 必须立即切块发送给 ASR, 严禁跨越长转场强行拼接!
+                                if !block_samples.is_empty() && start_ms.saturating_sub(block_end_ms) >= 1500 {
+                                    println!(
+                                        "[VAD] 检测到自然大停顿/转场 ({}ms), 立即切块交付 ASR",
+                                        start_ms - block_end_ms
+                                    );
+                                    flush_block(
+                                        &mut block_samples,
+                                        &mut block_start_ms,
+                                        &mut block_end_ms,
+                                        &mut block_spans,
+                                    );
+                                }
+
                                 // 语音块累积: 短段先并入 20~45s 大块, 达到下限再整块发送。
                                 // 记录 TimelineSpan: 拼接轴位置 -> 媒体时间轴 (静音被过滤后靠它还原)
                                 if block_samples.is_empty() {
@@ -1266,12 +1223,11 @@ fn spawn_vad_worker(
                                 }
                             }
                             
+                            // 丢弃 safe_end 之前的所有采样点 (前面存在的纯音乐/静音被彻底滤除)
                             audio_buffer.drain(..safe_end);
                             current_offset_ms += (safe_end as i64 * 1000) / 16000;
                             cut_performed = true;
-                            // 缓冲整体前移: 全部视为未扫描, 语音锚点重置
                             vad_scan_cursor = 0;
-                            speech_anchor = 0;
                             break;
                         }
                     }
@@ -1281,65 +1237,77 @@ fn spawn_vad_worker(
                         continue;
                     }
 
-                            // 本次未切段: 游标推进到缓冲末尾 (下次只扫增量, 不再全量重扫)
-                            vad_scan_cursor = audio_buffer.len();
+                    // 本次未切段: 游标推进
+                    vad_scan_cursor = audio_buffer.len();
 
-                            // 及时清理静音 Buffer: 当积累超过 5s 且 VAD 未能检出任何有效语音段时，
-                            // 丢弃前面 4s 的纯静音，只留 1s 边沿，防止 Buffer 膨胀到 30s 导致 VAD 扫描变慢
-                            if segs_vec.is_empty() && audio_buffer.len() > 80000 {
-                                let drop_samples = audio_buffer.len() - 16000;
-                                audio_buffer.drain(..drop_samples);
-                                current_offset_ms += (drop_samples as i64 * 1000) / 16000;
-                                vad_scan_cursor = 0;
-                                speech_anchor = 0;
-                            }
+                    // 及时清理纯静音/背景音乐 Buffer: 当积累超过 2s 且 VAD 未能检出任何有效语音段时，
+                    // 若之前有未送出语音块则先交付，丢弃前面纯音乐/静音，只留 1s 边沿作为过渡
+                    if segs_vec.is_empty() && audio_buffer.len() >= 32000 {
+                        if !block_samples.is_empty() {
+                            flush_block(
+                                &mut block_samples,
+                                &mut block_start_ms,
+                                &mut block_end_ms,
+                                &mut block_spans,
+                            );
+                        }
+                        let drop_samples = audio_buffer.len() - 16000;
+                        println!(
+                            "[Rust] VAD 过滤: 成功丢弃 {:.2} 秒的非语音/纯音乐数据",
+                            drop_samples as f64 / 16000.0
+                        );
+                        audio_buffer.drain(..drop_samples);
+                        current_offset_ms += (drop_samples as i64 * 1000) / 16000;
+                        vad_scan_cursor = 0;
+                    }
 
-                            // 极端无停顿长文本保底保护：Buffer 满了 30s 强切，避免越界
-                            if audio_buffer.len() >= 480000 {
-                                if !segs_vec.is_empty() {
-                                    // 从已知最早的语音起点切起 (连续语音时约等于缓冲起点),
-                                    // 避免只保留最后 0.5s 增量导致长段语音丢失
-                                    let anchor = speech_anchor.min(audio_buffer.len());
-                                    let safe_start = anchor.saturating_sub(3200).min(audio_buffer.len());
-                                    let segment_samples = audio_buffer[safe_start..].to_vec();
-                                    let start_ms = current_offset_ms + (safe_start as i64 * 1000 / 16000);
-                                    let end_ms = current_offset_ms + (audio_buffer.len() as i64 * 1000 / 16000);
+                    // 极端无停顿长文本保底保护：Buffer 满了 30s 强切，避免越界
+                    if audio_buffer.len() >= 480000 {
+                        if !segs_vec.is_empty() {
+                            let first = &segs_vec[0];
+                            let start_idx = (first.start as usize * 160).min(audio_buffer.len());
+                            let end_idx = (first.end as usize * 160).min(audio_buffer.len());
+                            let safe_start = start_idx.saturating_sub(800);
+                            let safe_end = (end_idx + 800).min(audio_buffer.len());
+                            let segment_samples = audio_buffer[safe_start..safe_end].to_vec();
+                            let start_ms = current_offset_ms + (safe_start as i64 * 1000 / 16000);
+                            let end_ms = current_offset_ms + (safe_end as i64 * 1000 / 16000);
 
-                                    println!(
-                                        "[VAD] force-cut(30s): start_ms={} end_ms={} len={}ms (anchor={})",
-                                        start_ms,
-                                        end_ms,
-                                        segment_samples.len() * 1000 / 16000,
-                                        anchor
-                                    );
+                            println!(
+                                "[VAD] force-cut(30s): start_ms={} end_ms={} len={}ms",
+                                start_ms,
+                                end_ms,
+                                segment_samples.len() * 1000 / 16000
+                            );
 
-                                    // 强制切块必然 ≥ 30s: 并入块后立即整块发送
-                                    if block_samples.is_empty() {
-                                        block_start_ms = start_ms;
-                                    }
-                                    block_spans.push(crate::qwen::aligner::TimelineSpan {
-                                        concat_start_sample: block_samples.len(),
-                                        concat_end_sample: block_samples.len() + segment_samples.len(),
-                                        source_start_ms: start_ms,
-                                        source_end_ms: end_ms,
-                                    });
-                                    block_samples.extend_from_slice(&segment_samples);
-                                    block_end_ms = end_ms;
-                                    flush_block(
-                                        &mut block_samples,
-                                        &mut block_start_ms,
-                                        &mut block_end_ms,
-                                        &mut block_spans,
-                                    );
-                                } else {
-                                    println!("[Rust] VAD 过滤: 成功丢弃 30 秒的非语音/纯音乐数据");
+                            if segment_samples.len() > 1600 {
+                                if block_samples.is_empty() {
+                                    block_start_ms = start_ms;
                                 }
-                                
-                                current_offset_ms += (audio_buffer.len() as i64 * 1000) / 16000;
-                                audio_buffer.clear();
-                                vad_scan_cursor = 0;
-                                speech_anchor = 0;
+                                block_spans.push(crate::qwen::aligner::TimelineSpan {
+                                    concat_start_sample: block_samples.len(),
+                                    concat_end_sample: block_samples.len() + segment_samples.len(),
+                                    source_start_ms: start_ms,
+                                    source_end_ms: end_ms,
+                                });
+                                block_samples.extend_from_slice(&segment_samples);
+                                block_end_ms = end_ms;
+                                flush_block(
+                                    &mut block_samples,
+                                    &mut block_start_ms,
+                                    &mut block_end_ms,
+                                    &mut block_spans,
+                                );
                             }
+                            audio_buffer.drain(..safe_end);
+                            current_offset_ms += (safe_end as i64 * 1000) / 16000;
+                        } else {
+                            println!("[Rust] VAD 过滤: 成功丢弃 30 秒的非语音/纯音乐数据");
+                            current_offset_ms += (audio_buffer.len() as i64 * 1000) / 16000;
+                            audio_buffer.clear();
+                        }
+                        vad_scan_cursor = 0;
+                    }
                 } else {
                     // VAD 关闭时的回退逻辑 (按 10s 死切)
                     if audio_buffer.len() >= 160000 {
@@ -1370,22 +1338,59 @@ fn spawn_vad_worker(
             }
 
             let _elapsed_ms = start_time.elapsed().as_millis() as u64;
-            log_perf!("SileroVAD", _elapsed_ms, _audio_dur_sec);
+            log_perf!("FireRedVAD", _elapsed_ms, _audio_dur_sec);
         }
 
         if !audio_buffer.is_empty() {
-            // 收尾: 剩余缓冲并入语音块一起发送 (不足 20s 也整块送出)
-            if block_samples.is_empty() {
-                block_start_ms = current_offset_ms;
+            // 收尾: 对剩余缓冲执行 VAD 扫描, 只有真实语音才送入 ASR, 纯音乐/静音彻底丢弃
+            if let Some(ref mut vad_engine) = vad {
+                if let Ok(segs) = vad_scan(vad_engine, &audio_buffer) {
+                    if segs.is_empty() {
+                        println!(
+                            "[Rust] VAD 过滤: 成功丢弃尾部 {:.2} 秒的非语音/纯音乐数据",
+                            audio_buffer.len() as f64 / 16000.0
+                        );
+                    } else {
+                        for s in &segs {
+                            let start_idx = (s.start as usize * 160).min(audio_buffer.len());
+                            let end_idx = (s.end as usize * 160).min(audio_buffer.len());
+                            let safe_start = start_idx.saturating_sub(800);
+                            let safe_end = (end_idx + 800).min(audio_buffer.len());
+                            if safe_end > safe_start {
+                                let segment_samples = audio_buffer[safe_start..safe_end].to_vec();
+                                let start_ms = current_offset_ms + (safe_start as i64 * 1000 / 16000);
+                                let end_ms = current_offset_ms + (safe_end as i64 * 1000 / 16000);
+                                if segment_samples.len() > 1600 {
+                                    if block_samples.is_empty() {
+                                        block_start_ms = start_ms;
+                                    }
+                                    block_spans.push(crate::qwen::aligner::TimelineSpan {
+                                        concat_start_sample: block_samples.len(),
+                                        concat_end_sample: block_samples.len() + segment_samples.len(),
+                                        source_start_ms: start_ms,
+                                        source_end_ms: end_ms,
+                                    });
+                                    block_samples.extend_from_slice(&segment_samples);
+                                    block_end_ms = end_ms;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                // VAD 关闭时的回退
+                if block_samples.is_empty() {
+                    block_start_ms = current_offset_ms;
+                }
+                block_spans.push(crate::qwen::aligner::TimelineSpan {
+                    concat_start_sample: block_samples.len(),
+                    concat_end_sample: block_samples.len() + audio_buffer.len(),
+                    source_start_ms: current_offset_ms,
+                    source_end_ms: current_offset_ms + (audio_buffer.len() as i64 * 1000 / 16000),
+                });
+                block_samples.extend_from_slice(&audio_buffer);
+                block_end_ms = current_offset_ms + (audio_buffer.len() as i64 * 1000 / 16000);
             }
-            block_spans.push(crate::qwen::aligner::TimelineSpan {
-                concat_start_sample: block_samples.len(),
-                concat_end_sample: block_samples.len() + audio_buffer.len(),
-                source_start_ms: current_offset_ms,
-                source_end_ms: current_offset_ms + (audio_buffer.len() as i64 * 1000 / 16000),
-            });
-            block_samples.extend_from_slice(&audio_buffer);
-            block_end_ms = current_offset_ms + (audio_buffer.len() as i64 * 1000 / 16000);
             flush_block(
                 &mut block_samples,
                 &mut block_start_ms,

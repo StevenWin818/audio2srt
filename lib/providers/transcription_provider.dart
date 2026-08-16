@@ -220,7 +220,7 @@ class TranscriptionProvider with ChangeNotifier {
   bool _vadEnabled = true;
   bool get vadEnabled => _vadEnabled;
 
-  double _vadThreshold = 0.5; // Silero VAD 语音概率阈值
+  double _vadThreshold = 0.4; // FireRedVAD 语音概率阈值 (官方推荐 0.4)
   double get vadThreshold => _vadThreshold;
 
   int _vadMinSpeechMs = 300; // 最小语音长度 (ms)
