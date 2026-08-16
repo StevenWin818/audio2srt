@@ -251,9 +251,16 @@ class _MainShellState extends State<MainShell> with WindowListener, TrayListener
       await windowManager.show();
       await windowManager.focus();
     } else if (menuItem.key == 'exit_app') {
-      await windowManager.hide();
-      await _destroyTray();
-      await windowManager.destroy();
+      // BUG5: 托盘退出与窗口关闭走同一确认逻辑,
+      // 转写中/字幕未导出时不直接杀进程
+      final provider = Provider.of<TranscriptionProvider>(context, listen: false);
+      if (provider.needsCloseConfirmation) {
+        _showCloseConfirmationDialog();
+      } else {
+        await windowManager.hide();
+        await _destroyTray();
+        await windowManager.destroy();
+      }
     }
   }
 

@@ -392,6 +392,8 @@ class _EditorViewState extends State<EditorView> {
   }
 
   void _showExportDialog(BuildContext context, TranscriptionProvider provider) {
+    // await 前捕获 messenger, 避免跨异步间隙使用已弹出对话框的 context
+    final messenger = ScaffoldMessenger.of(context);
     showDialog(
       context: context,
       builder: (context) {
@@ -412,7 +414,7 @@ class _EditorViewState extends State<EditorView> {
                 if (path != null) {
                   await provider.exportSubtitles(path, isVtt: false);
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    messenger.showSnackBar(
                       SnackBar(content: Text('已成功保存字幕到 $path')),
                     );
                   }
@@ -433,7 +435,7 @@ class _EditorViewState extends State<EditorView> {
                 if (path != null) {
                   await provider.exportSubtitles(path, isVtt: true);
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    messenger.showSnackBar(
                       SnackBar(content: Text('已成功保存字幕到 $path')),
                     );
                   }
