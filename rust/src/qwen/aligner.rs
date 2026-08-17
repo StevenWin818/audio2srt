@@ -936,23 +936,51 @@ fn find_token_indices(
     None
 }
 
-/// 线性字符平分回退 (无模型时)
 fn linear_align(text: &str, segment_start_ms: u64, segment_end_ms: u64) -> Vec<AlignedToken> {
-    let chars: Vec<char> = text.chars().collect();
-    let n = chars.len();
+    // 智能分词: CJK 逐字符, 西文按完整词(含空白/标点)切分
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current_word = String::new();
+    for ch in text.chars() {
+        if is_cjk_char(ch) {
+            if !current_word.is_empty() {
+                tokens.push(std::mem::take(&mut current_word));
+            }
+            tokens.push(ch.to_string());
+        } else if ch.is_whitespace() {
+            current_word.push(ch);
+            tokens.push(std::mem::take(&mut current_word));
+        } else {
+            current_word.push(ch);
+        }
+    }
+    if !current_word.is_empty() {
+        tokens.push(current_word);
+    }
+
+    let total_chars: usize = tokens.iter().map(|t| t.chars().count()).sum();
     let duration = segment_end_ms.saturating_sub(segment_start_ms);
-    let step = if n > 0 { duration as f64 / n as f64 } else { 0.0 };
-    let mut units = Vec::with_capacity(n);
-    for (i, ch) in chars.iter().enumerate() {
-        let start = segment_start_ms + (i as f64 * step) as u64;
+    let step_per_char = if total_chars > 0 {
+        duration as f64 / total_chars as f64
+    } else {
+        0.0
+    };
+
+    let mut units = Vec::with_capacity(tokens.len());
+    let mut accumulated_chars = 0usize;
+    let n = tokens.len();
+    for (i, tok) in tokens.into_iter().enumerate() {
+        let n_chars = tok.chars().count();
+        let start = segment_start_ms + (accumulated_chars as f64 * step_per_char) as u64;
+        accumulated_chars += n_chars;
+        let end = if i + 1 == n {
+            segment_end_ms
+        } else {
+            segment_start_ms + (accumulated_chars as f64 * step_per_char) as u64
+        };
         units.push(AlignedToken {
-            text: ch.to_string(),
+            text: tok,
             start_ms: start,
-            end_ms: if i + 1 == n {
-                segment_end_ms
-            } else {
-                segment_start_ms + ((i + 1) as f64 * step) as u64
-            },
+            end_ms: end.max(start + 1),
             confidence: None,
         });
     }

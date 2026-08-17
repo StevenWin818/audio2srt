@@ -121,7 +121,7 @@ fn strong_punct_boundary(units: &[WordItem], j: usize) -> bool {
     if j == 0 {
         return false;
     }
-    let ch = units[j - 1].text.chars().last().unwrap_or(' ');
+    let ch = units[j - 1].text.trim_end().chars().last().unwrap_or(' ');
     if ch == '.' {
         return is_real_period(units, j - 1);
     }
@@ -133,7 +133,7 @@ fn is_punct_boundary(units: &[WordItem], j: usize) -> bool {
     if j == 0 {
         return true;
     }
-    let ch = units[j - 1].text.chars().last().unwrap_or(' ');
+    let ch = units[j - 1].text.trim_end().chars().last().unwrap_or(' ');
     if ch == '.' {
         return is_real_period(units, j - 1);
     }
@@ -145,7 +145,7 @@ fn strong_punct_end(units: &[WordItem], i: usize) -> bool {
     if i == 0 {
         return false;
     }
-    let ch = units[i - 1].text.chars().last().unwrap_or(' ');
+    let ch = units[i - 1].text.trim_end().chars().last().unwrap_or(' ');
     if ch == '.' {
         return is_real_period(units, i - 1);
     }
@@ -157,7 +157,7 @@ fn weak_punct_end(units: &[WordItem], i: usize) -> bool {
     if i == 0 {
         return false;
     }
-    let ch = units[i - 1].text.chars().last().unwrap_or(' ');
+    let ch = units[i - 1].text.trim_end().chars().last().unwrap_or(' ');
     is_weak_punct(ch)
 }
 
@@ -177,70 +177,68 @@ fn is_leadin_comma_boundary(units: &[WordItem], j: usize) -> bool {
     if j == 0 {
         return false;
     }
-    // 边界前必须是逗号类标点
-    let prev_ch = units[j - 1].text.chars().last().unwrap_or(' ');
+    let prev_ch = units[j - 1].text.trim_end().chars().last().unwrap_or(' ');
     if !is_comma_punct(prev_ch) {
         return false;
     }
-    // 从逗号向前数西文单词, 直到最近的句末标点; ≤2 个则忽略该逗号
-    let mut word_count = 0usize;
-    let mut idx = j - 1;
-    loop {
-        let text = units[idx].text.trim();
-        let tail_ch = text.chars().last().unwrap_or(' ');
-        if is_strong_punct(tail_ch) || tail_ch == '.' {
-            return word_count <= 2;
+
+    let mut raw = String::new();
+    for (k, u) in units[0..j].iter().enumerate() {
+        if k > 0
+            && !raw.ends_with(char::is_whitespace)
+            && !u.text.starts_with(char::is_whitespace)
+            && !is_word_internal_boundary(units, k)
+        {
+            raw.push(' ');
         }
-        // 词+逗号同一 unit (如 "way,"): 单词照常计数
-        let core = text.trim_end_matches(|c: char| is_comma_punct(c) || is_strong_punct(c) || c == '.');
-        if is_comma_punct(tail_ch) {
-            if core.chars().any(|c| is_cjk_char(c)) {
-                // 中文不适用此规则 (西文单词才计数)
-                return false;
-            }
-            if core.chars().any(|c| c.is_alphanumeric()) {
-                word_count += 1;
-                if word_count > 2 {
-                    return false;
-                }
-            }
-        } else {
-            if core.chars().any(|c| is_cjk_char(c)) {
-                // 中文不适用此规则 (西文单词才计数)
-                return false;
-            }
-            if core.chars().any(|c| c.is_alphanumeric()) {
-                word_count += 1;
-                if word_count > 2 {
-                    return false;
-                }
-            }
-        }
-        if idx == 0 {
-            // 序列开头 = 天然句首 (块边界截断了前一句的句点):
-            // 段首 "However," 等引语逗号同样禁止切分, 避免连接词单独成条
-            return word_count <= 2;
-        }
-        idx -= 1;
+        raw.push_str(&u.text);
     }
+
+    let text_up_to_comma = raw.trim_end_matches(|c: char| is_comma_punct(c) || c.is_whitespace());
+    let sentence_start = match text_up_to_comma.rfind(|c: char| is_strong_punct(c) || c == '.') {
+        Some(pos) => &text_up_to_comma[pos + 1..],
+        None => text_up_to_comma,
+    };
+
+    if sentence_start.chars().any(is_cjk_char) {
+        return false;
+    }
+
+    let words: Vec<&str> = sentence_start
+        .split(|c: char| c.is_whitespace() || is_weak_punct(c))
+        .filter(|s| s.chars().any(|c| c.is_alphanumeric()))
+        .collect();
+
+    !words.is_empty() && words.len() <= 2
 }
 
-/// 统计一段的字数: 中文按字符数, 西文按单词数 (纯标点不计)
+/// 统计一段的字数: 中文按字符数, 西文按真实单词数 (纯标点/空格不计)
 fn count_units(units: &[WordItem], j: usize, i: usize) -> usize {
     let mut count = 0usize;
-    for u in &units[j..i] {
-        let text = u.text.trim();
-        if text.is_empty() {
-            continue;
+    let mut in_western_word = false;
+    for (k, u) in units[j..i].iter().enumerate() {
+        let global_idx = j + k;
+        for ch in u.text.chars() {
+            if is_cjk_char(ch) {
+                if in_western_word {
+                    count += 1;
+                    in_western_word = false;
+                }
+                if !is_strong_punct(ch) && !is_weak_punct(ch) && !ch.is_whitespace() {
+                    count += 1;
+                }
+            } else if is_western_word_char(ch) {
+                in_western_word = true;
+            } else {
+                if in_western_word {
+                    count += 1;
+                    in_western_word = false;
+                }
+            }
         }
-        if text.chars().all(|c| !c.is_alphanumeric()) {
-            continue; // 纯标点不计
-        }
-        if text.chars().any(|c| is_cjk_char(c)) {
-            // 中文按字符数, 但剔除附着标点 (如 "好，" 只计 1 字)
-            count += text.chars().filter(|c| c.is_alphanumeric()).count();
-        } else {
+        if in_western_word && (global_idx + 1 == i || !is_word_internal_boundary(units, global_idx + 1)) {
             count += 1;
+            in_western_word = false;
         }
     }
     count
@@ -355,12 +353,44 @@ pub fn split_subtitles(
     out
 }
 
+/// 判断字符是否属于西文单词构成字符 (字母、数字、撇号、连字符等)
+fn is_western_word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '\'' || c == '-' || c == '’'
+}
+
+/// 判断边界 (units[j] 之前) 是否处于西文/英文单词内部。
+/// 若前一个 unit 末尾是西文单词字符，且当前 unit 开头也是西文单词字符（中间没有空格或标点），
+/// 则说明此处位于同一个单词内部，无论任何时候绝对禁止切分！
+fn is_word_internal_boundary(units: &[WordItem], j: usize) -> bool {
+    if j == 0 || j >= units.len() {
+        return false;
+    }
+    let prev_text = &units[j - 1].text;
+    let next_text = &units[j].text;
+    let prev_ch = match prev_text.chars().last() {
+        Some(c) => c,
+        None => return false,
+    };
+    let next_ch = match next_text.chars().next() {
+        Some(c) => c,
+        None => return false,
+    };
+
+    // 前后均为西文单词字符 -> 处于单词内部
+    is_western_word_char(prev_ch) && is_western_word_char(next_ch)
+}
+
 /// 边界 (units[j] 之前) 的切分代价, 优先级 (由低到高):
 /// 句末标点/长停顿 (0) > 弱标点逗号 (WEAK_PUNCT_COST) > 句中无标点 (按停顿大小);
-/// 句点后引语逗号 (≤2 词) 禁止切分 (LEADIN_COMMA_BLOCK)。
+/// 句点后引语逗号 (≤2 词) 禁止切分 (LEADIN_COMMA_BLOCK);
+/// 单词内部绝对禁止切分 (INFINITY)。
 fn boundary_cost(units: &[WordItem], j: usize) -> f64 {
     if j == 0 {
         return 0.0;
+    }
+    // 无论任何时候，绝对禁止从英文/西文单词内部断开
+    if is_word_internal_boundary(units, j) {
+        return f64::INFINITY;
     }
     let prev_ch = units[j - 1].text.chars().last().unwrap_or(' ');
     let pause = units[j].start_ms - units[j - 1].end_ms;
@@ -385,6 +415,11 @@ fn boundary_cost(units: &[WordItem], j: usize) -> f64 {
 /// 句中无标点边界:
 ///   严格 2~5s 约束 + 高昂的切词惩罚。
 fn segment_cost(units: &[WordItem], j: usize, i: usize) -> f64 {
+    let b_cost = boundary_cost(units, j);
+    if b_cost.is_infinite() {
+        return f64::INFINITY;
+    }
+
     let dur = units[i - 1].end_ms - units[j].start_ms;
     let mut cost = 0.0;
 
@@ -428,7 +463,7 @@ fn segment_cost(units: &[WordItem], j: usize, i: usize) -> f64 {
         cost += (count - PREFER_UNITS) as f64 * 0.5;
     }
 
-    cost += boundary_cost(units, j);
+    cost += b_cost;
     cost
 }
 
@@ -450,12 +485,12 @@ mod tests {
             .collect()
     }
 
-    /// 按西文单词切分的 units (模拟对齐器输出: 词为单位, 标点附在词尾或独立)
+    /// 按西文单词切分的 units (模拟对齐器输出: 词为单位, 标点附在词尾或独立, 词间含空格)
     fn word_units(text: &str, start_ms: i64, per_word_ms: i64) -> Vec<WordItem> {
         text.split_whitespace()
             .enumerate()
             .map(|(i, w)| WordItem {
-                text: w.to_string(),
+                text: format!("{} ", w),
                 start_ms: start_ms + i as i64 * per_word_ms,
                 end_ms: start_ms + (i as i64 + 1) * per_word_ms,
                 confidence: 1.0,
