@@ -12,10 +12,10 @@ use flate2::read::GzDecoder;
 use tar::Archive;
 use deepfilter_rt::DeepFilterStream;
 use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
-use crate::api::fire_vad::{FireVadConfig, FireVadEngine, VadSegment};
+use crate::api::vad::{FireVadConfig, FireVadEngine, VadSegment};
 use crate::frb_generated::StreamSink;
 use crate::qwen::error::QwenError;
-use crate::api::silero_vad::{
+use crate::api::common::{
     TranscriptionSegment, TranscriptionEvent, WordItem,
     convert_chinese, register_thread_as_pro_audio,
 };
@@ -395,7 +395,7 @@ pub struct PipelineConfig {
     pub encoder_backend: crate::qwen::backend::EncoderBackend,
     pub decoder_backend: crate::qwen::backend::DecoderBackend,
     pub timestamp_mode: TimestampMode,
-    // Qwen3-ASR 解码设置 (原 Whisper 防重复参数, 已绑定到 Qwen 解码器)
+    // ASR 解码设置
     pub language: Option<String>,
     pub threads: Option<i32>,
     pub use_gpu: bool,
@@ -1649,7 +1649,7 @@ fn spawn_qwen_worker(
                 while let Some(mut task) = ordered.remove(&next_seq) {
                     next_seq += 1;
                     // 上下文记忆: 未禁用上下文时, 把上一段转写文本注入 system prompt,
-                    // 帮助模型保持术语/说话风格一致性 (默认关闭, 与 Whisper no_context 语义一致)
+                    // 帮助模型保持术语/说话风格一致性 (默认关闭)
                     let context_for_next: Option<String> = context_prompt.clone().or_else(|| {
                         if no_context {
                             None
@@ -2100,10 +2100,10 @@ fn process_encoded_task(
     // 分条: 标点+停顿生成候选边界, 动态规划生成 2~5 秒字幕 (最多两行, 偏好一行)。
     // 对齐单元缺失时回退为整段一条字幕; 质量标记必须诚实 (真实对齐 vs 线性回退)。
     // catch_unwind: 分条逻辑的 bug 只降级为整块一条字幕, 绝不拖垮整个转写流程。
-    let sub_segments = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let sub_segments: Vec<TranscriptionSegment> = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         split_subtitles(&word_items, &align_quality, task.start_ms, task.end_ms)
     }))
-    .unwrap_or_else(|e| {
+    .unwrap_or_else(|e: Box<dyn std::any::Any + Send>| {
         let msg = if let Some(s) = e.downcast_ref::<&str>() {
             (*s).to_string()
         } else if let Some(s) = e.downcast_ref::<String>() {
@@ -2609,7 +2609,7 @@ fn is_qwen_model_dir(dir_or_file: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::silero_vad::TranscriptionEvent;
+    use crate::api::common::TranscriptionEvent;
 
     struct MockSink;
 

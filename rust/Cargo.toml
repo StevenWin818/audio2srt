@@ -8,7 +8,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 flutter_rust_bridge = "=2.11.1"
-whisper-rs = { version = "0.16.0", optional = true }
 hound = "3.5.1"
 anyhow = "1.0"
 thiserror = "1.0"
@@ -42,19 +41,16 @@ realfft = "1"
 # 2. cuda 特性:
 #    - 全平台: GGUF(CUDA) + ort(CUDA)
 #
-# 默认启用 cuda (已从默认构建移除 DirectML)。
-# qwen-dml-win / qwen-dml feature 定义保留 (代码中的 cfg 引用合法)，
-# 需要时可用 `--features qwen-dml-win` 显式启用。
+# 默认启用 vulkan
 default = ["vulkan"]
-vulkan = ["dep:llama-cpp-sys-2", "llama-cpp-sys-2/vulkan", "legacy-whisper"]
-cuda   = ["dep:llama-cpp-sys-2", "llama-cpp-sys-2/cuda", "ort/cuda", "legacy-whisper"]
+vulkan = ["dep:llama-cpp-sys-2", "llama-cpp-sys-2/vulkan"]
+cuda   = ["dep:llama-cpp-sys-2", "llama-cpp-sys-2/cuda", "ort/cuda"]
 
 qwen-dml-win = ["ort/directml"]
 qwen-vulkan  = ["dep:llama-cpp-sys-2", "llama-cpp-sys-2/vulkan"]
 qwen-dml     = ["ort/directml"]
 qwen-cuda    = ["dep:llama-cpp-sys-2", "llama-cpp-sys-2/cuda", "ort/cuda"]
 qwen-cpu     = []
-legacy-whisper = ["dep:whisper-rs"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

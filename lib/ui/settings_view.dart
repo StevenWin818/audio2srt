@@ -389,7 +389,7 @@ class _SettingsViewState extends State<SettingsView> {
                   },
                 ),
                 Text(
-                  'Silero VAD 判断为语音的概率阈值。值越高判定越严格，能有效过滤杂音，但值过高可能会漏掉微弱人声（推荐默认 0.5）。',
+                  'VAD 判断为语音的概率阈值。值越高判定越严格，能有效过滤杂音，但值过高可能会漏掉微弱人声（推荐默认 0.5）。',
                   style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                 ),
               ],

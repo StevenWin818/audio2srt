@@ -1,16 +1,16 @@
 //! 字幕分条: 标点 + 停顿生成候选边界, 动态规划生成 2~5 秒字幕。
 //!
-//! 方案 (产品约定):
-//!   1. Silero VAD 切成 20~45 秒语音块
-//!   2. Qwen3-ASR 对每块输出完整带标点文本
-//!   3. ForcedAligner 获取词级/字级时间戳 (当前为线性平分, 接口不变)
+//! 方案:
+//!   1. VAD 切成语音块
+//!   2. ASR 对每块输出完整带标点文本
+//!   3. ForcedAligner 获取词级/字级时间戳
 //!   4. 标点 + 停顿生成候选边界
 //!   5. 动态规划生成 2~5 秒字幕
 //!   6. 字幕最多两行 (偏好一行)
 //!   7. 开始/结束时间轻微视觉平滑
 //!   8. 输出 SRT/VTT (调用方)
 
-use super::silero_vad::{TranscriptionSegment, WordItem};
+use super::common::{TranscriptionSegment, WordItem};
 
 /// 字幕最短时长 (ms)
 const SUB_MIN_MS: i64 = 2000;

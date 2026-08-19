@@ -193,7 +193,7 @@ impl AudioProcessor {
         }
 
         if normalize {
-            // 标准 Whisper Feature Extractor 归一化：
+            // 标准 Feature Extractor 归一化：
             // 以整段频谱的最大值截断 log10 功率于 (max - 8.0)，随后映射至 [-1.0, 1.0]。
             // (参考实现为相对截断 log_spec.max() - 8.0，而非固定的 -8.0)
             let max_f = feats.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));

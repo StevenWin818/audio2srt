@@ -3,14 +3,15 @@
 
 // ignore_for_file: unused_import, unused_element, unnecessary_import, duplicate_ignore, invalid_use_of_internal_member, annotate_overrides, non_constant_identifier_names, curly_braces_in_flow_control_structures, prefer_const_literals_to_create_immutables, unused_field
 
+import 'api/common.dart';
 import 'api/ffmpeg.dart';
 import 'api/hardware.dart';
 import 'api/models.dart';
 import 'api/qwen.dart';
-import 'api/silero_vad.dart';
 import 'api/simple.dart';
 import 'api/stream_pipeline.dart';
 import 'api/subtitle_split.dart';
+import 'api/vad.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
@@ -74,7 +75,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -415595327;
+  int get rustContentHash => 490719415;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -85,27 +86,14 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 }
 
 abstract class RustLibApi extends BaseApi {
-  Future<List<(BigInt, BigInt)>>
-  crateApiSileroVadSileroVadEngineDetectSpeechSegments({
-    required SileroVadEngine that,
-    required List<double> samples,
-    required int minSpeechMs,
-    required int minSilenceMs,
-    required double threshold,
-  });
-
-  Future<SileroVadEngine> crateApiSileroVadSileroVadEngineLoad({
-    required String vadModelPath,
-  });
-
   void crateApiStreamPipelineCancelTranscriptionBackend();
 
-  Future<String> crateApiSileroVadConvertChinese({
+  Future<String> crateApiCommonConvertChinese({
     required String text,
     required bool toSimplified,
   });
 
-  Future<List<String>> crateApiSileroVadConvertChineseList({
+  Future<List<String>> crateApiCommonConvertChineseList({
     required List<String> texts,
     required bool toSimplified,
   });
@@ -118,8 +106,7 @@ abstract class RustLibApi extends BaseApi {
     required String outputPath,
   });
 
-  Future<HardwareAccelerationInfo>
-  crateApiSileroVadGetHardwareAccelerationInfo();
+  Future<FireVadConfig> crateApiVadFireVadConfigDefault();
 
   Future<QwenHardwareInfo> crateApiHardwareGetQwenHardwareInfo();
 
@@ -128,9 +115,6 @@ abstract class RustLibApi extends BaseApi {
   Future<QwenRuntimeStatus?> crateApiStreamPipelineGetQwenRuntimeStatus();
 
   String crateApiSimpleGreet({required String name});
-
-  Future<HardwareAccelerationInfo>
-  crateApiSileroVadHardwareAccelerationInfoDefault();
 
   Future<void> crateApiSimpleInitApp();
 
@@ -155,7 +139,7 @@ abstract class RustLibApi extends BaseApi {
     required String filePath,
   });
 
-  Future<void> crateApiSileroVadRegisterThreadAsProAudio();
+  Future<void> crateApiCommonRegisterThreadAsProAudio();
 
   Future<String> crateApiSubtitleSplitRemovePeriods({required String text});
 
@@ -168,32 +152,11 @@ abstract class RustLibApi extends BaseApi {
     required PlatformInt64 blockEndMs,
   });
 
-  Stream<TranscriptionEvent> crateApiSileroVadTranscribe({
-    required String modelPath,
-    required String vadModelPath,
-    required String audioPath,
-    String? language,
-    required bool translate,
-    int? threads,
-    required bool useGpu,
-    required bool vadEnabled,
-    required double vadThreshold,
-    required int vadMinSpeechMs,
-    required int vadMinSilenceMs,
-    required double temperature,
-    required double temperatureInc,
-    required double entropyThold,
-    required double logprobThold,
-    required double noSpeechThold,
-    required bool noContext,
-    required bool noStateHistory,
-  });
-
   Stream<TranscriptionEvent> crateApiStreamPipelineTranscribeStream({
     required PipelineConfig config,
   });
 
-  Future<TranscriptionSegment> crateApiSileroVadTranscriptionSegmentDefault();
+  Future<TranscriptionSegment> crateApiCommonTranscriptionSegmentDefault();
 
   Future<void> crateApiQwenUnloadQwenRuntime();
 
@@ -205,28 +168,11 @@ abstract class RustLibApi extends BaseApi {
     required String modelDir,
   });
 
-  Future<VulkanDeviceInfo> crateApiSileroVadVulkanDeviceInfoDefault();
-
   Future<void> crateApiQwenWarmupQwenRuntime({
     required QwenWarmupConfig config,
   });
 
-  Future<void> crateApiSileroVadWarmupWhisperContext({
-    required String modelPath,
-    required bool useGpu,
-    required double totalDuration,
-  });
-
-  Future<WordItem> crateApiSileroVadWordItemDefault();
-
-  RustArcIncrementStrongCountFnType
-  get rust_arc_increment_strong_count_SileroVadEngine;
-
-  RustArcDecrementStrongCountFnType
-  get rust_arc_decrement_strong_count_SileroVadEngine;
-
-  CrossPlatformFinalizerArg
-  get rust_arc_decrement_strong_count_SileroVadEnginePtr;
+  Future<WordItem> crateApiCommonWordItemDefault();
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -238,99 +184,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
-  Future<List<(BigInt, BigInt)>>
-  crateApiSileroVadSileroVadEngineDetectSpeechSegments({
-    required SileroVadEngine that,
-    required List<double> samples,
-    required int minSpeechMs,
-    required int minSilenceMs,
-    required double threshold,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
-            that,
-            serializer,
-          );
-          sse_encode_list_prim_f_32_loose(samples, serializer);
-          sse_encode_i_32(minSpeechMs, serializer);
-          sse_encode_i_32(minSilenceMs, serializer);
-          sse_encode_f_32(threshold, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 1,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_record_usize_usize,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta:
-            kCrateApiSileroVadSileroVadEngineDetectSpeechSegmentsConstMeta,
-        argValues: [that, samples, minSpeechMs, minSilenceMs, threshold],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta
-  get kCrateApiSileroVadSileroVadEngineDetectSpeechSegmentsConstMeta =>
-      const TaskConstMeta(
-        debugName: "SileroVadEngine_detect_speech_segments",
-        argNames: [
-          "that",
-          "samples",
-          "minSpeechMs",
-          "minSilenceMs",
-          "threshold",
-        ],
-      );
-
-  @override
-  Future<SileroVadEngine> crateApiSileroVadSileroVadEngineLoad({
-    required String vadModelPath,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(vadModelPath, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 2,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData:
-              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSileroVadSileroVadEngineLoadConstMeta,
-        argValues: [vadModelPath],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiSileroVadSileroVadEngineLoadConstMeta =>
-      const TaskConstMeta(
-        debugName: "SileroVadEngine_load",
-        argNames: ["vadModelPath"],
-      );
-
-  @override
   void crateApiStreamPipelineCancelTranscriptionBackend() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 4)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 2)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -351,7 +210,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<String> crateApiSileroVadConvertChinese({
+  Future<String> crateApiCommonConvertChinese({
     required String text,
     required bool toSimplified,
   }) {
@@ -364,7 +223,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 3,
             port: port_,
           );
         },
@@ -372,21 +231,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_String,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiSileroVadConvertChineseConstMeta,
+        constMeta: kCrateApiCommonConvertChineseConstMeta,
         argValues: [text, toSimplified],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiSileroVadConvertChineseConstMeta =>
+  TaskConstMeta get kCrateApiCommonConvertChineseConstMeta =>
       const TaskConstMeta(
         debugName: "convert_chinese",
         argNames: ["text", "toSimplified"],
       );
 
   @override
-  Future<List<String>> crateApiSileroVadConvertChineseList({
+  Future<List<String>> crateApiCommonConvertChineseList({
     required List<String> texts,
     required bool toSimplified,
   }) {
@@ -399,7 +258,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 4,
             port: port_,
           );
         },
@@ -407,14 +266,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_list_String,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiSileroVadConvertChineseListConstMeta,
+        constMeta: kCrateApiCommonConvertChineseListConstMeta,
         argValues: [texts, toSimplified],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiSileroVadConvertChineseListConstMeta =>
+  TaskConstMeta get kCrateApiCommonConvertChineseListConstMeta =>
       const TaskConstMeta(
         debugName: "convert_chinese_list",
         argNames: ["texts", "toSimplified"],
@@ -432,7 +291,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 5,
             port: port_,
           );
         },
@@ -469,7 +328,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 8,
+              funcId: 6,
               port: port_,
             );
           },
@@ -493,8 +352,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<HardwareAccelerationInfo>
-  crateApiSileroVadGetHardwareAccelerationInfo() {
+  Future<FireVadConfig> crateApiVadFireVadConfigDefault() {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
@@ -502,26 +360,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 7,
             port: port_,
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_hardware_acceleration_info,
+          decodeSuccessData: sse_decode_fire_vad_config,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiSileroVadGetHardwareAccelerationInfoConstMeta,
+        constMeta: kCrateApiVadFireVadConfigDefaultConstMeta,
         argValues: [],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiSileroVadGetHardwareAccelerationInfoConstMeta =>
-      const TaskConstMeta(
-        debugName: "get_hardware_acceleration_info",
-        argNames: [],
-      );
+  TaskConstMeta get kCrateApiVadFireVadConfigDefaultConstMeta =>
+      const TaskConstMeta(debugName: "fire_vad_config_default", argNames: []);
 
   @override
   Future<QwenHardwareInfo> crateApiHardwareGetQwenHardwareInfo() {
@@ -532,7 +387,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 8,
             port: port_,
           );
         },
@@ -559,7 +414,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 9,
             port: port_,
           );
         },
@@ -586,7 +441,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 10,
             port: port_,
           );
         },
@@ -611,7 +466,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 13)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -628,38 +483,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "greet", argNames: ["name"]);
 
   @override
-  Future<HardwareAccelerationInfo>
-  crateApiSileroVadHardwareAccelerationInfoDefault() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 14,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_hardware_acceleration_info,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSileroVadHardwareAccelerationInfoDefaultConstMeta,
-        argValues: [],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta
-  get kCrateApiSileroVadHardwareAccelerationInfoDefaultConstMeta =>
-      const TaskConstMeta(
-        debugName: "hardware_acceleration_info_default",
-        argNames: [],
-      );
-
-  @override
   Future<void> crateApiSimpleInitApp() {
     return handler.executeNormal(
       NormalTask(
@@ -668,7 +491,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 12,
             port: port_,
           );
         },
@@ -709,7 +532,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 16,
+              funcId: 13,
               port: port_,
             );
           },
@@ -763,7 +586,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_opt_String(decoderFile, serializer);
           sse_encode_encoder_backend(encoderBackend, serializer);
           sse_encode_decoder_backend(decoderBackend, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 17)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -808,7 +631,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 15,
             port: port_,
           );
         },
@@ -830,7 +653,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<void> crateApiSileroVadRegisterThreadAsProAudio() {
+  Future<void> crateApiCommonRegisterThreadAsProAudio() {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
@@ -838,7 +661,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 16,
             port: port_,
           );
         },
@@ -846,14 +669,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiSileroVadRegisterThreadAsProAudioConstMeta,
+        constMeta: kCrateApiCommonRegisterThreadAsProAudioConstMeta,
         argValues: [],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiSileroVadRegisterThreadAsProAudioConstMeta =>
+  TaskConstMeta get kCrateApiCommonRegisterThreadAsProAudioConstMeta =>
       const TaskConstMeta(
         debugName: "register_thread_as_pro_audio",
         argNames: [],
@@ -869,7 +692,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 17,
             port: port_,
           );
         },
@@ -894,7 +717,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_bool(enable, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 18)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -931,7 +754,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 19,
             port: port_,
           );
         },
@@ -953,118 +776,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Stream<TranscriptionEvent> crateApiSileroVadTranscribe({
-    required String modelPath,
-    required String vadModelPath,
-    required String audioPath,
-    String? language,
-    required bool translate,
-    int? threads,
-    required bool useGpu,
-    required bool vadEnabled,
-    required double vadThreshold,
-    required int vadMinSpeechMs,
-    required int vadMinSilenceMs,
-    required double temperature,
-    required double temperatureInc,
-    required double entropyThold,
-    required double logprobThold,
-    required double noSpeechThold,
-    required bool noContext,
-    required bool noStateHistory,
-  }) {
-    final sink = RustStreamSink<TranscriptionEvent>();
-    unawaited(
-      handler.executeNormal(
-        NormalTask(
-          callFfi: (port_) {
-            final serializer = SseSerializer(generalizedFrbRustBinding);
-            sse_encode_StreamSink_transcription_event_Sse(sink, serializer);
-            sse_encode_String(modelPath, serializer);
-            sse_encode_String(vadModelPath, serializer);
-            sse_encode_String(audioPath, serializer);
-            sse_encode_opt_String(language, serializer);
-            sse_encode_bool(translate, serializer);
-            sse_encode_opt_box_autoadd_i_32(threads, serializer);
-            sse_encode_bool(useGpu, serializer);
-            sse_encode_bool(vadEnabled, serializer);
-            sse_encode_f_32(vadThreshold, serializer);
-            sse_encode_i_32(vadMinSpeechMs, serializer);
-            sse_encode_i_32(vadMinSilenceMs, serializer);
-            sse_encode_f_32(temperature, serializer);
-            sse_encode_f_32(temperatureInc, serializer);
-            sse_encode_f_32(entropyThold, serializer);
-            sse_encode_f_32(logprobThold, serializer);
-            sse_encode_f_32(noSpeechThold, serializer);
-            sse_encode_bool(noContext, serializer);
-            sse_encode_bool(noStateHistory, serializer);
-            pdeCallFfi(
-              generalizedFrbRustBinding,
-              serializer,
-              funcId: 23,
-              port: port_,
-            );
-          },
-          codec: SseCodec(
-            decodeSuccessData: sse_decode_unit,
-            decodeErrorData: null,
-          ),
-          constMeta: kCrateApiSileroVadTranscribeConstMeta,
-          argValues: [
-            sink,
-            modelPath,
-            vadModelPath,
-            audioPath,
-            language,
-            translate,
-            threads,
-            useGpu,
-            vadEnabled,
-            vadThreshold,
-            vadMinSpeechMs,
-            vadMinSilenceMs,
-            temperature,
-            temperatureInc,
-            entropyThold,
-            logprobThold,
-            noSpeechThold,
-            noContext,
-            noStateHistory,
-          ],
-          apiImpl: this,
-        ),
-      ),
-    );
-    return sink.stream;
-  }
-
-  TaskConstMeta get kCrateApiSileroVadTranscribeConstMeta =>
-      const TaskConstMeta(
-        debugName: "transcribe",
-        argNames: [
-          "sink",
-          "modelPath",
-          "vadModelPath",
-          "audioPath",
-          "language",
-          "translate",
-          "threads",
-          "useGpu",
-          "vadEnabled",
-          "vadThreshold",
-          "vadMinSpeechMs",
-          "vadMinSilenceMs",
-          "temperature",
-          "temperatureInc",
-          "entropyThold",
-          "logprobThold",
-          "noSpeechThold",
-          "noContext",
-          "noStateHistory",
-        ],
-      );
-
-  @override
   Stream<TranscriptionEvent> crateApiStreamPipelineTranscribeStream({
     required PipelineConfig config,
   }) {
@@ -1079,7 +790,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 24,
+              funcId: 20,
               port: port_,
             );
           },
@@ -1103,7 +814,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<TranscriptionSegment> crateApiSileroVadTranscriptionSegmentDefault() {
+  Future<TranscriptionSegment> crateApiCommonTranscriptionSegmentDefault() {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
@@ -1111,7 +822,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 21,
             port: port_,
           );
         },
@@ -1119,14 +830,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_transcription_segment,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiSileroVadTranscriptionSegmentDefaultConstMeta,
+        constMeta: kCrateApiCommonTranscriptionSegmentDefaultConstMeta,
         argValues: [],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiSileroVadTranscriptionSegmentDefaultConstMeta =>
+  TaskConstMeta get kCrateApiCommonTranscriptionSegmentDefaultConstMeta =>
       const TaskConstMeta(
         debugName: "transcription_segment_default",
         argNames: [],
@@ -1141,7 +852,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 22,
             port: port_,
           );
         },
@@ -1165,7 +876,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 27)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 23)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
@@ -1193,7 +904,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 24,
             port: port_,
           );
         },
@@ -1226,7 +937,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 25,
             port: port_,
           );
         },
@@ -1248,36 +959,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<VulkanDeviceInfo> crateApiSileroVadVulkanDeviceInfoDefault() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 30,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_vulkan_device_info,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSileroVadVulkanDeviceInfoDefaultConstMeta,
-        argValues: [],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiSileroVadVulkanDeviceInfoDefaultConstMeta =>
-      const TaskConstMeta(
-        debugName: "vulkan_device_info_default",
-        argNames: [],
-      );
-
-  @override
   Future<void> crateApiQwenWarmupQwenRuntime({
     required QwenWarmupConfig config,
   }) {
@@ -1289,7 +970,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1311,44 +992,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<void> crateApiSileroVadWarmupWhisperContext({
-    required String modelPath,
-    required bool useGpu,
-    required double totalDuration,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(modelPath, serializer);
-          sse_encode_bool(useGpu, serializer);
-          sse_encode_f_64(totalDuration, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 32,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
-          decodeErrorData: sse_decode_String,
-        ),
-        constMeta: kCrateApiSileroVadWarmupWhisperContextConstMeta,
-        argValues: [modelPath, useGpu, totalDuration],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiSileroVadWarmupWhisperContextConstMeta =>
-      const TaskConstMeta(
-        debugName: "warmup_whisper_context",
-        argNames: ["modelPath", "useGpu", "totalDuration"],
-      );
-
-  @override
-  Future<WordItem> crateApiSileroVadWordItemDefault() {
+  Future<WordItem> crateApiCommonWordItemDefault() {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
@@ -1356,7 +1000,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 27,
             port: port_,
           );
         },
@@ -1364,55 +1008,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_word_item,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiSileroVadWordItemDefaultConstMeta,
+        constMeta: kCrateApiCommonWordItemDefaultConstMeta,
         argValues: [],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiSileroVadWordItemDefaultConstMeta =>
+  TaskConstMeta get kCrateApiCommonWordItemDefaultConstMeta =>
       const TaskConstMeta(debugName: "word_item_default", argNames: []);
-
-  RustArcIncrementStrongCountFnType
-  get rust_arc_increment_strong_count_SileroVadEngine => wire
-      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine;
-
-  RustArcDecrementStrongCountFnType
-  get rust_arc_decrement_strong_count_SileroVadEngine => wire
-      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine;
 
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return AnyhowException(raw as String);
-  }
-
-  @protected
-  SileroVadEngine
-  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
-    dynamic raw,
-  ) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return SileroVadEngineImpl.frbInternalDcoDecode(raw as List<dynamic>);
-  }
-
-  @protected
-  SileroVadEngine
-  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
-    dynamic raw,
-  ) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return SileroVadEngineImpl.frbInternalDcoDecode(raw as List<dynamic>);
-  }
-
-  @protected
-  SileroVadEngine
-  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
-    dynamic raw,
-  ) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return SileroVadEngineImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -1559,14 +1168,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  HardwareAccelerationInfo dco_decode_hardware_acceleration_info(dynamic raw) {
+  FireVadConfig dco_decode_fire_vad_config(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
-    return HardwareAccelerationInfo(
-      isVulkanAvailable: dco_decode_bool(arr[0]),
-      devices: dco_decode_list_vulkan_device_info(arr[1]),
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
+    return FireVadConfig(
+      smoothWindowSize: dco_decode_usize(arr[0]),
+      threshold: dco_decode_f_32(arr[1]),
+      minSpeechFrame: dco_decode_usize(arr[2]),
+      maxSpeechFrame: dco_decode_usize(arr[3]),
+      minSilenceFrame: dco_decode_usize(arr[4]),
+      mergeSilenceFrame: dco_decode_usize(arr[5]),
+      extendSpeechFrame: dco_decode_usize(arr[6]),
     );
   }
 
@@ -1601,27 +1215,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<double> dco_decode_list_prim_f_32_loose(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw as List<double>;
-  }
-
-  @protected
-  Float32List dco_decode_list_prim_f_32_strict(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw as Float32List;
-  }
-
-  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
-  }
-
-  @protected
-  List<(BigInt, BigInt)> dco_decode_list_record_usize_usize(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>).map(dco_decode_record_usize_usize).toList();
   }
 
   @protected
@@ -1632,12 +1228,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return (raw as List<dynamic>)
         .map(dco_decode_transcription_segment)
         .toList();
-  }
-
-  @protected
-  List<VulkanDeviceInfo> dco_decode_list_vulkan_device_info(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>).map(dco_decode_vulkan_device_info).toList();
   }
 
   @protected
@@ -1782,16 +1372,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  (BigInt, BigInt) dco_decode_record_usize_usize(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    final arr = raw as List<dynamic>;
-    if (arr.length != 2) {
-      throw Exception('Expected 2 elements, got ${arr.length}');
-    }
-    return (dco_decode_usize(arr[0]), dco_decode_usize(arr[1]));
-  }
-
-  @protected
   TimestampMode dco_decode_timestamp_mode(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return TimestampMode.values[raw as int];
@@ -1863,19 +1443,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  VulkanDeviceInfo dco_decode_vulkan_device_info(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
-    return VulkanDeviceInfo(
-      id: dco_decode_i_32(arr[0]),
-      name: dco_decode_String(arr[1]),
-      totalVramBytes: dco_decode_u_64(arr[2]),
-    );
-  }
-
-  @protected
   WordItem dco_decode_word_item(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -1894,42 +1461,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_String(deserializer);
     return AnyhowException(inner);
-  }
-
-  @protected
-  SileroVadEngine
-  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return SileroVadEngineImpl.frbInternalSseDecode(
-      sse_decode_usize(deserializer),
-      sse_decode_i_32(deserializer),
-    );
-  }
-
-  @protected
-  SileroVadEngine
-  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return SileroVadEngineImpl.frbInternalSseDecode(
-      sse_decode_usize(deserializer),
-      sse_decode_i_32(deserializer),
-    );
-  }
-
-  @protected
-  SileroVadEngine
-  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return SileroVadEngineImpl.frbInternalSseDecode(
-      sse_decode_usize(deserializer),
-      sse_decode_i_32(deserializer),
-    );
   }
 
   @protected
@@ -2086,15 +1617,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  HardwareAccelerationInfo sse_decode_hardware_acceleration_info(
-    SseDeserializer deserializer,
-  ) {
+  FireVadConfig sse_decode_fire_vad_config(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_isVulkanAvailable = sse_decode_bool(deserializer);
-    var var_devices = sse_decode_list_vulkan_device_info(deserializer);
-    return HardwareAccelerationInfo(
-      isVulkanAvailable: var_isVulkanAvailable,
-      devices: var_devices,
+    var var_smoothWindowSize = sse_decode_usize(deserializer);
+    var var_threshold = sse_decode_f_32(deserializer);
+    var var_minSpeechFrame = sse_decode_usize(deserializer);
+    var var_maxSpeechFrame = sse_decode_usize(deserializer);
+    var var_minSilenceFrame = sse_decode_usize(deserializer);
+    var var_mergeSilenceFrame = sse_decode_usize(deserializer);
+    var var_extendSpeechFrame = sse_decode_usize(deserializer);
+    return FireVadConfig(
+      smoothWindowSize: var_smoothWindowSize,
+      threshold: var_threshold,
+      minSpeechFrame: var_minSpeechFrame,
+      maxSpeechFrame: var_maxSpeechFrame,
+      minSilenceFrame: var_minSilenceFrame,
+      mergeSilenceFrame: var_mergeSilenceFrame,
+      extendSpeechFrame: var_extendSpeechFrame,
     );
   }
 
@@ -2151,38 +1690,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<double> sse_decode_list_prim_f_32_loose(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var len_ = sse_decode_i_32(deserializer);
-    return deserializer.buffer.getFloat32List(len_);
-  }
-
-  @protected
-  Float32List sse_decode_list_prim_f_32_strict(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var len_ = sse_decode_i_32(deserializer);
-    return deserializer.buffer.getFloat32List(len_);
-  }
-
-  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
-  }
-
-  @protected
-  List<(BigInt, BigInt)> sse_decode_list_record_usize_usize(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-
-    var len_ = sse_decode_i_32(deserializer);
-    var ans_ = <(BigInt, BigInt)>[];
-    for (var idx_ = 0; idx_ < len_; ++idx_) {
-      ans_.add(sse_decode_record_usize_usize(deserializer));
-    }
-    return ans_;
   }
 
   @protected
@@ -2195,20 +1706,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var ans_ = <TranscriptionSegment>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(sse_decode_transcription_segment(deserializer));
-    }
-    return ans_;
-  }
-
-  @protected
-  List<VulkanDeviceInfo> sse_decode_list_vulkan_device_info(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-
-    var len_ = sse_decode_i_32(deserializer);
-    var ans_ = <VulkanDeviceInfo>[];
-    for (var idx_ = 0; idx_ < len_; ++idx_) {
-      ans_.add(sse_decode_vulkan_device_info(deserializer));
     }
     return ans_;
   }
@@ -2421,14 +1918,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  (BigInt, BigInt) sse_decode_record_usize_usize(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_field0 = sse_decode_usize(deserializer);
-    var var_field1 = sse_decode_usize(deserializer);
-    return (var_field0, var_field1);
-  }
-
-  @protected
   TimestampMode sse_decode_timestamp_mode(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
@@ -2512,19 +2001,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  VulkanDeviceInfo sse_decode_vulkan_device_info(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_id = sse_decode_i_32(deserializer);
-    var var_name = sse_decode_String(deserializer);
-    var var_totalVramBytes = sse_decode_u_64(deserializer);
-    return VulkanDeviceInfo(
-      id: var_id,
-      name: var_name,
-      totalVramBytes: var_totalVramBytes,
-    );
-  }
-
-  @protected
   WordItem sse_decode_word_item(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_text = sse_decode_String(deserializer);
@@ -2546,45 +2022,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.message, serializer);
-  }
-
-  @protected
-  void
-  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
-    SileroVadEngine self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_usize(
-      (self as SileroVadEngineImpl).frbInternalSseEncode(move: true),
-      serializer,
-    );
-  }
-
-  @protected
-  void
-  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
-    SileroVadEngine self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_usize(
-      (self as SileroVadEngineImpl).frbInternalSseEncode(move: false),
-      serializer,
-    );
-  }
-
-  @protected
-  void
-  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSileroVadEngine(
-    SileroVadEngine self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_usize(
-      (self as SileroVadEngineImpl).frbInternalSseEncode(move: null),
-      serializer,
-    );
   }
 
   @protected
@@ -2754,13 +2191,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_hardware_acceleration_info(
-    HardwareAccelerationInfo self,
+  void sse_encode_fire_vad_config(
+    FireVadConfig self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_bool(self.isVulkanAvailable, serializer);
-    sse_encode_list_vulkan_device_info(self.devices, serializer);
+    sse_encode_usize(self.smoothWindowSize, serializer);
+    sse_encode_f_32(self.threshold, serializer);
+    sse_encode_usize(self.minSpeechFrame, serializer);
+    sse_encode_usize(self.maxSpeechFrame, serializer);
+    sse_encode_usize(self.minSilenceFrame, serializer);
+    sse_encode_usize(self.mergeSilenceFrame, serializer);
+    sse_encode_usize(self.extendSpeechFrame, serializer);
   }
 
   @protected
@@ -2809,28 +2251,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_list_prim_f_32_loose(
-    List<double> self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.length, serializer);
-    serializer.buffer.putFloat32List(
-      self is Float32List ? self : Float32List.fromList(self),
-    );
-  }
-
-  @protected
-  void sse_encode_list_prim_f_32_strict(
-    Float32List self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.length, serializer);
-    serializer.buffer.putFloat32List(self);
-  }
-
-  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
     SseSerializer serializer,
@@ -2838,18 +2258,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
-  }
-
-  @protected
-  void sse_encode_list_record_usize_usize(
-    List<(BigInt, BigInt)> self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.length, serializer);
-    for (final item in self) {
-      sse_encode_record_usize_usize(item, serializer);
-    }
   }
 
   @protected
@@ -2861,18 +2269,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
       sse_encode_transcription_segment(item, serializer);
-    }
-  }
-
-  @protected
-  void sse_encode_list_vulkan_device_info(
-    List<VulkanDeviceInfo> self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.length, serializer);
-    for (final item in self) {
-      sse_encode_vulkan_device_info(item, serializer);
     }
   }
 
@@ -3031,16 +2427,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_record_usize_usize(
-    (BigInt, BigInt) self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_usize(self.$1, serializer);
-    sse_encode_usize(self.$2, serializer);
-  }
-
-  @protected
   void sse_encode_timestamp_mode(TimestampMode self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
@@ -3112,17 +2498,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_vulkan_device_info(
-    VulkanDeviceInfo self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.id, serializer);
-    sse_encode_String(self.name, serializer);
-    sse_encode_u_64(self.totalVramBytes, serializer);
-  }
-
-  @protected
   void sse_encode_word_item(WordItem self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.text, serializer);
@@ -3130,38 +2505,4 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_64(self.endMs, serializer);
     sse_encode_f_32(self.confidence, serializer);
   }
-}
-
-@sealed
-class SileroVadEngineImpl extends RustOpaque implements SileroVadEngine {
-  // Not to be used by end users
-  SileroVadEngineImpl.frbInternalDcoDecode(List<dynamic> wire)
-    : super.frbInternalDcoDecode(wire, _kStaticData);
-
-  // Not to be used by end users
-  SileroVadEngineImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
-    : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
-
-  static final _kStaticData = RustArcStaticData(
-    rustArcIncrementStrongCount:
-        RustLib.instance.api.rust_arc_increment_strong_count_SileroVadEngine,
-    rustArcDecrementStrongCount:
-        RustLib.instance.api.rust_arc_decrement_strong_count_SileroVadEngine,
-    rustArcDecrementStrongCountPtr:
-        RustLib.instance.api.rust_arc_decrement_strong_count_SileroVadEnginePtr,
-  );
-
-  Future<List<(BigInt, BigInt)>> detectSpeechSegments({
-    required List<double> samples,
-    required int minSpeechMs,
-    required int minSilenceMs,
-    required double threshold,
-  }) =>
-      RustLib.instance.api.crateApiSileroVadSileroVadEngineDetectSpeechSegments(
-        that: this,
-        samples: samples,
-        minSpeechMs: minSpeechMs,
-        minSilenceMs: minSilenceMs,
-        threshold: threshold,
-      );
 }

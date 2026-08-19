@@ -16,7 +16,7 @@ pub struct DecodeRequest<'a> {
     pub context: Option<&'a str>,
     /// 最大生成 token 数: 按音频时长动态设置, None 时用默认 256
     pub max_new_tokens: Option<usize>,
-    /// 采样温度 (0.0 = 贪婪解码; Whisper 兼容参数)
+    /// 采样温度 (0.0 = 贪婪解码)
     pub temperature: f32,
     /// 质量回退时的温度增量 (每次重试 +inc, 上限 1.0)
     pub temperature_inc: f32,
@@ -295,10 +295,9 @@ impl QwenDecoder {
         }
         let start_time = std::time::Instant::now();
 
-        // 质量回退循环 (与 whisper.cpp 语义一致):
+        // 质量回退循环:
         // 1. avg_logprob < logprob_thold -> 不确信, 升温重试;
         // 2. 生成 token 数 > 32 且尾部序列香农熵 < entropy_thold -> 重复循环, 升温重试。
-        // 温度序列与 whisper.cpp 相同: [temperature, +inc, ...] 直到 >= 1.0。
         let mut temperature = req.temperature.clamp(0.0_f32, 1.0_f32);
         let mut attempt_index = 0u32;
         let out: AttemptOutput = {
@@ -906,7 +905,6 @@ const LOGSUM_EXP_TRUNC: f32 = 20.0;
 /// 手动 softmax 采样 (不依赖 llama.cpp sampler, 便于同时统计对数概率指标):
 /// temperature <= 0 时取 argmax (贪婪), 否则按 softmax(logits/T) 多项分布采样。
 /// 返回 (token, log_prob): log_prob 为**未缩放** softmax 下的自然对数概率
-/// (与 whisper.cpp 的 avg_logprob 指标口径一致), 即
 /// ln P(t) = (logits[t] - max_l) - ln(Σ_j exp(logits[j] - max_l))。
 fn sample_token(logits: &[f32], temperature: f32, rng: &mut u64) -> (ll::llama_token, f64) {
     let mut max_l = f32::NEG_INFINITY;
@@ -963,7 +961,6 @@ fn sample_token(logits: &[f32], temperature: f32, rng: &mut u64) -> (ll::llama_t
 }
 
 /// 生成序列尾部 32 个 token 的香农熵 (自然对数):
-/// 与 whisper.cpp `whisper_sequence_score` 的 entropy 口径完全一致,
 /// 重复循环 (如 "你好你好你好") 时熵显著降低, 用于触发升温回退。
 fn sequence_entropy(tokens: &[ll::llama_token]) -> f64 {
     const WINDOW: usize = 32;
@@ -1169,7 +1166,7 @@ mod tests {
 
     #[test]
     fn sequence_entropy_detects_repetition() {
-        // 重复 token 序列熵显著低于多样序列 (与 whisper.cpp 重复检测口径一致)
+        // 重复 token 序列熵显著低于多样序列
         let repetitive = vec![1_i32; 40];
         let diverse: Vec<i32> = (0..40).collect();
         assert!(sequence_entropy(&repetitive) < 0.5);

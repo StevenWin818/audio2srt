@@ -1,8 +1,5 @@
 //! FireRedVAD 非流式 VAD 引擎 (DFSMN, 16kHz 80 维 Kaldi fbank + 全局 CMVN)。
 //!
-//! 替代 whisper.cpp 内置 Silero VAD: FLEURS-VAD-102 上 F1 97.57 (Silero 95.95),
-//! 误报率 2.69% (Silero 9.41%), 显著降低背景音乐被误判为语音导致的字幕偏移。
-//!
 //! 模型文件: `fireredvad_vad.onnx` (输入 `feat` [batch, time, 80] -> 输出 `probs` [batch, time, 1],
 //! 官方 export_onnx.py 从 model.pth.tar 导出), 同目录下需存在 `cmvn.ark` (Kaldi 二进制矩阵)。
 
@@ -24,22 +21,22 @@ const FEAT_DIM: usize = 80;
 /// 单条语音段最长 20s (超长语音在概率最低处拆分)
 const DEFAULT_MAX_SPEECH_FRAME: usize = 2000;
 
-/// VAD 输出的语音段, start/end 为 10ms 帧单位 (与 whisper.cpp Silero 段语义一致)
+/// VAD 输出的语音段, start/end 为 10ms 帧单位
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VadSegment {
-    pub start: u32,
-    pub end: u32,
+pub(crate) struct VadSegment {
+    pub(crate) start: u32,
+    pub(crate) end: u32,
 }
 
 #[derive(Debug, Clone)]
-pub struct FireVadConfig {
-    pub smooth_window_size: usize,
-    pub threshold: f32,
-    pub min_speech_frame: usize,
-    pub max_speech_frame: usize,
-    pub min_silence_frame: usize,
-    pub merge_silence_frame: usize,
-    pub extend_speech_frame: usize,
+pub(crate) struct FireVadConfig {
+    pub(crate) smooth_window_size: usize,
+    pub(crate) threshold: f32,
+    pub(crate) min_speech_frame: usize,
+    pub(crate) max_speech_frame: usize,
+    pub(crate) min_silence_frame: usize,
+    pub(crate) merge_silence_frame: usize,
+    pub(crate) extend_speech_frame: usize,
 }
 
 impl Default for FireVadConfig {
@@ -495,7 +492,7 @@ impl VadPostprocessor {
 }
 
 /// FireRedVAD 非流式语音活动检测引擎。
-pub struct FireVadEngine {
+pub(crate) struct FireVadEngine {
     session: Session,
     means: Vec<f32>,
     istd: Vec<f32>,
@@ -505,7 +502,7 @@ pub struct FireVadEngine {
 
 impl FireVadEngine {
     /// 加载 ONNX 模型 (CPU 推理) 及其同目录下的 cmvn.ark。
-    pub fn load(model_path: &str, cfg: FireVadConfig) -> Result<Self, String> {
+    pub(crate) fn load(model_path: &str, cfg: FireVadConfig) -> Result<Self, String> {
         let model_path = Path::new(model_path);
         let cmvn_path = model_path
             .parent()
@@ -542,7 +539,7 @@ impl FireVadEngine {
     /// 对一段 16kHz 单声道音频执行语音活动检测。
     /// 返回语音段列表, 段起止为相对输入起始的 10ms 帧索引。
     /// 推理失败时上抛错误: 调用方不得把推理失败当成"无语音"。
-    pub fn detect(&mut self, samples: &[f32]) -> Result<Vec<VadSegment>, String> {
+    pub(crate) fn detect(&mut self, samples: &[f32]) -> Result<Vec<VadSegment>, String> {
         let mut feat = self.fbank.compute(samples);
         if feat.is_empty() {
             return Ok(Vec::new());

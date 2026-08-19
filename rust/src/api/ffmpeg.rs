@@ -138,7 +138,7 @@ pub fn extract_audio_from_media(
        .arg("-dn"); // 忽略数据
 
     // 如果检测到多音轨，不要混音！明确只提取第一条音频流（Index 为 0）
-    // 避免中英双语同时播放导致 Whisper 识别崩溃
+    // 避免中英双语同时播放导致 ASR 识别冲突
     if audio_stream_count > 1 {
         println!("[Rust] 检测到多音轨，放弃混音，默认提取第一条音轨 (0:a:0)");
         cmd.arg("-map")

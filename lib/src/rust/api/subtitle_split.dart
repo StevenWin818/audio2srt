@@ -4,10 +4,10 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import '../frb_generated.dart';
+import 'common.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
-import 'silero_vad.dart';
 
-// These functions are ignored because they are not marked as `pub`: `boundary_cost`, `classify_period_word`, `count_units`, `is_cjk_char`, `is_comma_punct`, `is_leadin_comma_boundary`, `is_real_period`, `is_strong_punct`, `is_weak_punct`, `mid_sentence_cost`, `segment_cost`, `strong_punct_boundary`, `strong_punct_end`
+// These functions are ignored because they are not marked as `pub`: `boundary_cost`, `classify_period_word`, `count_units`, `is_cjk_char`, `is_comma_punct`, `is_leadin_comma_boundary`, `is_punct_boundary`, `is_real_period`, `is_strong_punct`, `is_weak_punct`, `is_western_word_char`, `is_word_internal_boundary`, `mid_sentence_cost`, `segment_cost`, `strong_punct_boundary`, `strong_punct_end`, `weak_punct_end`
 
 /// 移除文本中所有的全角句号 "。"
 Future<String> removePeriods({required String text}) =>

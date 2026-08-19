@@ -5,10 +5,10 @@
 
 import '../frb_generated.dart';
 import '../qwen/backend.dart';
+import 'common.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
-import 'silero_vad.dart';
 
-// These functions are ignored because they are not marked as `pub`: `add_perf_record`, `bind_vad_to_e_cores`, `build_runtime_cache_key`, `cached_cpu_topology`, `core_pinning_disabled`, `detect_cpu_topology`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_media_duration_secs`, `get_physical_pcore_mask`, `is_qwen_model_dir`, `join`, `lock_high_priority`, `log_process_memory`, `parse_duration_str`, `process_encoded_task`, `resolve_decoder_backend`, `resolve_encoder_backend`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `set_thread_group_affinity`, `set_worker_pcore_affinity`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_qwen_worker`, `spawn_vad_worker`, `system_available_memory_mb`, `total_physical_memory_mb`, `trim_process_working_set`, `vad_scan`
+// These functions are ignored because they are not marked as `pub`: `add_perf_record`, `bind_vad_to_e_cores`, `build_runtime_cache_key`, `cached_cpu_topology`, `core_pinning_disabled`, `detect_cpu_topology`, `disable_power_throttling`, `extract_tar_gz_if_needed`, `get_media_duration_secs`, `get_physical_pcore_mask`, `is_qwen_model_dir`, `join`, `lock_high_priority`, `log_process_memory`, `max_tokens_for_samples`, `parse_duration_str`, `process_encoded_task`, `resolve_decoder_backend`, `resolve_encoder_backend`, `run_stream_pipeline_inner`, `set_thread_affinity_mask`, `set_thread_group_affinity`, `set_worker_pcore_affinity`, `spawn_dfn_worker`, `spawn_ffmpeg_pump`, `spawn_qwen_worker`, `spawn_vad_worker`, `split_block_by_spans`, `system_available_memory_mb`, `total_physical_memory_mb`, `trim_process_working_set`, `vad_scan`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AsrTask`, `CoreSet`, `EncodedTask`, `EncoderReleaseGuard`, `FfmpegPumpHandle`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`
 // These functions are ignored (category: IgnoreBecauseExplicitAttribute): `get_or_create_qwen_runtime`
@@ -76,7 +76,7 @@ class PipelineConfig {
   /// 质量回退时温度增量
   final double temperatureInc;
 
-  /// 生成文本熵(压缩率)阈值
+  /// 生成序列尾部香农熵阈值 (重复循环检测, 低于则回退)
   final double entropyThold;
 
   /// 平均 token 对数概率阈值

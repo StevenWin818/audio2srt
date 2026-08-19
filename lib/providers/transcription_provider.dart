@@ -9,7 +9,8 @@ import 'package:local_notifier/local_notifier.dart';
 import 'package:ffi/ffi.dart';
 import 'package:window_manager/window_manager.dart';
 import '../src/rust/api/ffmpeg.dart' as rust_ffmpeg;
-import '../src/rust/api/silero_vad.dart' as rust_whisper;
+import '../src/rust/api/common.dart' as rust_common;
+import '../src/rust/api/hardware.dart' as rust_hardware;
 import '../src/rust/api/stream_pipeline.dart' as rust_stream;
 import '../src/rust/qwen/backend.dart' as rust_qwen_backend;
 import '../services/ffmpeg_service.dart';
@@ -199,12 +200,12 @@ class TranscriptionProvider with ChangeNotifier {
   bool _isGpuAvailable = false;
   bool get isGpuAvailable => _isGpuAvailable;
 
-  List<rust_whisper.VulkanDeviceInfo> _vulkanDevices = [];
-  List<rust_whisper.VulkanDeviceInfo> get vulkanDevices => _vulkanDevices;
+  List<rust_qwen_backend.ComputeDeviceInfo> _gpuDevices = [];
+  List<rust_qwen_backend.ComputeDeviceInfo> get vulkanDevices => _gpuDevices;
 
   /// 获取当前活跃的 GPU 加速后端技术名称 ("CUDA" / "Vulkan")
   String get gpuTechnologyName {
-    if (_vulkanDevices.any((d) => d.name.toUpperCase().contains('CUDA'))) {
+    if (_gpuDevices.any((d) => d.name.toUpperCase().contains('CUDA'))) {
       return 'CUDA';
     }
     if (_qwenRuntimeStatus != null) {
@@ -220,7 +221,7 @@ class TranscriptionProvider with ChangeNotifier {
   bool _vadEnabled = true;
   bool get vadEnabled => _vadEnabled;
 
-  double _vadThreshold = 0.5; // FireRedVAD 语音概率阈值 (默认 0.5; 背景人声严重时可上调至 0.6)
+  double _vadThreshold = 0.5; // VAD 语音概率阈值 (默认 0.5; 背景人声严重时可上调至 0.6)
   double get vadThreshold => _vadThreshold;
 
   int _vadMinSpeechMs = 300; // 最小语音长度 (ms)
@@ -229,7 +230,7 @@ class TranscriptionProvider with ChangeNotifier {
   int _vadMinSilenceMs = 400; // 最小静音判定时间 (ms)
   int get vadMinSilenceMs => _vadMinSilenceMs;
 
-  // Whisper 惩罚与降级参数配置
+  // ASR 惩罚与降级参数配置
   double _temperature = 0.0;
   double get temperature => _temperature;
 
@@ -372,7 +373,7 @@ class TranscriptionProvider with ChangeNotifier {
         _selectedQuant = quant.id;
         await _saveSelectedModelPref('${model.id}|${quant.id}');
         _safeNotifyListeners();
-        _preloadWhisperContext();
+        _preloadAsrModel();
       },
       onFailure: (error) {
         _downloadingModelFile = null;
@@ -451,14 +452,14 @@ class TranscriptionProvider with ChangeNotifier {
     // 搜索系统 FFmpeg
     await _ffmpegService.findSystemFFmpeg();
 
-    // 查询 Vulkan 设备列表
+    // 查询硬件加速与 GPU 设备列表
     try {
-      final info = await rust_whisper.getHardwareAccelerationInfo();
-      _isGpuAvailable = info.isVulkanAvailable;
-      _vulkanDevices = info.devices;
-      debugPrint('[TranscriptionProvider] Loaded Vulkan hardware info: isAvailable=$_isGpuAvailable, devices=${_vulkanDevices.map((d) => d.name).toList()}');
+      final info = await rust_hardware.getQwenHardwareInfo();
+      _isGpuAvailable = info.vulkanAvailable || info.cudaAvailable || info.directmlAvailable;
+      _gpuDevices = info.devices;
+      debugPrint('[TranscriptionProvider] Loaded hardware info: isAvailable=$_isGpuAvailable, devices=${_gpuDevices.map((d) => d.name).toList()}');
     } catch (e) {
-      debugPrint('[TranscriptionProvider] Failed to load Vulkan hardware info: $e');
+      debugPrint('[TranscriptionProvider] Failed to load hardware info: $e');
     }
     
     // 加载已下载模型与持久化模型偏好
@@ -562,13 +563,13 @@ class TranscriptionProvider with ChangeNotifier {
     if (!_useGpu) {
       return 'CPU';
     }
-    if (_vulkanDevices.isEmpty) {
+    if (_gpuDevices.isEmpty) {
       return 'CPU (安全回退 - 未检测到加速显卡)';
     }
 
     // 独立显卡 (dGPU) -> 集成显卡 (iGPU) 优先寻址
-    rust_whisper.VulkanDeviceInfo? selectedDevice;
-    for (final dev in _vulkanDevices) {
+    rust_qwen_backend.ComputeDeviceInfo? selectedDevice;
+    for (final dev in _gpuDevices) {
       final nameLower = dev.name.toLowerCase();
       final isIgpu = nameLower.contains('integrated') ||
           nameLower.contains('uhd') ||
@@ -581,7 +582,7 @@ class TranscriptionProvider with ChangeNotifier {
         break;
       }
     }
-    selectedDevice ??= _vulkanDevices.first;
+    selectedDevice ??= _gpuDevices.first;
     return 'GPU: ${selectedDevice.name}';
   }
 
@@ -589,7 +590,7 @@ class TranscriptionProvider with ChangeNotifier {
   bool get showLowPowerWarning {
     if (_selectedModelBase == null) return false;
     final isBigModel = _selectedModelBase == 'qwen3-asr-1.7b';
-    final isGpuActive = _useGpu && _vulkanDevices.isNotEmpty;
+    final isGpuActive = _useGpu && (_gpuDevices.isNotEmpty || _isGpuAvailable);
     return !isGpuActive && isBigModel;
   }
 
@@ -675,7 +676,7 @@ class TranscriptionProvider with ChangeNotifier {
       if (fallback != null) {
         _selectedQuant = fallback;
         _saveSelectedModelPref('$baseId|$fallback');
-        _preloadWhisperContext();
+        _preloadAsrModel();
       } else {
         final otherBase = _downloadedModels.firstWhere(
           (id) => id != baseId,
@@ -685,11 +686,19 @@ class TranscriptionProvider with ChangeNotifier {
           _selectedModelBase = otherBase;
           _selectedQuant = await _findDownloadedQuant(otherBase) ?? 'f16';
           _saveSelectedModelPref('$otherBase|$_selectedQuant');
-          _preloadWhisperContext();
+          _preloadAsrModel();
         } else {
-          // 全部量化均已删除: 保留模型选择, 下次下载后自动复用
-          _selectedQuant = 'f16';
-          _saveSelectedModelPref('$baseId|f16');
+          if (_downloadedModels.isNotEmpty) {
+            final first = _downloadedModels.first;
+            _selectedModelBase = first;
+            _selectedQuant = 'f16';
+            _saveSelectedModelPref('$first|f16');
+            _preloadAsrModel();
+          } else {
+            // 全部量化均已删除: 保留模型选择, 下次下载后自动复用
+            _selectedQuant = 'f16';
+            _saveSelectedModelPref('$baseId|f16');
+          }
         }
       }
     }
@@ -789,7 +798,7 @@ class TranscriptionProvider with ChangeNotifier {
         _processedMs = 0;
         _syncHighFreqNotifiers();
         _safeNotifyListeners();
-        _preloadWhisperContext();
+        _preloadAsrModel();
       }
     } catch (e) {
       if (gen != _fileGeneration) return;
@@ -821,7 +830,7 @@ class TranscriptionProvider with ChangeNotifier {
 
     _saveSelectedModelPref('$baseId|$_selectedQuant');
     _safeNotifyListeners();
-    _preloadWhisperContext();
+    _preloadAsrModel();
   }
 
   void setSelectedQuant(String quantId) {
@@ -831,7 +840,7 @@ class TranscriptionProvider with ChangeNotifier {
       _saveSelectedModelPref('$_selectedModelBase|$quantId');
     }
     _safeNotifyListeners();
-    _preloadWhisperContext();
+    _preloadAsrModel();
   }
 
   void setSelectedLanguage(String langCode) {
@@ -842,12 +851,12 @@ class TranscriptionProvider with ChangeNotifier {
   void setUseGpu(bool value) {
     _useGpu = value;
     _safeNotifyListeners();
-    _preloadWhisperContext();
+    _preloadAsrModel();
   }
 
   Timer? _preloadTimer;
 
-  Future<void> _preloadWhisperContext() async {
+  Future<void> _preloadAsrModel() async {
     _preloadTimer?.cancel();
     _preloadTimer = Timer(const Duration(milliseconds: 200), () async {
       final baseId = _selectedModelBase;
@@ -1047,7 +1056,7 @@ class TranscriptionProvider with ChangeNotifier {
 
       String vadModelPath = "";
       if (_vadEnabled) {
-        _statusMessage = '正在准备 Silero VAD 引擎...';
+        _statusMessage = '正在准备 VAD 引擎...';
         _syncHighFreqNotifiers();
         _safeNotifyListeners();
         vadModelPath = await _modelService.prepareVADModel();
@@ -1101,7 +1110,7 @@ class TranscriptionProvider with ChangeNotifier {
       _transcriptionSub = eventStream.listen(
         (event) async {
           switch (event) {
-            case rust_whisper.TranscriptionEvent_Progress(:final field0):
+            case rust_common.TranscriptionEvent_Progress(:final field0):
               _progress = field0;
               _statusMessage = '正在生成字幕...';
               _syncHighFreqNotifiers();
@@ -1112,7 +1121,7 @@ class TranscriptionProvider with ChangeNotifier {
                 debugPrint('Failed to set taskbar progress: $e');
               }
 
-            case rust_whisper.TranscriptionEvent_ProgressDetail(:final processedMs, :final totalMs):
+            case rust_common.TranscriptionEvent_ProgressDetail(:final processedMs, :final totalMs):
               _processedMs = processedMs.toInt();
               _totalMs = totalMs.toInt();
               if (_transcribeStartTime != null) {
@@ -1129,7 +1138,7 @@ class TranscriptionProvider with ChangeNotifier {
               _statusMessage = '正在生成字幕...';
               _syncHighFreqNotifiers();
 
-            case rust_whisper.TranscriptionEvent_Segment(:final field0):
+            case rust_common.TranscriptionEvent_Segment(:final field0):
               _subtitles = [
                 ..._subtitles,
                 SubtitleItem(
@@ -1140,7 +1149,7 @@ class TranscriptionProvider with ChangeNotifier {
               ];
               _safeNotifyListeners();
 
-            case rust_whisper.TranscriptionEvent_Success(:final field0):
+            case rust_common.TranscriptionEvent_Success(:final field0):
               _subtitles = field0
                   .map((seg) => SubtitleItem(
                         startMs: seg.startMs.toInt(),
@@ -1180,7 +1189,7 @@ class TranscriptionProvider with ChangeNotifier {
                 debugPrint('[TranscriptionProvider] 发送成功通知异常: $e');
               }
 
-            case rust_whisper.TranscriptionEvent_Failure(:final field0):
+            case rust_common.TranscriptionEvent_Failure(:final field0):
               if (field0.contains('Failed to load Qwen runtime') ||
                   field0.contains('model not found') ||
                   field0.contains('Corrupt') ||
@@ -1264,7 +1273,7 @@ class TranscriptionProvider with ChangeNotifier {
   Future<void> convertSubtitlesToChinese(bool toSimplified) async {
     try {
       final texts = _subtitles.map((e) => e.text).toList();
-      final converted = await rust_whisper.convertChineseList(texts: texts, toSimplified: toSimplified);
+      final converted = await rust_common.convertChineseList(texts: texts, toSimplified: toSimplified);
       if (converted.length != _subtitles.length) {
         debugPrint('[TranscriptionProvider] Converted list length mismatch: expected ${_subtitles.length}, got ${converted.length}');
         return;
