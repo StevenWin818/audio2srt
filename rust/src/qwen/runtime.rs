@@ -255,7 +255,7 @@ impl QwenRuntime {
                         text: ch.to_string(),
                         start_ms: start.min(segment_end_ms),
                         end_ms: end.min(segment_end_ms),
-                        confidence: Some(1.0),
+                        confidence: None,
                     }
                 })
                 .collect();

@@ -220,7 +220,7 @@ class TranscriptionProvider with ChangeNotifier {
   bool _vadEnabled = true;
   bool get vadEnabled => _vadEnabled;
 
-  double _vadThreshold = 0.4; // FireRedVAD 语音概率阈值 (官方推荐 0.4)
+  double _vadThreshold = 0.5; // FireRedVAD 语音概率阈值 (默认 0.5; 背景人声严重时可上调至 0.6)
   double get vadThreshold => _vadThreshold;
 
   int _vadMinSpeechMs = 300; // 最小语音长度 (ms)

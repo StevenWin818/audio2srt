@@ -985,8 +985,21 @@ fn spawn_dfn_worker(
 
 /// 语音块最小/最大时长 (秒): VAD 切出的短段先合并成 20~45s 大块,
 /// 整块交给 ASR 后由"标点+DP"分条器在块内拆分字幕。
-const BLOCK_MIN_SECONDS: i64 = 20;
-const BLOCK_MAX_SECONDS: i64 = 45;
+/// 语音块累积下限 (s): 块过小 ASR 上下文不足; 块过大则多语种/多人物挤进同一块
+/// (切换后前几句被提前 EOS 掐断) 且英文快语速注意力发散。12s 为折中。
+const BLOCK_MIN_SECONDS: i64 = 12;
+/// 语音块累积上限 (s, 硬顶): 快语速英文的黄金块长 (8~15s) 上沿
+const BLOCK_MAX_SECONDS: i64 = 20;
+/// 拆块重解的子块上限 (ms)
+const PIECE_MAX_MS: usize = 12_000;
+/// 转写截断判定: 块内语音 >= 该时长才检测提前 EOS
+const TRUNC_MIN_SPEECH_SEC: f64 = 8.0;
+/// 转写截断判定: 内容密度 (字母数字字符/秒) 低于该值 -> 疑似提前 EOS
+const TRUNC_CHARS_PER_SEC: f64 = 1.5;
+/// 未覆盖段修复的最小段时长 (ms)
+const UNCOVERED_MIN_MS: u64 = 800;
+/// 每块最多重解的未覆盖段数 (限制额外解码开销)
+const MAX_REPAIR_SPANS: usize = 3;
 
 /// 对给定音频切片运行一次 FireRedVAD 扫描。
 /// FireRedVAD 非流式模型每次只处理传入的采样 (无内部状态), 可安全重复调用。
@@ -1036,7 +1049,7 @@ fn spawn_vad_worker(
             println!("[Rust] 正在为流式处理初始化 FireRedVAD 模型: {}", vad_model_path);
             // 阈值/最小段长沿用配置 (ms -> 10ms 帧), 其余用 FireRedVAD 官方默认
             let vad_cfg = FireVadConfig {
-                threshold: if vad_threshold > 0.0 && vad_threshold < 1.0 { vad_threshold as f32 } else { 0.4 },
+                threshold: if vad_threshold > 0.0 && vad_threshold < 1.0 { vad_threshold as f32 } else { 0.5 },
                 min_speech_frame: (vad_min_speech_ms.max(10) / 10) as usize,
                 min_silence_frame: (vad_min_silence_ms.max(10) / 10) as usize,
                 ..Default::default()
@@ -1054,8 +1067,8 @@ fn spawn_vad_worker(
 
         let mut vad_scan_cursor = 0usize;
 
-        // 语音块累积 (20~45s): VAD 切出的短段先并入大块, 达到下限后整块交给 ASR,
-        // 分条在块内完成 (标点+DP)。块越大 ASR 上下文越完整, 识别更准。
+        // 语音块累积 (12~20s): VAD 切出的短段先并入大块, 达到下限后整块交给 ASR,
+        // 分条在块内完成 (标点+DP)。块过大时多语种/多人物切换会被提前 EOS 掐断尾部。
         let mut block_samples: Vec<f32> = Vec::new();
         let mut block_start_ms: i64 = 0;
         let mut block_end_ms: i64 = 0;
@@ -1805,15 +1818,11 @@ fn process_encoded_task(
     }
 
     let start_time = std::time::Instant::now();
-    // 动态生成上限: 45s 快语速约 450 token; 每 100ms 音频约 1 token + 64 余量
-    let max_new_tokens = Some(
-        ((task.samples.len() / 16000 * 1000 / 100) as usize + 64).clamp(256, 768),
-    );
     let decode_res = match runtime.decode_segment(
         &enc_out,
         language.as_deref(),
         context_prompt.as_deref(),
-        max_new_tokens,
+        Some(max_tokens_for_samples(&task.samples)),
         temperature,
         temperature_inc,
         entropy_thold,
@@ -1848,14 +1857,84 @@ fn process_encoded_task(
         final_text = convert_chinese(final_text, true);
     }
 
-    // 强制对齐
+    // 修复用独立解码: 对小块音频单独重解
+    // 用于恢复被整块解码提前 EOS 掐断/跳过的语种切换后句子。
+    let repair_decode = |samples: &[f32]| -> Option<String> {
+        let enc = match runtime.encode_segment(samples) {
+            Ok(e) => e,
+            Err(e) => {
+                println!("[Rust] repair encode error: {:?}", e);
+                return None;
+            }
+        };
+        match runtime.decode_segment(
+            &enc,
+            language.as_deref(),
+            None,
+            Some(max_tokens_for_samples(samples)),
+            temperature,
+            temperature_inc,
+            entropy_thold,
+            logprob_thold,
+            true,
+        ) {
+            Ok(res) => {
+                let t = res.text.trim().to_string();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t)
+                }
+            }
+            Err(e) => {
+                println!("[Rust] repair decode error: {:?}", e);
+                None
+            }
+        }
+    };
+
+    // 截断检测: 块内语音 >= 8s 但转写内容密度过低 -> 
+    // 拆成 <=12s 子块独立重解, 恢复被掐断的尾部。
+    let speech_sec = task.samples.len() as f64 / 16000.0;
+    let content_chars = final_text.chars().filter(|c| c.is_alphanumeric()).count();
+    if speech_sec >= TRUNC_MIN_SPEECH_SEC && (content_chars as f64) / speech_sec < TRUNC_CHARS_PER_SEC
+    {
+        println!(
+            "[Rust] suspected early-EOS truncation ({} chars / {:.1}s speech), split re-decode",
+            content_chars, speech_sec
+        );
+        let mut joined = String::new();
+        for piece in split_block_by_spans(&task.samples, &task.timeline) {
+            if let Some(t) = repair_decode(&piece) {
+                let t = if to_simplified { convert_chinese(t, true) } else { t };
+                if !joined.is_empty() {
+                    joined.push(' ');
+                }
+                joined.push_str(t.trim());
+            }
+        }
+        let joined_chars = joined.chars().filter(|c| c.is_alphanumeric()).count();
+        if joined_chars as f64 > content_chars as f64 * 1.3 {
+            println!(
+                "[Rust] split re-decode recovered {} -> {} chars",
+                content_chars, joined_chars
+            );
+            final_text = joined;
+        } else {
+            println!(
+                "[Rust] split re-decode no gain ({} chars), keep original",
+                joined_chars
+            );
+        }
+    }
+
     // 强制对齐: 传入拼接时间轴映射; 语言优先用解码器检测到的语言 (自动模式)
     let align_language = if decode_res.detected_language.is_some() {
         &decode_res.detected_language
     } else {
         language
     };
-    let (align_quality, word_items) = match runtime.align_segment(
+    let (mut align_quality, mut word_items) = match runtime.align_segment(
         &task.samples,
         &final_text,
         task.start_ms as u64,
@@ -1872,7 +1951,8 @@ fn process_encoded_task(
                     text: u.text,
                     start_ms: u.start_ms as i64,
                     end_ms: u.end_ms as i64,
-                    confidence: u.confidence.unwrap_or(1.0),
+                    // None = 线性回退分配的假时间戳, 置信度记为 0
+                    confidence: u.confidence.unwrap_or(0.0),
                 })
                 .collect(),
         ),
@@ -1881,6 +1961,129 @@ fn process_encoded_task(
             ("LinearFallback".to_string(), Vec::new())
         }
     };
+
+    // 未覆盖段修复: 有语音的 VAD 段没有任何词项 -> 该段被整块解码跳过
+    // (语种切换后的前几句)。单独重解该段音频并插回文本, 然后整块重对齐。
+    if !task.timeline.is_empty() && !word_items.is_empty() {
+        let mut covered: Vec<Vec<usize>> = vec![Vec::new(); task.timeline.len()];
+        for (wi, it) in word_items.iter().enumerate() {
+            if !it.text.chars().any(|c| c.is_alphanumeric()) {
+                continue; // 纯标点/空格项不计覆盖
+            }
+            for (si, span) in task.timeline.iter().enumerate() {
+                if it.start_ms >= span.source_start_ms - 200
+                    && it.start_ms < span.source_end_ms + 200
+                {
+                    covered[si].push(wi);
+                    break;
+                }
+            }
+        }
+        // 一致性检查: 按段拼回的文本必须等于块文本, 否则段归属不可信, 放弃修复
+        let mut covered_concat = String::new();
+        for si in 0..task.timeline.len() {
+            for &wi in &covered[si] {
+                covered_concat.push_str(&word_items[wi].text);
+            }
+        }
+        let covered_norm: String = covered_concat
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .collect();
+        let block_norm: String = final_text.chars().filter(|c| c.is_alphanumeric()).collect();
+        if covered_norm != block_norm {
+            println!(
+                "[Rust] uncovered repair skipped: span-partitioned text != block text ({} vs {} chars)",
+                covered_norm.len(),
+                block_norm.len()
+            );
+        } else {
+            let mut repairs: Vec<(usize, String)> = Vec::new();
+            for (si, span) in task.timeline.iter().enumerate() {
+                if repairs.len() >= MAX_REPAIR_SPANS {
+                    break;
+                }
+                let span_ms = (span
+                    .concat_end_sample
+                    .saturating_sub(span.concat_start_sample) as u64)
+                    * 1000
+                    / 16000;
+                if span_ms < UNCOVERED_MIN_MS || !covered[si].is_empty() {
+                    continue;
+                }
+                let s = span.concat_start_sample.min(task.samples.len());
+                let e = span.concat_end_sample.min(task.samples.len());
+                if s >= e {
+                    continue;
+                }
+                let Some(t) = repair_decode(&task.samples[s..e]) else {
+                    continue;
+                };
+                let norm: String = t.chars().filter(|c| c.is_alphanumeric()).collect();
+                if norm.is_empty() || block_norm.contains(&norm) {
+                    println!(
+                        "[Rust] uncovered span {} repair text empty/already-in-block, skip",
+                        si
+                    );
+                    continue;
+                }
+                if repairs.iter().any(|(_, prev)| {
+                    prev.chars().filter(|c| c.is_alphanumeric()).collect::<String>() == norm
+                }) {
+                    continue;
+                }
+                println!(
+                    "[Rust] uncovered span {} ({:.1}s) repaired: '{}'",
+                    si,
+                    span_ms as f64 / 1000.0,
+                    t
+                );
+                repairs.push((si, t));
+            }
+            if !repairs.is_empty() {
+                // 按段序重建文本: 覆盖段取原词项文本, 未覆盖段取重解文本
+                let mut rebuilt = String::new();
+                for si in 0..task.timeline.len() {
+                    if let Some((_, t)) = repairs.iter().find(|(i, _)| *i == si) {
+                        if !rebuilt.is_empty() {
+                            rebuilt.push(' ');
+                        }
+                        rebuilt.push_str(t.trim());
+                        continue;
+                    }
+                    for &wi in &covered[si] {
+                        rebuilt.push_str(&word_items[wi].text);
+                    }
+                }
+                final_text = rebuilt.trim().to_string();
+                match runtime.align_segment(
+                    &task.samples,
+                    &final_text,
+                    task.start_ms as u64,
+                    task.end_ms as u64,
+                    align_language,
+                    &task.timeline,
+                ) {
+                    Ok(align_res) => {
+                        align_quality = align_res.align_quality.clone();
+                        word_items = align_res
+                            .units
+                            .into_iter()
+                            .map(|u| WordItem {
+                                text: u.text,
+                                start_ms: u.start_ms as i64,
+                                end_ms: u.end_ms as i64,
+                                confidence: u.confidence.unwrap_or(0.0),
+                            })
+                            .collect();
+                    }
+                    Err(e) => {
+                        println!("[Rust] re-align after repair error: {:?}", e);
+                    }
+                }
+            }
+        }
+    }
 
     // 诊断: 块首偏移来源 (对齐器预测 vs 块真实起点)
     if let Some(first) = word_items.first() {
@@ -1896,7 +2099,24 @@ fn process_encoded_task(
 
     // 分条: 标点+停顿生成候选边界, 动态规划生成 2~5 秒字幕 (最多两行, 偏好一行)。
     // 对齐单元缺失时回退为整段一条字幕; 质量标记必须诚实 (真实对齐 vs 线性回退)。
-    let sub_segments = split_subtitles(&word_items, &align_quality, task.start_ms, task.end_ms);
+    // catch_unwind: 分条逻辑的 bug 只降级为整块一条字幕, 绝不拖垮整个转写流程。
+    let sub_segments = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        split_subtitles(&word_items, &align_quality, task.start_ms, task.end_ms)
+    }))
+    .unwrap_or_else(|e| {
+        let msg = if let Some(s) = e.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = e.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic".to_string()
+        };
+        println!(
+            "[Rust] split_subtitles panicked ({}), falling back to whole-block subtitle",
+            msg
+        );
+        Vec::new()
+    });
     let segments: Vec<TranscriptionSegment> = if sub_segments.is_empty() {
         vec![TranscriptionSegment {
             start_ms: task.start_ms,
@@ -1934,6 +2154,33 @@ fn process_encoded_task(
 }
 
 // ==== 管道辅助函数 ====
+
+/// 解码 token 上限: 每 100ms 音频约 1 token + 64 余量 (20s 快语速约 264)
+fn max_tokens_for_samples(samples: &[f32]) -> usize {
+    ((samples.len() / 16000 * 1000 / 100) as usize + 64).clamp(256, 768)
+}
+
+/// 按 VAD 段边界把拼接块切成 ≤ `PIECE_MAX_MS` 的子块 (边界只能落在段界, 避免切断词)
+fn split_block_by_spans(samples: &[f32], timeline: &[crate::qwen::aligner::TimelineSpan]) -> Vec<Vec<f32>> {
+    const PIECE_MAX_SAMPLES: usize = PIECE_MAX_MS * 16;
+    let mut pieces: Vec<Vec<f32>> = Vec::new();
+    let mut cur: Vec<f32> = Vec::new();
+    for span in timeline {
+        let s = span.concat_start_sample.min(samples.len());
+        let e = span.concat_end_sample.min(samples.len());
+        if s >= e {
+            continue;
+        }
+        if !cur.is_empty() && cur.len() + (e - s) > PIECE_MAX_SAMPLES {
+            pieces.push(std::mem::take(&mut cur));
+        }
+        cur.extend_from_slice(&samples[s..e]);
+    }
+    if !cur.is_empty() {
+        pieces.push(cur);
+    }
+    pieces
+}
 
 fn extract_tar_gz_if_needed(tar_gz_path: &Path) -> Result<std::path::PathBuf> {
     let parent = tar_gz_path.parent().ok_or_else(|| anyhow!("No parent dir"))?;

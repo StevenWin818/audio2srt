@@ -195,8 +195,16 @@ fn is_leadin_comma_boundary(units: &[WordItem], j: usize) -> bool {
     }
 
     let text_up_to_comma = raw.trim_end_matches(|c: char| is_comma_punct(c) || c.is_whitespace());
+    // rfind 返回字节偏移, 而 CJK 句号等占多字节: 按匹配字符的 UTF-8 长度前进, 避免切在字符中间
     let sentence_start = match text_up_to_comma.rfind(|c: char| is_strong_punct(c) || c == '.') {
-        Some(pos) => &text_up_to_comma[pos + 1..],
+        Some(pos) => {
+            let ch_len = text_up_to_comma[pos..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(1);
+            &text_up_to_comma[pos + ch_len..]
+        }
         None => text_up_to_comma,
     };
 
@@ -508,6 +516,24 @@ mod tests {
         assert_eq!(remove_periods("你好。世界。"), "你好世界");
         assert_eq!(remove_periods("这是。一个。测试。"), "这是一个测试");
         assert_eq!(remove_periods("Hello. World!"), "Hello. World!");
+    }
+
+    #[test]
+    fn leadin_comma_boundary_no_panic_on_cjk_punct() {
+        // 回归: CJK 句号前的逗号边界曾按字节 +1 切片, 落在 '。' (3 字节) 中间直接 panic
+        let text = "晚上好。晚上好。今天是六月二十一号，";
+        let units: Vec<WordItem> = text
+            .chars()
+            .map(|c| WordItem {
+                text: c.to_string(),
+                start_ms: 0,
+                end_ms: 100,
+                confidence: 1.0,
+            })
+            .collect();
+        let j = units.len();
+        let r = is_leadin_comma_boundary(&units, j);
+        assert!(!r, "CJK 句号后为中文句子, 不应判为引语逗号边界");
     }
 
     #[test]

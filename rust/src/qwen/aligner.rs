@@ -21,9 +21,34 @@ pub struct AlignedToken {
 pub struct AlignmentResult {
     pub units: Vec<AlignedToken>,
     pub elapsed_ms: u64,
-    /// 对齐质量: "ForcedAligned" (真实 GGUF 对齐) / "LinearFallback" (线性平分)
+    /// 对齐质量: "ForcedAligned" (真实 GGUF 对齐, 可能含部分段级线性回退)
+    /// / "LinearFallback"
     pub align_quality: String,
 }
+
+/// 单次对齐推理产物: 词在给定音频轴上的本地时间 + 置信度 
+#[derive(Debug, Clone)]
+struct AlignUnit {
+    /// 词表索引
+    word_idx: usize,
+    start_local_ms: u64,
+    end_local_ms: u64,
+    /// 两个 <timestamp> softmax 峰值置信度的最小值
+    confidence: f32,
+}
+
+/// 锚点置信度: 词置信 >= 此值视为可信锚点
+const CONF_ANCHOR: f32 = 0.3;
+/// 低置信阈值: 词置信 < 此值视为可疑 (文本与音频大概率不一致)
+const CONF_LOW: f32 = 0.05;
+/// 整块低置信词比例上限 (超过 -> 块级结果不可信, 走逐段重对齐)
+const LOW_CONF_RATIO_GLOBAL: f32 = 0.6;
+/// 段级低置信词比例上限 (超过 -> 该段重对齐结果不可信, 回退线性)
+const LOW_CONF_RATIO_SPAN: f32 = 0.5;
+/// 词时长下限 (低于视为挤压错位)
+const DUR_MIN_MS: u64 = 20;
+/// 段级重对齐的最小段时长 (过短的段不值得重对齐)
+const SPAN_MIN_REFINE_MS: u64 = 400;
 
 /// 拼接音频 -> 媒体时间轴的分段映射。
 /// VAD 切出的短段拼接成块时, 中间的静音被过滤, 拼接轴的局部时间
@@ -325,6 +350,14 @@ impl QwenAligner {
 
     /// 真实强制对齐 (GGUF 路线)。ONNX/GGUF 缺失时回退线性字符平分。
     /// `timeline` 把拼接音频的局部时间映射回媒体时间轴。
+    ///
+    /// 鲁棒性策略 (ASR 文本与音频不一致时, 防止单点错误污染整块):
+    ///   1. 先做块级对齐, 每个词附带时间戳 softmax 置信度;
+    ///   2. 块级结果健康时: 按时间中点把词归属到各 VAD 段, 仅对不健康的段局部重对齐;
+    ///   3. 块级结果不健康时: 所有段逐段独立重对齐 (文本缺失导致的未覆盖段
+    ///      由管线层"未覆盖段重解"补齐, 这里绝不把词硬塞进无关音频);
+    ///   4. 段级重对齐仍不健康时: 该段回退线性平分。
+    ///   错误因此被限制在单个 VAD 段 (秒级) 内, 不再波及整块。
     pub fn align(
         &mut self,
         samples_16k: &[f32],
@@ -373,24 +406,200 @@ impl QwenAligner {
             });
         }
 
-        // 2-4. ONNX 编码器 (mel -> frontend -> backend), 借用在块结束后释放
+        // 2. 块级对齐 (拼接轴本地时间 + 每词置信度)
+        let block_pass = match self.align_once(samples_16k, &words, cancel) {
+            Ok(units) => units,
+            Err(QwenError::Cancelled) => return Err(QwenError::Cancelled),
+            Err(e) => {
+                println!(
+                    "[aligner] block pass failed ({}), whole-block linear fallback",
+                    e
+                );
+                return Ok(AlignmentResult {
+                    units: linear_align(trimmed, segment_start_ms, segment_end_ms),
+                    elapsed_ms: start_time.elapsed().as_millis() as u64,
+                    align_quality: "LinearFallback".into(),
+                });
+            }
+        };
+
+        // 3. 无多段时间轴 (VAD 关闭/单段块): 块级健康直接用, 否则线性平分
+        if timeline.len() <= 1 {
+            if sequence_healthy(&block_pass, LOW_CONF_RATIO_GLOBAL) {
+                let items = block_pass
+                    .iter()
+                    .map(|u| AlignedToken {
+                        text: words[u.word_idx].clone(),
+                        start_ms: map_to_media(timeline, u.start_local_ms),
+                        end_ms: map_to_media(timeline, u.end_local_ms),
+                        confidence: Some(u.confidence),
+                    })
+                    .collect();
+                return Ok(AlignmentResult {
+                    units: reconcile(trimmed, items),
+                    elapsed_ms: start_time.elapsed().as_millis() as u64,
+                    align_quality: "ForcedAligned".into(),
+                });
+            }
+            return Ok(AlignmentResult {
+                units: linear_align(trimmed, segment_start_ms, segment_end_ms),
+                elapsed_ms: start_time.elapsed().as_millis() as u64,
+                align_quality: "LinearFallback".into(),
+            });
+        }
+
+        // 4. 多段块: 始终按时间中点归属到各段。全局健康时保留健康段的块级时间,
+        //    否则所有段逐段重对齐。不做按段时长比例分配词
+        let n_words = words.len();
+        let mids: Vec<u64> = block_pass
+            .iter()
+            .map(|u| (u.start_local_ms + u.end_local_ms) / 2)
+            .collect();
+        let attributed = attribute_by_time(&mids, timeline);
+        let global_healthy = sequence_healthy(&block_pass, LOW_CONF_RATIO_GLOBAL);
+
+        // 5. 逐段处理: 健康段保留块级时间, 其余段局部重对齐 (失败则该段线性平分)
+        let mut slots: Vec<Option<AlignedToken>> = vec![None; n_words];
+        let (mut kept, mut refined, mut linear_spans) = (0usize, 0usize, 0usize);
+        for (si, span) in timeline.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(QwenError::Cancelled);
+            }
+            let idxs = &attributed[si];
+            if idxs.is_empty() {
+                continue;
+            }
+            let span_ms = (span
+                .concat_end_sample
+                .saturating_sub(span.concat_start_sample) as u64)
+                * 1000
+                / 16000;
+
+            // 健康块内, 归属段也健康 (或段过短不值得重对齐) -> 保留块级时间
+            if global_healthy {
+                let span_units: Vec<AlignUnit> = idxs.iter().map(|&i| block_pass[i].clone()).collect();
+                if span_ms < SPAN_MIN_REFINE_MS
+                    || sequence_healthy(&span_units, LOW_CONF_RATIO_SPAN)
+                {
+                    for &i in idxs {
+                        let u = &block_pass[i];
+                        slots[i] = Some(AlignedToken {
+                            text: words[i].clone(),
+                            start_ms: map_to_media(timeline, u.start_local_ms),
+                            end_ms: map_to_media(timeline, u.end_local_ms),
+                            confidence: Some(u.confidence),
+                        });
+                    }
+                    kept += 1;
+                    continue;
+                }
+            }
+
+            // 局部重对齐: 只对齐本段音频 + 本段词表, 段间互不影响
+            let span_words: Vec<String> = idxs.iter().map(|&i| words[i].clone()).collect();
+            let sub_samples = span_samples(samples_16k, span);
+            let refined_units = self.align_once(sub_samples, &span_words, cancel);
+            let units: Vec<AlignedToken> = match refined_units {
+                Ok(units) if sequence_healthy(&units, LOW_CONF_RATIO_SPAN) => {
+                    refined += 1;
+                    units
+                        .iter()
+                        .map(|u| {
+                            let start_media = (span.source_start_ms + u.start_local_ms as i64)
+                                .clamp(span.source_start_ms, span.source_end_ms);
+                            let end_media = (span.source_start_ms + u.end_local_ms as i64)
+                                .clamp(span.source_start_ms, span.source_end_ms);
+                            AlignedToken {
+                                text: span_words[u.word_idx].clone(),
+                                start_ms: start_media as u64,
+                                end_ms: end_media as u64,
+                                confidence: Some(u.confidence),
+                            }
+                        })
+                        .collect()
+                }
+                Err(QwenError::Cancelled) => return Err(QwenError::Cancelled),
+                Ok(_) | Err(_) => {
+                    linear_spans += 1;
+                    linear_align(
+                        &span_words.join(" "),
+                        span.source_start_ms as u64,
+                        span.source_end_ms as u64,
+                    )
+                }
+            };
+            for (k, &i) in idxs.iter().enumerate() {
+                if let Some(tok) = units.get(k) {
+                    slots[i] = Some(tok.clone());
+                }
+            }
+        }
+
+        // 6. 组装 (每词必有归属段, None 仅为防御性兜底)
+        let mut items: Vec<AlignedToken> = Vec::with_capacity(n_words);
+        for i in 0..n_words {
+            match &slots[i] {
+                Some(tok) => items.push(tok.clone()),
+                None => items.push(AlignedToken {
+                    text: words[i].clone(),
+                    start_ms: segment_start_ms,
+                    end_ms: segment_start_ms + 1,
+                    confidence: None,
+                }),
+            }
+        }
+        items = reconcile(trimmed, items);
+
+        let quality = if kept == 0 && refined == 0 && linear_spans > 0 {
+            "LinearFallback"
+        } else {
+            "ForcedAligned"
+        };
+        println!(
+            "[aligner] block aligned {} words in {}ms (global_healthy={}, kept={}, refined={}, linear_spans={})",
+            words.len(),
+            start_time.elapsed().as_millis(),
+            global_healthy,
+            kept,
+            refined,
+            linear_spans
+        );
+
+        Ok(AlignmentResult {
+            units: items,
+            elapsed_ms: start_time.elapsed().as_millis() as u64,
+            align_quality: quality.into(),
+        })
+    }
+
+    /// 单次对齐推理: 音频 + 词表 -> 词级本地时间戳与置信度。
+    /// 不映射媒体时间轴; 词表为空返回空向量。
+    fn align_once(
+        &mut self,
+        samples_16k: &[f32],
+        words: &[String],
+        cancel: &AtomicBool,
+    ) -> Result<Vec<AlignUnit>, QwenError> {
+        if words.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pass_start = std::time::Instant::now();
+
+        // 1. mel (与 encoder 相同的归一化 log-mel; 行步长取返回的实际帧数
+        //    = samples.len()/160 + 1, 有效列 = samples.len()/160)
+        let (mel, mel_stride) = AudioProcessor::log_mel(samples_16k)?;
+        let n_frames = samples_16k.len() / 160;
+        if n_frames == 0 {
+            return Ok(Vec::new());
+        }
+        let audio_end_ms = (n_frames * 10) as i64;
+
+        // 2-3. ONNX 编码器 (mel -> frontend -> backend), 借用在块结束后释放
         let features = {
             let frontend = self.frontend.as_mut().unwrap();
             let backend = self.backend.as_mut().unwrap();
 
-            // 2. mel (与 encoder 相同的归一化 log-mel; 行步长取返回的实际帧数
-            //    = samples.len()/160 + 1, 有效列 = samples.len()/160)
-            let (mel, mel_stride) = AudioProcessor::log_mel(samples_16k)?;
-            let n_frames = samples_16k.len() / 160;
-            if n_frames == 0 {
-                return Ok(AlignmentResult {
-                    units: vec![],
-                    elapsed_ms: 0,
-                    align_quality: "ForcedAligned".into(),
-                });
-            }
-
-            // 3. frontend: 100 帧/块 -> 13 token/块, 拼接后按有效长度截断
+            // 2. frontend: 100 帧/块 -> 13 token/块, 拼接后按有效长度截断
             let pad_len = (CHUNK_FRAMES - (n_frames % CHUNK_FRAMES)) % CHUNK_FRAMES;
             let t_padded = n_frames + pad_len;
             let n_chunks = t_padded / CHUNK_FRAMES;
@@ -436,7 +645,7 @@ impl QwenAligner {
                 )));
             }
 
-            // 4. backend: 全零注意力掩码 (全局注意力, 与参考实现一致)
+            // 3. backend: 全零注意力掩码 (全局注意力, 与参考实现一致)
             let hidden_t = Tensor::<f32>::from_array((
                 [1i64, n_audio as i64, D_MODEL as i64],
                 hidden.into_boxed_slice(),
@@ -470,16 +679,16 @@ impl QwenAligner {
                     n_audio
                 )));
             }
-            (features, n_frames, n_audio, n_chunks)
+            (features, n_audio, n_chunks)
         };
-        let (features, n_frames, n_audio, n_chunks) = features;
+        let (features, n_audio, n_chunks) = features;
 
-        // 5. 组装序列: [audio_start] + audio×N + [audio_end] + w1 + ts + ts + w2 + ts + ts ...
+        // 4. 组装序列: [audio_start] + audio×N + [audio_end] + w1 + ts + ts + w2 + ts + ts ...
         //    ts 标记紧跟词后 (HaujetZhao GGUF 参考实现顺序)
         let mut post_ids: Vec<ll::llama_token> = vec![self.audio_end_id];
         let mut ts_pos_in_post: Vec<usize> = Vec::with_capacity(words.len() * 2);
         let mut post_len = 1usize; // audio_end
-        for w in &words {
+        for w in words {
             let word_tokens = self.tokenize(w)?;
             post_ids.extend_from_slice(&word_tokens);
             post_len += word_tokens.len();
@@ -491,7 +700,7 @@ impl QwenAligner {
             post_len += 1;
         }
 
-        // 6. llama 推理: 前缀 token + 音频嵌入 (4 轴 M-RoPE) + 后缀 token (ts 位置取 logits)
+        // 5. llama 推理: 前缀 token + 音频嵌入 (4 轴 M-RoPE) + 后缀 token (ts 位置取 logits)
         let mem = unsafe { ll::llama_get_memory(self.context) };
         unsafe { ll::llama_memory_clear(mem, true) };
 
@@ -501,8 +710,9 @@ impl QwenAligner {
         let post_start = 1 + n_audio;
         self.submit_token_batch_logits(&post_ids, post_start, &ts_pos_in_post)?;
 
-        // 7. 读取时间戳 logits: argmax(logits[:4000]) × 80ms (只读前缀, 不复制整词表)
+        // 6. 读取时间戳 logits: argmax(logits[:4000]) × 80ms + softmax 峰值置信度
         let mut raw_ts: Vec<f64> = Vec::with_capacity(ts_pos_in_post.len());
+        let mut ts_conf: Vec<f32> = Vec::with_capacity(ts_pos_in_post.len());
         for &i in &ts_pos_in_post {
             let logits_ptr = unsafe { ll::llama_get_logits_ith(self.context, i as i32) };
             if logits_ptr.is_null() {
@@ -511,35 +721,30 @@ impl QwenAligner {
                 ));
             }
             let logits = unsafe { std::slice::from_raw_parts(logits_ptr, TIMESTAMP_CLASSES) };
-            let argmax = (0..TIMESTAMP_CLASSES)
-                .max_by(|&a, &b| {
-                    logits[a]
-                        .partial_cmp(&logits[b])
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .unwrap_or(0);
+            let (argmax, conf) = timestamp_argmax_conf(logits);
             raw_ts.push(argmax as f64 * self.step_ms);
+            ts_conf.push(conf);
         }
 
-        // 8. LIS 修正 -> 逐词时间, 并通过 TimelineSpan 映射回媒体时间轴
-        let fixed = fix_timestamp(&raw_ts);
-        let mut items: Vec<AlignedToken> = words
+        // 7. LIS 修正 + 锚点插值 (低置信词用邻近高置信锚点插值, 阻断错误传播)
+        let mut fixed = fix_timestamp(&raw_ts);
+        let word_confs: Vec<f32> = words
             .iter()
             .enumerate()
-            .map(|(i, w)| {
-                let local_start = fixed.get(i * 2).copied().unwrap_or(0) as u64;
-                let local_end = fixed.get(i * 2 + 1).copied().unwrap_or(0) as u64;
-                AlignedToken {
-                    text: w.clone(),
-                    start_ms: map_to_media(timeline, local_start),
-                    end_ms: map_to_media(timeline, local_end),
-                    confidence: None,
-                }
+            .map(|(i, _)| ts_conf[2 * i].min(ts_conf[2 * i + 1]))
+            .collect();
+        anchor_interpolate(&mut fixed, &word_confs, audio_end_ms);
+
+        let units = words
+            .iter()
+            .enumerate()
+            .map(|(i, _)| AlignUnit {
+                word_idx: i,
+                start_local_ms: fixed[2 * i].max(0) as u64,
+                end_local_ms: fixed[2 * i + 1].max(0) as u64,
+                confidence: word_confs[i],
             })
             .collect();
-
-        // 9. reconcile: 从原始文本找回标点/空格, 重组时间戳序列
-        items = reconcile(trimmed, items);
 
         println!(
             "[aligner] aligned {} words ({} frames, {} audio tokens, {} chunks) in {}ms",
@@ -547,14 +752,9 @@ impl QwenAligner {
             n_frames,
             n_audio,
             n_chunks,
-            start_time.elapsed().as_millis()
+            pass_start.elapsed().as_millis()
         );
-
-        Ok(AlignmentResult {
-            units: items,
-            elapsed_ms: start_time.elapsed().as_millis() as u64,
-            align_quality: "ForcedAligned".into(),
-        })
+        Ok(units)
     }
 
     /// 提交 token 批次, 位置递增; 与解码器相同 (文本 token 的 M-RoPE 由 llama.cpp 自动处理)
@@ -682,6 +882,134 @@ impl QwenAligner {
             }
         }
         Ok(())
+    }
+}
+
+/// 时间戳 logits 的 argmax + softmax 峰值置信度 (前 TIMESTAMP_CLASSES 类)。
+fn timestamp_argmax_conf(logits: &[f32]) -> (usize, f32) {
+    let mut max_v = f32::NEG_INFINITY;
+    let mut argmax = 0usize;
+    for (k, &v) in logits.iter().enumerate() {
+        if v > max_v {
+            max_v = v;
+            argmax = k;
+        }
+    }
+    let mut sum = 0.0f32;
+    for &v in logits.iter() {
+        sum += (v - max_v).exp();
+    }
+    (argmax, 1.0 / sum.max(1e-6))
+}
+
+/// 低置信词的时间戳用邻近高置信锚点线性插值:
+/// 左右锚点都存在时在 [左锚词尾, 右锚词首] 内均分;
+/// 单侧锚点时另一侧用序列端点 (0 / audio_end_ms)。
+/// 锚点不足 2 个时不做任何处理 (由上层健康门控兜底)。
+fn anchor_interpolate(times: &mut [i64], word_confs: &[f32], audio_end_ms: i64) {
+    let n_words = word_confs.len();
+    if times.len() != n_words * 2 || n_words == 0 {
+        return;
+    }
+    let anchor_count = word_confs.iter().filter(|&&c| c >= CONF_ANCHOR).count();
+    if anchor_count < 2 {
+        return;
+    }
+    let mut i = 0usize;
+    while i < n_words {
+        if word_confs[i] >= CONF_LOW {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < n_words && word_confs[j] < CONF_LOW {
+            j += 1;
+        }
+        let left = (0..i).rev().find(|&k| word_confs[k] >= CONF_ANCHOR);
+        let right = (j..n_words).find(|&k| word_confs[k] >= CONF_ANCHOR);
+        let l = left.map(|k| times[2 * k + 1]).unwrap_or(0);
+        let r = right.map(|k| times[2 * k]).unwrap_or(audio_end_ms);
+        if r > l {
+            let step = (r - l) as f64 / (j - i) as f64;
+            for k in i..j {
+                times[2 * k] = l + (step * (k - i) as f64).round() as i64;
+                times[2 * k + 1] = l + (step * (k - i + 1) as f64).round() as i64;
+            }
+        } else {
+            for k in i..j {
+                times[2 * k] = l;
+                times[2 * k + 1] = l;
+            }
+        }
+        i = j;
+    }
+}
+
+/// 序列健康度: 时间单调 + 词时长合理 + 低置信词比例不超过 `max_low_ratio`。
+fn sequence_healthy(units: &[AlignUnit], max_low_ratio: f32) -> bool {
+    if units.is_empty() {
+        return true;
+    }
+    let mut prev_start = 0u64;
+    let mut prev_end = 0u64;
+    let mut durs: Vec<u64> = Vec::with_capacity(units.len());
+    for u in units {
+        if u.end_local_ms < u.start_local_ms {
+            return false;
+        }
+        if u.start_local_ms < prev_start || u.end_local_ms < prev_end {
+            return false;
+        }
+        prev_start = u.start_local_ms;
+        prev_end = u.end_local_ms;
+        durs.push(u.end_local_ms - u.start_local_ms);
+    }
+    if durs.iter().any(|&d| d < DUR_MIN_MS) {
+        return false;
+    }
+    durs.sort_unstable();
+    let median = durs[durs.len() / 2];
+    let max_d = durs[durs.len() - 1];
+    if max_d > median.saturating_mul(6).saturating_add(500) || max_d > 5000 {
+        return false;
+    }
+    let low = units.iter().filter(|u| u.confidence < CONF_LOW).count();
+    (low as f32) / (units.len() as f32) <= max_low_ratio
+}
+
+/// 按词时间中点 (拼接轴本地 ms) 归属到 VAD 段; 越界词钳到首/末段。
+fn attribute_by_time(word_mid_ms: &[u64], spans: &[TimelineSpan]) -> Vec<Vec<usize>> {
+    let mut out = vec![Vec::new(); spans.len()];
+    if spans.is_empty() {
+        return out;
+    }
+    for (wi, &mid_ms) in word_mid_ms.iter().enumerate() {
+        let mid_sample = mid_ms.saturating_mul(16);
+        let mut target = 0usize;
+        if mid_sample >= spans[0].concat_start_sample as u64 {
+            target = spans.len() - 1;
+            for (si, s) in spans.iter().enumerate() {
+                if mid_sample >= s.concat_start_sample as u64
+                    && mid_sample < s.concat_end_sample as u64
+                {
+                    target = si;
+                    break;
+                }
+            }
+        }
+        out[target].push(wi);
+    }
+    out
+}
+
+/// 取某段在拼接块内的音频切片 (越界钳制)。
+fn span_samples<'a>(samples: &'a [f32], span: &TimelineSpan) -> &'a [f32] {
+    let s = span.concat_start_sample.min(samples.len());
+    let e = span.concat_end_sample.min(samples.len());
+    if s < e {
+        &samples[s..e]
+    } else {
+        &[]
     }
 }
 
@@ -879,7 +1207,7 @@ fn reconcile(original_text: &str, items: Vec<AlignedToken>) -> Vec<AlignedToken>
                 text: matched,
                 start_ms: item.start_ms,
                 end_ms: item.end_ms,
-                confidence: None,
+                confidence: item.confidence,
             });
             curr_ptr = e;
             last_ts = item.end_ms;
@@ -1071,5 +1399,90 @@ mod tests {
         assert_eq!(out.len(), 5);
         assert_eq!(out[4].text, "。");
         assert_eq!(out[4].start_ms, 400);
+    }
+
+    #[test]
+    fn timestamp_conf_peaked_and_flat() {
+        let (argmax, conf) = timestamp_argmax_conf(&[0.0, 10.0, 0.0]);
+        assert_eq!(argmax, 1);
+        assert!(conf > 0.99);
+        let (_, conf_flat) = timestamp_argmax_conf(&[0.0, 0.0, 0.0]);
+        assert!((conf_flat - 1.0 / 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn anchor_interpolate_repairs_low_conf_run() {
+        let mut times = vec![0, 100, 100, 200, 200, 300, 300, 400, 400, 500];
+        let confs = vec![0.9, 0.01, 0.01, 0.9, 0.9];
+        anchor_interpolate(&mut times, &confs, 500);
+        // 词 1..2 在锚点 0 (尾 100) 与锚点 3 (首 300) 之间均分
+        assert_eq!(times[2], 100);
+        assert_eq!(times[3], 200);
+        assert_eq!(times[4], 200);
+        assert_eq!(times[5], 300);
+        // 锚点与尾部词不受影响
+        assert_eq!(times[0], 0);
+        assert_eq!(times[1], 100);
+        assert_eq!(times[9], 500);
+    }
+
+    #[test]
+    fn anchor_interpolate_trailing_run_uses_audio_end() {
+        let mut times = vec![0, 100, 100, 100, 100, 100];
+        let confs = vec![0.9, 0.9, 0.01];
+        anchor_interpolate(&mut times, &confs, 400);
+        // 词 2 填满左锚词尾 100 与音频末尾 400 之间
+        assert_eq!(times[4], 100);
+        assert_eq!(times[5], 400);
+    }
+
+    #[test]
+    fn attribute_by_time_midpoints() {
+        let spans = vec![
+            TimelineSpan {
+                concat_start_sample: 0,
+                concat_end_sample: 80000,
+                source_start_ms: 0,
+                source_end_ms: 5000,
+            },
+            TimelineSpan {
+                concat_start_sample: 80000,
+                concat_end_sample: 160000,
+                source_start_ms: 13000,
+                source_end_ms: 18000,
+            },
+        ];
+        let attr = attribute_by_time(&[0, 4000, 5000, 12000], &spans);
+        assert_eq!(attr[0], vec![0, 1]);
+        assert_eq!(attr[1], vec![2, 3]);
+    }
+
+    #[test]
+    fn sequence_health_detects_broken() {
+        let mk = |s: u64, e: u64, c: f32| AlignUnit {
+            word_idx: 0,
+            start_local_ms: s,
+            end_local_ms: e,
+            confidence: c,
+        };
+        // 健康
+        assert!(sequence_healthy(
+            &[mk(0, 100, 0.9), mk(100, 200, 0.8), mk(200, 300, 0.9)],
+            0.6
+        ));
+        // 挤压 (20ms 下限)
+        assert!(!sequence_healthy(&[mk(0, 10, 0.9)], 0.6));
+        // 逆序 (词尾早于上一词词尾)
+        assert!(!sequence_healthy(&[mk(0, 100, 0.9), mk(50, 80, 0.9)], 0.6));
+        // 低置信比例超限
+        assert!(!sequence_healthy(
+            &[mk(0, 100, 0.01), mk(100, 200, 0.01), mk(200, 300, 0.9)],
+            0.6
+        ));
+        // 单个超长词 (超过 6×中位数+500)
+        assert!(!sequence_healthy(
+            &[mk(0, 100, 0.9), mk(100, 200, 0.9), mk(200, 3000, 0.9)],
+            0.6
+        ));
     }
 }
