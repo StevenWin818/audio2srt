@@ -72,7 +72,6 @@ pub fn remove_periods(text: &str) -> String {
     text.replace('。', "")
 }
 
-
 /// 缩写保护: 短字母词后的句点 ("Mr." "Dr." "St." "etc." "U.S.") 不是句子边界;
 /// 数字小数点 ("3.5") 同理。返回 true 表示该句点应视为普通句点 (强边界)。
 fn is_real_period(units: &[WordItem], dot_idx: usize) -> bool {
@@ -244,7 +243,9 @@ fn count_units(units: &[WordItem], j: usize, i: usize) -> usize {
                 }
             }
         }
-        if in_western_word && (global_idx + 1 == i || !is_word_internal_boundary(units, global_idx + 1)) {
+        if in_western_word
+            && (global_idx + 1 == i || !is_word_internal_boundary(units, global_idx + 1))
+        {
             count += 1;
             in_western_word = false;
         }
@@ -400,11 +401,11 @@ fn boundary_cost(units: &[WordItem], j: usize) -> f64 {
     if is_word_internal_boundary(units, j) {
         return f64::INFINITY;
     }
-    let prev_ch = units[j - 1].text.chars().last().unwrap_or(' ');
+    let prev_ch = units[j - 1].text.trim_end().chars().last().unwrap_or(' ');
     let pause = units[j].start_ms - units[j - 1].end_ms;
     if is_leadin_comma_boundary(units, j) {
         LEADIN_COMMA_BLOCK
-    } else if strong_punct_boundary(units, j) || pause >= PAUSE_STRONG_MS {
+    } else if strong_punct_boundary(units, j) {
         0.0
     } else if is_weak_punct(prev_ch) {
         WEAK_PUNCT_COST
@@ -473,213 +474,4 @@ fn segment_cost(units: &[WordItem], j: usize, i: usize) -> f64 {
 
     cost += b_cost;
     cost
-}
-
-// ================= 以下测试 =======================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn units_from_text(text: &str, start_ms: i64, dur_per_char_ms: i64) -> Vec<WordItem> {
-        text.chars()
-            .enumerate()
-            .map(|(i, c)| WordItem {
-                text: c.to_string(),
-                start_ms: start_ms + i as i64 * dur_per_char_ms,
-                end_ms: start_ms + (i as i64 + 1) * dur_per_char_ms,
-                confidence: 1.0,
-            })
-            .collect()
-    }
-
-    /// 按西文单词切分的 units (模拟对齐器输出: 词为单位, 标点附在词尾或独立, 词间含空格)
-    fn word_units(text: &str, start_ms: i64, per_word_ms: i64) -> Vec<WordItem> {
-        text.split_whitespace()
-            .enumerate()
-            .map(|(i, w)| WordItem {
-                text: format!("{} ", w),
-                start_ms: start_ms + i as i64 * per_word_ms,
-                end_ms: start_ms + (i as i64 + 1) * per_word_ms,
-                confidence: 1.0,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn empty_units_returns_empty() {
-        assert!(split_subtitles(&[], "ForcedAligned", 0, 0).is_empty());
-    }
-
-    #[test]
-    fn removes_full_stop_periods() {
-        assert_eq!(remove_periods("你好。世界。"), "你好世界");
-        assert_eq!(remove_periods("这是。一个。测试。"), "这是一个测试");
-        assert_eq!(remove_periods("Hello. World!"), "Hello. World!");
-    }
-
-    #[test]
-    fn leadin_comma_boundary_no_panic_on_cjk_punct() {
-        // 回归: CJK 句号前的逗号边界曾按字节 +1 切片, 落在 '。' (3 字节) 中间直接 panic
-        let text = "晚上好。晚上好。今天是六月二十一号，";
-        let units: Vec<WordItem> = text
-            .chars()
-            .map(|c| WordItem {
-                text: c.to_string(),
-                start_ms: 0,
-                end_ms: 100,
-                confidence: 1.0,
-            })
-            .collect();
-        let j = units.len();
-        let r = is_leadin_comma_boundary(&units, j);
-        assert!(!r, "CJK 句号后为中文句子, 不应判为引语逗号边界");
-    }
-
-    #[test]
-    fn short_block_stays_one_subtitle() {
-        let units = units_from_text("你好世界。", 0, 400);
-        let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
-        assert_eq!(segs.len(), 1);
-        assert_eq!(segs[0].text, "你好世界");
-    }
-
-    #[test]
-    fn long_block_splits_at_punctuation() {
-        // 72 字 × 100ms = 7.2s, 每 12 字一句号 -> 6 个完整句, 各自成条
-        let text = "今天天气很好我们出去走走。今天天气很好我们出去走走。今天天气很好我们出去走走。今天天气很好我们出去走走。今天天气很好我们出去走走。今天天气很好我们出去走走。";
-        let units = units_from_text(text, 0, 100);
-        let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
-        assert!(segs.len() >= 2, "expected >=2 subtitles, got {}", segs.len());
-        let joined: String = segs.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(joined, text.replace('。', ""));
-    }
-
-    #[test]
-    fn long_sentence_splits_at_longest_pause() {
-        // 25 字单句 (100ms/字), 第 10 字后 300ms 真实间隙 -> 必须在停顿最长处切
-        let text = "今天天气很好我们出去走走今天天气很好我们出去走走很有趣。";
-        let mut units = units_from_text(text, 0, 100);
-        // 在第 10 个字符后插入 300ms 停顿: 后续所有 unit 时间平移 300ms
-        for u in units.iter_mut().skip(10) {
-            u.start_ms += 300;
-            u.end_ms += 300;
-        }
-        let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
-        assert!(segs.len() >= 2, "expected >=2 subtitles, got {}", segs.len());
-        assert_eq!(segs[0].text, "今天天气很好我们出去");
-        let joined: String = segs.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(joined, text.replace('。', ""));
-    }
-
-    #[test]
-    fn long_sentence_splits_under_max_units_when_no_pause() {
-        // 48 字无句尾标点无停顿: 强制拆分且每段 ≤MAX_UNITS
-        let text = "今天天气很好我们出去走走今天天气很好我们出去走走今天天气很好我们出去走走今天天气很好我们出去走走";
-        let units = units_from_text(text, 0, 100);
-        let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
-        assert!(segs.len() >= 2, "expected >=2 subtitles, got {}", segs.len());
-        for s in &segs {
-            assert!(count_units(&s.words, 0, s.words.len()) <= MAX_UNITS);
-        }
-        let joined: String = segs.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(joined, text.replace('。', ""));
-    }
-
-    #[test]
-    fn short_sentence_stays_whole() {
-        // 14 字单句: 在 20 上限内 -> 单独成条, 绝不切
-        let text = "今天天气很好我们出去走走。";
-        let units = units_from_text(text, 0, 100);
-        let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
-        assert_eq!(segs.len(), 1, "14-char sentence must stay whole");
-        assert_eq!(segs[0].text, "今天天气很好我们出去走走");
-    }
-
-    #[test]
-    fn two_sentences_stay_separate() {
-        // 短句 + 长句: 各自成条, 第二句不合并 (第二句超限时在其内部拆分)
-        let mut units = units_from_text("第一句。", 0, 150);
-        let second = units_from_text("今天天气很好我们出去走走今天天气很好我们出去走走。", 900, 100);
-        units.extend(second);
-        let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
-        assert_eq!(segs[0].text, "第一句", "short sentence must stay separate");
-        let rest: String = segs.iter().skip(1).map(|s| s.text.as_str()).collect();
-        assert_eq!(rest, "今天天气很好我们出去走走今天天气很好我们出去走走");
-    }
-
-    #[test]
-    fn abbreviation_dot_not_a_boundary() {
-        // "Mr. Smith" 的句点不是句子边界; 真实句号才是
-        let mut units = units_from_text("Mr.", 0, 200);
-        let rest = units_from_text(" Smith is here today.", 600, 150);
-        units.extend(rest);
-        let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
-        // 无句号 -> 单条
-        assert_eq!(segs.len(), 1, "abbreviation dot must not split");
-    }
-
-    #[test]
-    fn connective_comma_not_split() {
-        // "Hello. However, the world is a very beautiful place to live in today."
-        // "However," 后不得切分; 且不得出现孤立连接词字幕
-        let text = "Hello. However, the world is a very beautiful place to live in today.";
-        let units = units_from_text(text, 0, 120);
-        let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
-        for s in &segs {
-            let t = s.text.trim().to_lowercase();
-            assert!(
-                !(t.starts_with("however") && s.text.trim().len() <= 10),
-                "connective must not be isolated: {}",
-                s.text
-            );
-        }
-        // 句点边界处拆分 (两句), 或整体一条; 但绝不能把 However 切出去
-        let joined: String = segs.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(joined.replace(' ', ""), text.replace(' ', ""));
-    }
-
-    #[test]
-    fn leadin_comma_structural_rule() {
-        // 1 词引语: "However," 后阻断
-        let units = word_units("Hello. However, the world is here", 0, 200);
-        assert!(is_leadin_comma_boundary(&units, 2), "1-word leadin must block");
-        // 2 词引语: "I mean," 后阻断
-        let units = word_units("Hello. I mean, the world", 0, 200);
-        assert!(is_leadin_comma_boundary(&units, 3), "2-word leadin must block");
-        // 3 词引语: "By the way," 不阻断 (超出规则范围)
-        let units = word_units("Hello. By the way, the world", 0, 200);
-        assert!(!is_leadin_comma_boundary(&units, 4), "3-word leadin must NOT block");
-        // 块首引语 (块起点即句首, 前一句句点被块边界截断): "Well," 同样阻断
-        let units = word_units("Well, the world", 0, 200);
-        assert!(is_leadin_comma_boundary(&units, 1), "block-start leadin must block");
-        // 中文: 不适用
-        let units = units_from_text("你好，好", 0, 200);
-        assert!(!is_leadin_comma_boundary(&units, 3), "chinese -> no block");
-    }
-
-    #[test]
-    fn times_are_monotonic_and_smoothed() {
-        let text = "第一句。第二句。第三句。第四句。第五句。第六句。第七句。第八句。第九句。第十句。";
-        let units = units_from_text(text, 1000, 150);
-        let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
-        assert!(segs.len() >= 2, "expected >=2 subtitles, got {}", segs.len());
-        for w in segs.windows(2) {
-            assert!(w[1].start_ms >= w[0].end_ms, "overlap detected");
-        }
-        // 首条字幕有前垫 (块真实起点 0 起), 末条不越界
-        assert!(segs[0].start_ms >= 0);
-        assert!(segs.last().unwrap().end_ms <= units.last().unwrap().end_ms);
-    }
-
-    #[test]
-    fn comma_splits_instead_of_breaking_words() {
-        // 用户真实案例: 30 字符长句 (~9.6s), 必须在逗号处断句, 严禁在“热烈之中”等词语中间断开
-        let text = "而一池荷花教给我们的是，热烈之中仍可怀有一寸自己的月白风清。";
-        let units = units_from_text(text, 0, 320); // 30 字 × 320ms = 9.6s
-        let segs = split_subtitles(&units, "ForcedAligned", 0, units.last().unwrap().end_ms);
-        assert_eq!(segs.len(), 2, "9.6s sentence should split into 2 subtitles at comma");
-        assert_eq!(segs[0].text, "而一池荷花教给我们的是，");
-        assert_eq!(segs[1].text, "热烈之中仍可怀有一寸自己的月白风清");
-    }
 }

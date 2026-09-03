@@ -5,6 +5,8 @@ pub mod context;
 pub mod decoder;
 pub mod encoder;
 pub mod error;
+pub mod g2p;
+pub mod lattice;
 pub mod runtime;
 
 pub use aligner::{AlignedToken, AlignmentResult, QwenAligner};
@@ -14,4 +16,6 @@ pub use context::{RuntimeCacheKey, GLOBAL_QWEN_CACHE};
 pub use decoder::{DecodeRequest, DecodeResult, QwenDecoder};
 pub use encoder::{EncoderOutput, QwenEncoder};
 pub use error::QwenError;
+pub use g2p::G2pEngine;
+pub use lattice::LatticeAligner;
 pub use runtime::QwenRuntime;

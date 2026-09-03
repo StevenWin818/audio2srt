@@ -218,6 +218,8 @@ pub fn preload_qwen_model(
     encoder_backend: crate::qwen::backend::EncoderBackend,
     decoder_backend: crate::qwen::backend::DecoderBackend,
 ) -> Result<(), String> {
+    // 用户主动切换模型/发起预加载: 重置取消标记，防止前一次转写结束或取消状态残留
+    SHOULD_CANCEL.store(false, Ordering::SeqCst);
     println!(
         "[Rust] Spawning background thread for preloading Qwen decoder: {} (decoder={:?}, enc={:?}, dec={:?})",
         asr_model_dir, decoder_file, encoder_backend, decoder_backend
@@ -1435,6 +1437,17 @@ struct EncodedTask {
     timeline: Vec<crate::qwen::aligner::TimelineSpan>,
 }
 
+struct DecodedTask {
+    #[allow(dead_code)]
+    seq: u64,
+    samples: Vec<f32>,
+    start_ms: i64,
+    end_ms: i64,
+    timeline: Vec<crate::qwen::aligner::TimelineSpan>,
+    final_text: String,
+    detected_language: Option<String>,
+}
+
 /// 连续解码为空(模型跳过)的音频最大合并时长，超过则丢弃避免污染后续识别。
 const MAX_MERGE_SECONDS: usize = 10;
 
@@ -1617,125 +1630,149 @@ fn spawn_qwen_worker(
     // 主线程不再持有 sender (各 worker 持有 clone)
     drop(tx_encoded);
 
+    // 解码与对齐异步流水线：
+    // GPU 解码线程完成当前段文本解码后，立即送入 rx_decoded 通道；
+    // 独立的 CPU 对齐线程并行执行 Lattice 强制对齐与 split_subtitles 分句。
+    // 由于 CPU 对齐耗时 (~0.3s) 显著小于 GPU 解码耗时 (~1.5s)，对齐等待期被 100% 隐藏，实现整体 1.0x 极速吞吐。
+    let (tx_decoded, rx_decoded) = std::sync::mpsc::sync_channel::<DecodedTask>(2);
+
     let runtime_decoder = runtime.clone();
-    let decoder_handle = {
-        thread::spawn(move || -> Result<()> {
-            register_thread_as_pro_audio();
-            let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
-            let max_merge_samples = MAX_MERGE_SECONDS * 16000;
-            // 合并缓冲：模型对嘈杂/语言切换初期的短片段倾向输出空结果(跳过)。
-            // 空结果不直接丢弃，而是与下一个片段拼接后整体重编码重试，
-            // 直到模型能识别为止。
-            let mut pending: Option<(Vec<f32>, i64, Vec<crate::qwen::aligner::TimelineSpan>)> = None;
+    let language_decoder = language.clone();
+    let decoder_handle = thread::spawn(move || -> Result<()> {
+        register_thread_as_pro_audio();
+        let max_merge_samples = MAX_MERGE_SECONDS * 16000;
+        let mut pending: Option<(Vec<f32>, i64, Vec<crate::qwen::aligner::TimelineSpan>)> = None;
+        let mut next_seq = 0u64;
+        let mut ordered: std::collections::BTreeMap<u64, EncodedTask> =
+            std::collections::BTreeMap::new();
+        let mut last_decoded_text: Option<String> = None;
 
-            // 编码线程池并行完成，按 seq 恢复原始顺序后再处理
-            let mut next_seq = 0u64;
-            let mut ordered: std::collections::BTreeMap<u64, EncodedTask> =
-                std::collections::BTreeMap::new();
-            let mut sink_closed = false;
-
-            loop {
-                match rx_encoded.recv() {
-                    Ok(task) => {
-                        ordered.insert(task.seq, task);
-                    }
-                    Err(_) => break,
+        loop {
+            match rx_encoded.recv() {
+                Ok(task) => {
+                    ordered.insert(task.seq, task);
                 }
-                if SHOULD_CANCEL.load(Ordering::SeqCst) {
-                    break;
-                }
+                Err(_) => break,
+            }
+            if SHOULD_CANCEL.load(Ordering::SeqCst) {
+                break;
+            }
 
                 // 按 seq 顺序取出连续可处理的段
-                while let Some(mut task) = ordered.remove(&next_seq) {
-                    next_seq += 1;
+            while let Some(mut task) = ordered.remove(&next_seq) {
+                next_seq += 1;
                     // 上下文记忆: 未禁用上下文时, 把上一段转写文本注入 system prompt,
                     // 帮助模型保持术语/说话风格一致性 (默认关闭)
+                let context_for_next: Option<String> = context_prompt.clone().or_else(|| {
+                    if no_context {
+                        None
+                    } else {
+                        last_decoded_text.clone()
+                    }
+                });
+                if let Some(decoded) = decode_encoded_task(
+                    &mut task,
+                    &mut pending,
+                    &runtime_decoder,
+                    max_merge_samples,
+                    &language_decoder,
+                    &context_for_next,
+                    to_simplified,
+                    no_state_history,
+                    temperature,
+                    temperature_inc,
+                    entropy_thold,
+                    logprob_thold,
+                )? {
+                    last_decoded_text = Some(decoded.final_text.clone());
+                    if tx_decoded.send(decoded).is_err() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        // 通道关闭后清空剩余的乱序缓冲 (按序处理)
+        loop {
+            match ordered.keys().next() {
+                Some(&k) if k == next_seq => {
+                    let mut task = ordered.remove(&k).unwrap();
+                    next_seq += 1;
                     let context_for_next: Option<String> = context_prompt.clone().or_else(|| {
                         if no_context {
                             None
                         } else {
-                            all_segments.last().map(|s| s.text.clone())
+                            last_decoded_text.clone()
                         }
                     });
-                    if !process_encoded_task(
+                    if let Some(decoded) = decode_encoded_task(
                         &mut task,
                         &mut pending,
                         &runtime_decoder,
                         max_merge_samples,
-                        &language,
+                        &language_decoder,
                         &context_for_next,
-                        &sink,
-                        &mut all_segments,
                         to_simplified,
-                        total_duration,
                         no_state_history,
                         temperature,
                         temperature_inc,
                         entropy_thold,
                         logprob_thold,
                     )? {
-                        sink_closed = true;
-                        break;
+                        last_decoded_text = Some(decoded.final_text.clone());
+                        if tx_decoded.send(decoded).is_err() {
+                            return Ok(());
+                        }
                     }
                 }
-                if sink_closed {
-                    break;
-                }
-            }
-            if !sink_closed {
-                // 通道关闭后清空剩余的乱序缓冲 (按序处理)；
-                // 若仍有 seq 空洞 (理论上 worker 已保证连续，这里兜底) 跳过缺失 seq
-                loop {
-                    match ordered.keys().next() {
-                        Some(&k) if k == next_seq => {
-                            let mut task = ordered.remove(&k).unwrap();
-                            next_seq += 1;
-                            let context_for_next: Option<String> = context_prompt.clone().or_else(|| {
-                                if no_context {
-                                    None
-                                } else {
-                                    all_segments.last().map(|s| s.text.clone())
-                                }
-                            });
-                            if !process_encoded_task(
-                                &mut task,
-                                &mut pending,
-                                &runtime_decoder,
-                                max_merge_samples,
-                                &language,
-                                &context_for_next,
-                                &sink,
-                                &mut all_segments,
-                                to_simplified,
-                                total_duration,
-                                no_state_history,
-                                temperature,
-                                temperature_inc,
-                                entropy_thold,
-                                logprob_thold,
-                            )? {
-                                sink_closed = true;
-                                break;
-                            }
-                        }
-                        Some(&k) => {
-                            // 空洞: 缺失的 seq 永远不会到达，跳过
-                            println!("[Rust] Qwen: skipping missing seq {} (hole)", next_seq);
-                            while next_seq < k {
-                                next_seq += 1;
-                            }
-                        }
-                        None => break,
+                Some(&k) => {
+                    println!("[Rust] Qwen: skipping missing seq {} (hole)", next_seq);
+                    while next_seq < k {
+                        next_seq += 1;
                     }
                 }
+                None => break,
             }
+        }
+        Ok(())
+    });
 
-            if !sink_closed {
-                let _ = sink.add(TranscriptionEvent::Success(all_segments));
+    let runtime_aligner = runtime.clone();
+    let sink_aligner = sink.clone();
+    let language_aligner = language.clone();
+    let aligner_handle = thread::spawn(move || -> Result<()> {
+        register_thread_as_pro_audio();
+        let mut all_segments: Vec<TranscriptionSegment> = Vec::new();
+        let mut sink_closed = false;
+
+        while let Ok(task) = rx_decoded.recv() {
+            if SHOULD_CANCEL.load(Ordering::SeqCst) {
+                break;
             }
-            Ok(())
-        })
-    };
+            if !process_decoded_task(
+                task,
+                &runtime_aligner,
+                &language_aligner,
+                &sink_aligner,
+                &mut all_segments,
+                total_duration,
+                to_simplified,
+                temperature,
+                temperature_inc,
+                entropy_thold,
+                logprob_thold,
+            )? {
+                sink_closed = true;
+                SHOULD_CANCEL.store(true, Ordering::SeqCst);
+                break;
+            }
+        }
+
+        if !sink_closed && !SHOULD_CANCEL.load(Ordering::SeqCst) {
+            let _ = sink_aligner.add(TranscriptionEvent::Success(all_segments));
+        }
+        Ok(())
+    });
 
     thread::spawn(move || -> Result<()> {
         // 编码线程返回 Err 不致命 (单段编码失败已通过 None 标记跳过)，
@@ -1751,34 +1788,35 @@ fn spawn_qwen_worker(
         }
         decoder_handle
             .join()
-            .map_err(|_| anyhow!("Qwen decoder thread panicked"))?
+            .map_err(|_| anyhow!("Qwen decoder thread panicked"))??;
+        aligner_handle
+            .join()
+            .map_err(|_| anyhow!("Qwen aligner thread panicked"))??;
+        Ok(())
     })
 }
 
-/// 解码一个已编码的段 (含合并重试逻辑)，由 decoder 线程按 seq 顺序调用。
-/// 返回 Ok(true) 表示继续处理; Ok(false) 表示 sink 已关闭 (调用方应立即停止);
-/// Err 上抛给调用方终止管道。
+/// 解码一个已编码的段 (含合并重试与截断修复逻辑)，由 decoder 线程在 GPU 上执行。
+/// 成功解码后返回 DecodedTask 供下游独立对齐线程并行处理；
+/// 跳过/合并不成时返回 Ok(None)。
 #[allow(clippy::too_many_arguments)]
-fn process_encoded_task(
+fn decode_encoded_task(
     task: &mut EncodedTask,
     pending: &mut Option<(Vec<f32>, i64, Vec<crate::qwen::aligner::TimelineSpan>)>,
     runtime: &Arc<crate::qwen::runtime::QwenRuntime>,
     max_merge_samples: usize,
     language: &Option<String>,
     context_prompt: &Option<String>,
-    sink: &Arc<dyn TranscriptionSink>,
-    all_segments: &mut Vec<TranscriptionSegment>,
     to_simplified: bool,
-    total_duration: f64,
     no_state_history: bool,
     temperature: f32,
     temperature_inc: f32,
     entropy_thold: f32,
     logprob_thold: f32,
-) -> Result<bool> {
+) -> Result<Option<DecodedTask>> {
     // 编码失败/跳过的标记段 (enc_out=None): 直接跳过，不参与合并
     let Some(mut enc_out) = task.enc_out.take() else {
-        return Ok(true);
+        return Ok(None);
     };
 
     // 与上一个"空结果"片段拼接
@@ -1832,13 +1870,13 @@ fn process_encoded_task(
         Ok(res) => res,
         Err(e) => {
             if matches!(e, QwenError::Cancelled) {
-                return Ok(true);
+                return Ok(None);
             }
             // 解码失败与空结果一致处理: 保留音频与下一个片段合并重试,
             // 避免该段语音静默丢失 (合并超过上限仍失败时由 pending 丢弃逻辑兜底)
             println!("[Rust] Qwen transcribe segment error: {:?}, keep audio for merge retry", e);
             *pending = Some((task.samples.clone(), task.start_ms, task.timeline.clone()));
-            return Ok(true);
+            return Ok(None);
         }
     };
 
@@ -1850,7 +1888,7 @@ fn process_encoded_task(
     if final_text.is_empty() {
         // 模型跳过：保留音频待与下一个片段合并重试
         *pending = Some((task.samples.clone(), task.start_ms, task.timeline.clone()));
-        return Ok(true);
+        return Ok(None);
     }
 
     if to_simplified {
@@ -1928,12 +1966,40 @@ fn process_encoded_task(
         }
     }
 
+    Ok(Some(DecodedTask {
+        seq: task.seq,
+        samples: std::mem::take(&mut task.samples),
+        start_ms: task.start_ms,
+        end_ms: task.end_ms,
+        timeline: std::mem::take(&mut task.timeline),
+        final_text,
+        detected_language: decode_res.detected_language,
+    }))
+}
+
+/// 对齐已解码的段并生成切分字幕，由下游独立 CPU 线程并发执行。
+#[allow(clippy::too_many_arguments)]
+fn process_decoded_task(
+    mut task: DecodedTask,
+    runtime: &Arc<crate::qwen::runtime::QwenRuntime>,
+    language: &Option<String>,
+    sink: &Arc<dyn TranscriptionSink>,
+    all_segments: &mut Vec<TranscriptionSegment>,
+    total_duration: f64,
+    to_simplified: bool,
+    temperature: f32,
+    temperature_inc: f32,
+    entropy_thold: f32,
+    logprob_thold: f32,
+) -> Result<bool> {
+    let mut final_text = std::mem::take(&mut task.final_text);
     // 强制对齐: 传入拼接时间轴映射; 语言优先用解码器检测到的语言 (自动模式)
-    let align_language = if decode_res.detected_language.is_some() {
-        &decode_res.detected_language
+    let align_language = if task.detected_language.is_some() {
+        &task.detected_language
     } else {
         language
     };
+
     let (mut align_quality, mut word_items) = match runtime.align_segment(
         &task.samples,
         &final_text,
@@ -1998,6 +2064,40 @@ fn process_encoded_task(
                 block_norm.len()
             );
         } else {
+            let repair_decode = |samples: &[f32]| -> Option<String> {
+                let enc = match runtime.encode_segment(samples) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        println!("[Rust] repair encode error: {:?}", e);
+                        return None;
+                    }
+                };
+                match runtime.decode_segment(
+                    &enc,
+                    language.as_deref(),
+                    None,
+                    Some(max_tokens_for_samples(samples)),
+                    temperature,
+                    temperature_inc,
+                    entropy_thold,
+                    logprob_thold,
+                    true,
+                ) {
+                    Ok(res) => {
+                        let t = res.text.trim().to_string();
+                        if t.is_empty() {
+                            None
+                        } else {
+                            Some(t)
+                        }
+                    }
+                    Err(e) => {
+                        println!("[Rust] repair decode error: {:?}", e);
+                        None
+                    }
+                }
+            };
+
             let mut repairs: Vec<(usize, String)> = Vec::new();
             for (si, span) in task.timeline.iter().enumerate() {
                 if repairs.len() >= MAX_REPAIR_SPANS {
@@ -2016,9 +2116,12 @@ fn process_encoded_task(
                 if s >= e {
                     continue;
                 }
-                let Some(t) = repair_decode(&task.samples[s..e]) else {
+                let Some(mut t) = repair_decode(&task.samples[s..e]) else {
                     continue;
                 };
+                if to_simplified {
+                    t = convert_chinese(t, true);
+                }
                 let norm: String = t.chars().filter(|c| c.is_alphanumeric()).collect();
                 if norm.is_empty() || block_norm.contains(&norm) {
                     println!(
@@ -2734,6 +2837,7 @@ mod tests {
             let (done_tx, done_rx) = std::sync::mpsc::channel();
 
             struct ExportSink {
+                #[allow(dead_code)]
                 srt_path: String,
                 segments: Mutex<Vec<TranscriptionSegment>>,
                 done_tx: std::sync::mpsc::Sender<()>,

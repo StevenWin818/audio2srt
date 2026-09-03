@@ -3,7 +3,8 @@ use crate::qwen::backend::{DecoderBackend, EncoderBackend};
 use crate::qwen::decoder::{DecodeRequest, DecodeResult, QwenDecoder};
 use crate::qwen::encoder::{EncoderOutput, QwenEncoder};
 use crate::qwen::error::QwenError;
-use std::sync::atomic::AtomicBool;
+use crate::qwen::lattice::{language_supported as lattice_language_supported, LatticeAligner};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// encoder 未加载时的状态哨兵值 (Dart 侧 settings_view 依赖此值显示"未加载"状态)。
@@ -16,6 +17,12 @@ pub struct QwenRuntime {
     pub asr_encoder: parking_lot::Mutex<Option<QwenEncoder>>,
     pub asr_decoder: parking_lot::Mutex<QwenDecoder>,
     pub aligner: Option<parking_lot::Mutex<QwenAligner>>,
+    /// LattifAI Lattice-1 对齐器 (可选): en/zh/de 且资产就绪时优先使用,
+    /// 失败/不健康自动回退 self.aligner (Qwen3-ForcedAligner)。
+    /// Mutex<Option<..>>: 支持运行时启动后才放入资产的懒加载。
+    pub lattice_aligner: parking_lot::Mutex<Option<LatticeAligner>>,
+    /// 懒探测失败哨兵: 置位后本次运行时生命周期内不再重试 Lattice 加载
+    lattice_probe_failed: AtomicBool,
     pub cancel: std::sync::Arc<AtomicBool>,
     /// 模型目录 (供 UI 显示)
     pub model_dir: String,
@@ -68,10 +75,31 @@ impl QwenRuntime {
             .file_name()
             .map(|f| f.to_string_lossy().into_owned())
             .unwrap_or_default();
+        // Lattice-1 可选资产探测: 命中约定目录且四件套齐全才加载;
+        // 任何失败只打日志, 不阻断运行时 (Qwen 对齐器仍是兜底)。
+        // 加载失败也会在首次对齐时懒重试一次 (lattice_probe_failed 未置位前)。
+        let mut lattice_aligner = None;
+        if let Some(lattice_dir) = crate::qwen::lattice::probe_lattice_dir(asr_model_dir) {
+            match LatticeAligner::load(&lattice_dir) {
+                Ok(a) => {
+                    println!("[runtime] Lattice-1 aligner enabled: {}", lattice_dir);
+                    lattice_aligner = Some(a);
+                }
+                Err(e) => {
+                    println!("[runtime] Lattice-1 assets found at {} but load failed, disabled for this runtime: {}", lattice_dir, e);
+                }
+            }
+        } else {
+            println!(
+                "[runtime] Lattice-1 assets not found at startup (will lazy-probe on first aligned block)"
+            );
+        }
         Ok(Self {
             asr_encoder: parking_lot::Mutex::new(encoder),
             asr_decoder: parking_lot::Mutex::new(decoder),
             aligner,
+            lattice_aligner: parking_lot::Mutex::new(lattice_aligner),
+            lattice_probe_failed: AtomicBool::new(false),
             cancel: Arc::new(AtomicBool::new(false)),
             model_dir: asr_model_dir.to_string(),
             decoder_file,
@@ -219,6 +247,46 @@ impl QwenRuntime {
         language: &Option<String>,
         timeline: &[crate::qwen::aligner::TimelineSpan],
     ) -> Result<AlignmentResult, QwenError> {
+        // Lattice-1 路由 (en/zh/de): 失败或不健康 -> 落回 Qwen 对齐器
+        if lattice_language_supported(language.as_deref()) {
+            let mut lattice_guard = self.lattice_aligner.lock();
+            if lattice_guard.is_none() && !self.lattice_probe_failed.load(Ordering::Relaxed) {
+                // 懒探测: 运行时加载时资产尚未就位, 首个支持语言的块再试一次;
+                // 仍失败则置哨兵, 本次运行时不再重试
+                match crate::qwen::lattice::probe_lattice_dir(&self.model_dir) {
+                    Some(dir) => match LatticeAligner::load(&dir) {
+                        Ok(a) => {
+                            println!("[runtime] Lattice-1 aligner lazy-enabled: {}", dir);
+                            *lattice_guard = Some(a);
+                        }
+                        Err(e) => {
+                            println!("[runtime] Lattice-1 load failed at {}, disabled until restart: {}", dir, e);
+                            self.lattice_probe_failed.store(true, Ordering::Relaxed);
+                        }
+                    },
+                    None => {
+                        self.lattice_probe_failed.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
+            if let Some(lattice) = lattice_guard.as_mut() {
+                match lattice.align(
+                    samples_16k,
+                    text,
+                    segment_start_ms,
+                    segment_end_ms,
+                    language.as_deref(),
+                    timeline,
+                    &self.cancel,
+                ) {
+                    Ok(res) => return Ok(res),
+                    Err(QwenError::Cancelled) => return Err(QwenError::Cancelled),
+                    Err(e) => {
+                        println!("[runtime] Lattice align failed, falling back to Qwen aligner: {:?}", e);
+                    }
+                }
+            }
+        }
         if let Some(aligner_mutex) = &self.aligner {
             let mut aligner = aligner_mutex.lock();
             aligner.align(

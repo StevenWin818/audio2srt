@@ -1022,7 +1022,7 @@ fn feat_output_lengths(input_lengths: i64) -> i64 {
 
 /// 把拼接音频上的局部时间 (ms, 相对块起点) 映射回媒体时间轴。
 /// 时间落在某分段内时线性映射; 超出块范围时钳制到末段终点。
-fn map_to_media(timeline: &[TimelineSpan], local_ms: u64) -> u64 {
+pub(crate) fn map_to_media(timeline: &[TimelineSpan], local_ms: u64) -> u64 {
     if timeline.is_empty() {
         return local_ms;
     }
@@ -1047,7 +1047,7 @@ fn is_kept_char(c: char) -> bool {
     c.is_alphabetic() || c.is_numeric()
 }
 
-fn is_cjk_char(c: char) -> bool {
+pub(crate) fn is_cjk_char(c: char) -> bool {
     let code = c as u32;
     (0x4E00..=0x9FFF).contains(&code)
         || (0x3400..=0x4DBF).contains(&code)
@@ -1061,7 +1061,7 @@ fn is_cjk_char(c: char) -> bool {
 /// 通用分词: 按空白切词, 过滤非字母/数字, CJK 逐字拆出 (中英混排适用)。
 /// 日语/韩语: 官方使用 nagisa/soynlp 形态素分词, 无依赖时逐字符回退
 /// (与 HaujetZhao 参考实现的 ImportError 回退一致)。
-fn tokenize_for_align(text: &str, language: Option<&str>) -> Vec<String> {
+pub(crate) fn tokenize_for_align(text: &str, language: Option<&str>) -> Vec<String> {
     let lang = language.unwrap_or("").to_lowercase();
     let per_char = lang == "japanese" || lang == "korean";
     let mut tokens: Vec<String> = Vec::new();
@@ -1173,7 +1173,7 @@ fn fix_timestamp(data: &[f64]) -> Vec<i64> {
 }
 
 /// reconcile: 从原始文本找回标点/空格 (对齐项按原文形态重组, 标点为零时长项)
-fn reconcile(original_text: &str, items: Vec<AlignedToken>) -> Vec<AlignedToken> {
+pub(crate) fn reconcile(original_text: &str, items: Vec<AlignedToken>) -> Vec<AlignedToken> {
     if items.is_empty() {
         return if original_text.trim().is_empty() {
             Vec::new()

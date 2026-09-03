@@ -575,6 +575,8 @@ class TranscriptionProvider with ChangeNotifier {
           nameLower.contains('uhd') ||
           nameLower.contains('iris') ||
           nameLower.contains('vega') ||
+          nameLower.contains('xe ') ||
+          nameLower.contains('xe graphics') ||
           (nameLower.contains('intel') && !nameLower.contains('arc')) ||
           nameLower.contains('radeon(tm)');
       if (!isIgpu) {

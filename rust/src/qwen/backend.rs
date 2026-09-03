@@ -79,7 +79,9 @@ fn enumerate_windows_gpus() -> Vec<String> {
     let mut i = 0;
     unsafe {
         while EnumDisplayDevicesA(std::ptr::null(), i, &mut dd, 0) != 0 {
-            if (dd.state_flags & 0x1) != 0 {
+            // 过滤虚拟镜像驱动 (DISPLAY_DEVICE_MIRRORING_DRIVER = 0x8)
+            // 注意: 绝不可过滤 (state_flags & 0x1 == 0)，双显卡/Optimus 笔记本上独显通常不直接绑定桌面
+            if (dd.state_flags & 0x8) == 0 {
                 let name = std::ffi::CStr::from_ptr(dd.device_string.as_ptr() as *const i8)
                     .to_string_lossy()
                     .trim()
@@ -96,6 +98,19 @@ fn enumerate_windows_gpus() -> Vec<String> {
             i += 1;
         }
     }
+    // 排序: 独立显卡 (NVIDIA / AMD Radeon RX / Intel Arc) 优先排在前面，集成核显排在后面
+    names.sort_by_key(|n| {
+        let l = n.to_lowercase();
+        let is_igpu = l.contains("integrated")
+            || l.contains("uhd")
+            || l.contains("iris")
+            || l.contains("vega")
+            || l.contains("xe ")
+            || l.contains("xe graphics")
+            || (l.contains("intel") && !l.contains("arc"))
+            || l.contains("radeon(tm)");
+        if is_igpu { 1 } else { 0 }
+    });
     names
 }
 

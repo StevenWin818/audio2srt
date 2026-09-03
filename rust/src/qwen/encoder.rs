@@ -111,6 +111,7 @@ impl QwenEncoder {
         // 注意: CUDA EP 的 with_execution_providers 注册可能返回 Ok，
         // 但缺少 cuDNN/CUDA 运行时(如 CUDA 13 机器)时实际执行会静默回退 CPU，
         // 因此部署时已按 cuDNN 可用性选择对应的 onnxruntime 版本。
+        #[allow(unused_mut)]
         let mut ep_errors: Vec<String> = Vec::new();
         let mut actual_ep = "CPU".to_string();
 
@@ -131,6 +132,7 @@ impl QwenEncoder {
         #[cfg(not(any(feature = "cuda", feature = "qwen-cuda")))]
         let _cuda_usable = false;
 
+        #[allow(unused_mut)]
         let mut session_res: Option<Session> = None;
 
         // 1. 尝试 CUDA EP (须具备 cuDNN 9 且驱动匹配; commit 实测验证, 失败自动回退)
@@ -493,6 +495,7 @@ pub fn ort_build_info() -> String {
 /// 从字符串提取 (major, minor) 版本号。
 /// 例如: "cudnn64_9.dll" -> (9, 0), "v9.24" -> (9, 24),
 ///       "cudart64_13.dll" -> (13, 0), "v13.3" -> (13, 3)
+#[allow(dead_code)]
 fn extract_version(s: &str) -> Option<(u32, u32)> {
     let lower = s.to_lowercase();
     let chars: Vec<char> = lower.chars().collect();
@@ -860,6 +863,7 @@ fn cleanup_legacy_cuda_copies(exe_dir: &Path) {
 
 /// 把目录加入进程 DLL 搜索路径 (LoadLibrary 无需拷贝即可找到系统安装的显卡 DLL)。
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn add_dll_directory(path: &Path) {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::System::LibraryLoader::{
