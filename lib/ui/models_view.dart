@@ -26,6 +26,11 @@ class _ModelsViewState extends State<ModelsView> {
   void initState() {
     super.initState();
     _refreshSizes();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        context.read<TranscriptionProvider>().testMirrorsSpeedOnPageOpen();
+      }
+    });
   }
 
   @override
@@ -180,6 +185,14 @@ class _ModelsViewState extends State<ModelsView> {
           const Icon(Icons.cloud_download_outlined, size: 16, color: Color(0xFF8B5CF6)),
           const SizedBox(width: 8),
           const Text('下载源:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+          if (provider.isTestingMirrors) ...[
+            const SizedBox(width: 8),
+            const SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF8B5CF6)),
+            ),
+          ],
           const SizedBox(width: 8),
           Expanded(
             child: HoverDropdown<String>(

@@ -504,8 +504,7 @@ class TranscriptionProvider with ChangeNotifier {
       }
     }
     notifyListeners();
-    _warmupMirrorSpeed();
-    // 不做启动预加载: 实测预加载对推理总时长几乎无提升
+    // 不做启动预加载与网络测速，网络测速移至进入“模型管理”页面后按需触发
     Future.delayed(const Duration(seconds: 4), () => refreshQwenRuntimeStatus());
   }
 
@@ -618,11 +617,23 @@ class TranscriptionProvider with ChangeNotifier {
   ModelMirror? _activeMirror;
   ModelMirror? get activeMirror => _activeMirror;
 
-  /// 显示文本: "自动（当前：HF-Mirror 国内镜像站）" 或源名
+  bool _isTestingMirrors = false;
+  bool get isTestingMirrors => _isTestingMirrors;
+
+  /// 显示文本: "自动（当前：HF-Mirror 国内镜像站 120ms）" 或源名
   String get selectedMirrorLabel {
     if (_selectedMirrorId == 'auto') {
+      if (_isTestingMirrors) {
+        return '自动（测速中...）';
+      }
       final name = _activeMirror?.name;
-      return name == null ? '自动（待测速）' : '自动（当前：$name）';
+      final latency = _activeMirror?.latencyMs;
+      if (name != null && latency != null) {
+        return '自动（当前：$name ${latency}ms）';
+      } else if (name != null) {
+        return '自动（当前：$name）';
+      }
+      return '自动（待测速）';
     }
     return ModelService.mirrorById(_selectedMirrorId)?.name ?? _selectedMirrorId;
   }
@@ -644,13 +655,21 @@ class TranscriptionProvider with ChangeNotifier {
     return ModelService.mirrorById(_selectedMirrorId)!;
   }
 
-  /// 后台预热一次自动测速 (仅 auto 模式, 不阻塞 UI)
-  Future<void> _warmupMirrorSpeed() async {
+  /// 进入“模型管理”页面后触发网络测速 (自动按需测速)
+  Future<void> testMirrorsSpeedOnPageOpen({bool force = false}) async {
     if (_selectedMirrorId != 'auto') return;
+    if (_isTestingMirrors) return;
+    if (!force && _activeMirror != null) return;
+
+    _isTestingMirrors = true;
+    _safeNotifyListeners();
     try {
       await _resolveMirror();
     } catch (e) {
-      debugPrint('[TranscriptionProvider] Mirror speed warmup error: $e');
+      debugPrint('[TranscriptionProvider] Mirror speed test error: $e');
+    } finally {
+      _isTestingMirrors = false;
+      _safeNotifyListeners();
     }
   }
 
